@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="description" content="AcuStock — Registration is disabled. Redirecting to login.">
+    <title>AcuStock — Redirecting to Login</title>
+    <meta http-equiv="refresh" content="0;url=login.html">
+    <link rel="stylesheet" href="../admin-css/style.css">
+  </head>
+  <body data-page="register">
+    <main class="center-wrapper">
+      <section class="glass-card auth-card auth-card-wrapper" style="text-align:center; padding:48px 32px;">
+        <header class="auth-card-header">
+          <h1 class="brand">🏢 AcuStock</h1>
+          <p class="muted brand-sub">Inventory Management System</p>
+        </header>
+
+        <div style="margin:32px 0;">
+          <div style="width:64px;height:64px;margin:0 auto 16px;background:rgba(59,130,246,0.1);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:32px;">🔒</div>
+          <h2 style="margin:0 0 12px 0; color:#e2e8f0;">Registration Disabled</h2>
+          <p class="muted" style="font-size:0.95rem;">
+            Self-registration is not available. All accounts are created by administrators.<br/>
+            You are being redirected to the login page...
+          </p>
+        </div>
+
+        <a href="login.html" class="btn primary btn-full">Go to Login</a>
+
+        <div style="margin-top:16px;">
+          <p class="muted" style="font-size:0.85rem;">
+            Need an account? <a href="mailto:support@acustock.com" class="link-secondary">Contact Support</a>
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>© Copyright 2026 AcuStock. All Rights Reserved.</p>
+    </footer>
+
+    <script>
+      // Immediate redirect — fallback if meta refresh fails
+      window.location.replace('login.html');
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="AcuStock - Manager Dashboard for Inventory Operations">
+  <title>AcuStock — Manager Dashboard</title>
+  <link rel="stylesheet" href="manager.css">
+  
+  <!-- Chart.js for Dashboard Graphs -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- Tom Select — searchable dropdowns -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
+  <!-- Socket.IO for Real-time Updates -->
+  <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+  <script src="../shared/config.js"></script>
+  <script src="../shared/realtime.js"></script>
+</head>
+<body data-page="manager">
+  
+  <!-- Toast Notifications Container -->
+  <div class="toast-container"></div>
+  
+  <!-- Global Loading Overlay -->
+  <div id="global-loading" class="loading-overlay" style="display: none;">
+    <div class="spinner"></div>
+    <p>Processing...</p>
+  </div>
+
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-text">🏢 AcuStock</div>
+        <p class="brand-subtitle">Manager Panel</p>
+      </div>
+
+      <!-- User Info Card -->
+      <div class="user-info-card">
+        <div class="user-avatar" id="user-avatar">M</div>
+        <div class="user-details">
+          <div class="user-name" id="sidebar-user-name">Manager</div>
+          <div class="user-email" id="sidebar-user-email">manager@acustock.com</div>
+        </div>
+      </div>
+
+      <nav class="menu">
+        <ul>
+          <!-- Dashboard -->
+          <li class="menu-group">
+            <a href="#" class="single active" data-section="dashboard">
+              <span class="icon">📊</span>
+              <span>Dashboard</span>
+            </a>
+          </li>
+
+          <!-- Products (Read-Only from Admin) -->
+          <li class="menu-group">
+            <button class="menu-toggle" data-target="products-sub">
+              <span class="icon">📦</span>
+              <span>Products</span>
+              <span class="caret">▸</span>
+            </button>
+            <ul id="products-sub" class="submenu">
+              <li><a href="#" data-section="product-list">View Products</a></li>
+              <li><a href="#" data-section="remaining-stock">Remaining Stock</a></li>
+            </ul>
+          </li>
+
+          <!-- Stock Management -->
+          <li class="menu-group">
+            <button class="menu-toggle" data-target="stock-sub">
+              <span class="icon">📈</span>
+              <span>Stock Management</span>
+              <span class="caret">▸</span>
+            </button>
+            <ul id="stock-sub" class="submenu">
+              <li><a href="#" data-section="stock-in">Stock IN (Supplier)</a></li>
+              <li><a href="#" data-section="stock-out">Stock OUT (Buyer)</a></li>
+              <li><a href="#" data-section="stock-ledger">Stock Ledger</a></li>
+              <li><a href="#" data-section="warranty-list">🛡️ Warranty</a></li>
+            </ul>
+          </li>
+
+          <!-- Companies (View Admin's + Add Own) -->
+          <li class="menu-group">
+            <button class="menu-toggle" data-target="companies-sub">
+              <span class="icon">🏢</span>
+              <span>Companies</span>
+              <span class="caret">▸</span>
+            </button>
+            <ul id="companies-sub" class="submenu">
+              <li><a href="#" data-section="company-list">View Companies</a></li>
+              <li><a href="#" data-section="company-add">Add Company</a></li>
+            </ul>
+          </li>
+
+          <!-- Users (Manager can add/manage users) -->
+          <li class="menu-group">
+            <button class="menu-toggle" data-target="users-sub">
+              <span class="icon">��</span>
+              <span>Users</span>
+              <span class="caret">▸</span>
+            </button>
+            <ul id="users-sub" class="submenu">
+              <li><a href="#" data-section="user-list">User List</a></li>
+              <li><a href="#" data-section="user-add">Add User</a></li>
+            </ul>
+          </li>
+
+          <!-- Reports -->
+          <li class="menu-group">
+            <a href="#" class="single" data-section="reports">
+              <span class="icon">📋</span>
+              <span>Reports</span>
+            </a>
+          </li>
+
+          <!-- Logistics -->
+          <li class="menu-group">
+            <button class="menu-toggle" data-target="logistics-sub">
+              <span class="icon">🚚</span>
+              <span>Logistics</span>
+              <span class="caret">▸</span>
+            </button>
+            <ul id="logistics-sub" class="submenu">
+              <li><a href="#" data-section="logistics-list">Transporter List</a></li>
+              <li><a href="#" data-section="logistics-add">Add Transporter</a></li>
+            </ul>
+          </li>
+
+          <!-- Profile -->
+          <li class="menu-group">
+            <a href="#" class="single" data-section="profile">
+              <span class="icon">👤</span>
+              <span>My Profile</span>
+            </a>
+          </li>
+
+          <!-- Settings -->
+          <li class="menu-group">
+            <a href="#" class="single" data-section="settings">
+              <span class="icon">⚙️</span>
+              <span>Settings</span>
+            </a>
+          </li>
+
+          <!-- Logout -->
+          <li class="menu-group logout-group">
+            <button id="logout-btn" class="single logout-btn">
+              <span class="icon">🚪</span>
+              <span>Logout</span>
+            </button>
+          </li>
+        </ul>
+      </nav>
+
+      <div class="sidebar-footer">
+        <small>© 2026 AcuStock Manager</small>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="main">
+      <header class="topbar">
+        <div class="left">
+          <button id="toggle-sidebar" class="hamburger" aria-label="Toggle Sidebar">☰</button>
+          <div class="logo-circle">
+            <img src="../assets/image.png" alt="AcuStock Logo" onerror="this.style.display='none'" />
+          </div>
+          <h1 class="app-title">AcuStock</h1>
+        </div>
+        <div class="center">
+          <div class="search-box" style="position:relative;">
+            <input id="global-search" placeholder="🔍 Search serial / product…" aria-label="Global search" autocomplete="off" />
+            <div id="serial-search-dropdown" class="quick-search-results" style="display:none;"></div>
+          </div>
+        </div>
+        <div class="right">
+          <button class="topbar-btn" id="notification-btn" title="Notifications">
+            🔔 <span class="badge" id="notification-count">0</span>
+          </button>
+          <div class="profile-dropdown">
+            <button class="profile-btn" id="profile-btn">
+              <span id="topbar-user-name">Manager</span>
+              <span class="avatar" id="topbar-avatar">M</span>
+            </button>
+            <div class="dropdown-menu" id="profile-menu">
+              <a href="#" id="profile-view">👤 My Profile</a>
+              <a href="#" id="profile-logout">🚪 Logout</a>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- Breadcrumb -->
+      <div class="breadcrumb" id="breadcrumb">
+        <span class="breadcrumb-item">Dashboard</span>
+      </div>
+
+      <!-- Main Content Area -->
+      <main class="content" id="content">
+        <!-- Default content loaded by JS -->
+      </main>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <p>© Copyright 2026 AcuStock. All Rights Reserved.</p>
+  </footer>
+
+  <!-- ============================================== -->
+  <!-- TEMPLATES -->
+  <!-- ============================================== -->
+
+  <!-- Dashboard Template -->
+  <template id="dashboard">
+    <section class="dashboard-section">
+      <!-- Stats Cards -->
+      <div class="stats-container">
+        <div class="stat-card">
+          <div class="stat-icon blue">��</div>
+          <div class="stat-content">
+            <h4>Total Products</h4>
+            <div class="stat-value" id="stat-products">0</div>
+            <span class="stat-sub">From Admin Master</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon green">📥</div>
+          <div class="stat-content">
+            <h4>Stock IN Today</h4>
+            <div class="stat-value" id="stat-stock-in">0</div>
+            <span class="stat-sub">Items received</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon red">📤</div>
+          <div class="stat-content">
+            <h4>Stock OUT Today</h4>
+            <div class="stat-value" id="stat-stock-out">0</div>
+            <span class="stat-sub">Items dispatched</span>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon gold">👥</div>
+          <div class="stat-content">
+            <h4>My Users</h4>
+            <div class="stat-value" id="stat-users">0</div>
+            <span class="stat-sub">Active users</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts Row -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="card-head">
+            <h3>📈 Stock Movement (Last 7 Days)</h3>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="stockMovementChart"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="card-head">
+            <h3>🥧 Top Products by Stock</h3>
+          </div>
+          <div class="chart-wrapper">
+            <canvas id="topProductsChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Low Stock Alert -->
+      <div class="card full">
+        <div class="card-head">
+          <h3>⚠️ Low Stock Alerts</h3>
+        </div>
+        <div class="card-body">
+          <div id="low-stock-list">
+            <p class="muted">No low stock alerts.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="card full">
+        <div class="card-head">
+          <h3>⚡ Quick Actions</h3>
+        </div>
+        <div class="card-body">
+          <div class="quick-actions">
+            <button class="quick-action-btn" data-section="stock-in">📥 Stock IN</button>
+            <button class="quick-action-btn" data-section="stock-out">📤 Stock OUT</button>
+            <button class="quick-action-btn" data-section="remaining-stock">📊 View Stock</button>
+            <button class="quick-action-btn" data-section="reports">📋 Reports</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Activity -->
+      <div class="card full">
+        <div class="card-head">
+          <h3>📋 Recent Stock Activity</h3>
+        </div>
+        <div class="card-body">
+          <div id="recent-activity">
+            <p class="muted">Loading recent activity...</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Product List Template (Read-Only from Admin) -->
+  <template id="product-list">
+    <section class="card full">
+      <div class="card-head">
+        <h3>📦 Products (Master Data from Admin)</h3>
+        <div class="head-actions">
+          <input id="product-search" placeholder="Search products..." />
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="info-banner">
+          <span class="info-icon">ℹ️</span>
+          <span>Products are managed by Admin. You can view and use them for stock operations.</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="product-table">
+            <thead>
+              <tr>
+                <th>Product Name</th>
+                <th>Short Name</th>
+                <th>HSN</th>
+                <th>Unit</th>
+                <th>Sales Price</th>
+                <th>Current Stock</th>
+                <th>Serial Policy</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button id="product-prev" class="btn ghost" disabled>← Previous</button>
+          <span id="product-page-info">Page 1 of 1</span>
+          <button id="product-next" class="btn ghost" disabled>Next →</button>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Remaining Stock Template (Real-time Centralized Stock) -->
+  <template id="remaining-stock">
+    <section class="card full">
+      <div class="card-head">
+        <h3>� Remaining Stock</h3>
+        <p class="card-subtitle">Live inventory snapshot — what you have left across all products</p>
+      </div>
+      <div class="card-body">
+
+        <!-- Summary Cards -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:22px;">
+          <div style="background:#e8f5e9;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.5rem;font-weight:700;color:#2e7d32;" id="rs-total-in">—</div>
+            <div style="font-size:.78rem;color:#555;margin-top:4px;">Total IN</div>
+          </div>
+          <div style="background:#fce4ec;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.5rem;font-weight:700;color:#c62828;" id="rs-total-out">—</div>
+            <div style="font-size:.78rem;color:#555;margin-top:4px;">Total OUT</div>
+          </div>
+          <div style="background:#e3f2fd;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.5rem;font-weight:700;color:#1565c0;" id="rs-total-remaining">—</div>
+            <div style="font-size:.78rem;color:#555;margin-top:4px;">Total Remaining</div>
+          </div>
+          <div style="background:#fff8e1;border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:1.5rem;font-weight:700;color:#e65100;" id="rs-low-stock">—</div>
+            <div style="font-size:.78rem;color:#555;margin-top:4px;">Low / Out of Stock</div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px;">
+          <input id="rs-search" type="text" placeholder="🔍 Search product…" style="flex:1;min-width:160px;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:.9rem;">
+          <select id="rs-status-filter" style="padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:.9rem;background:#fff;">
+            <option value="all">All Status</option>
+            <option value="in-stock">✅ In Stock</option>
+            <option value="low-stock">⚠️ Low Stock</option>
+            <option value="out-of-stock">❌ Out of Stock</option>
+          </select>
+          <button id="rs-export-btn" class="btn ghost" style="padding:8px 14px;border-radius:8px;font-size:.85rem;">⬇ Export CSV</button>
+          <button id="rs-refresh-btn" class="btn primary" style="padding:8px 14px;border-radius:8px;font-size:.85rem;">🔄 Refresh</button>
+        </div>
+
+        <!-- Table -->
+        <div class="table-wrap" style="overflow-x:auto;">
+          <table class="table" id="rs-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Product Name</th>
+                <th>Short Name</th>
+                <th style="color:#2e7d32;">Total IN</th>
+                <th style="color:#c62828;">Total OUT</th>
+                <th>Remaining</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="rs-tbody">
+              <tr><td colspan="7" style="text-align:center;padding:20px;">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p id="rs-row-count" style="font-size:.8rem;color:#888;margin-top:8px;"></p>
+      </div>
+    </section>
+  </template>
+
+  <!-- Stock IN Template (Supplier Entry) - Same as Admin -->
+  <template id="stock-in">
+    <section class="card">
+      <div class="card-head">
+        <h3>Stock Supplier Entry</h3>
+        <p class="card-subtitle">Record incoming stock from supplier</p>
+      </div>
+      <form id="stock-supplier-form" class="card-body form-grid">
+        
+        <!-- Product Information -->
+        <div class="form-section-header" style="grid-column: 1/-1;">
+          <h4>📦 Product Details</h4>
+        </div>
+        
+        <div class="form-row">
+          <label for="sp-productName">Product Name <span class="required">*</span></label>
+          <select id="sp-productName" name="productName" required>
+            <option value="">-- Select Product Name --</option>
+          </select>
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="sp-productId">Model / Short Name <span class="required">*</span></label>
+          <select id="sp-productId" name="productId" required disabled>
+            <option value="">-- Select Product Name First --</option>
+          </select>
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="sp-modelVariant">Variant (Optional)</label>
+          <input id="sp-modelVariant" name="modelVariant" placeholder="Enter variant if any" />
+        </div>
+        <div class="form-row">
+          <label for="sp-quantity">Quantity <span class="required">*</span></label>
+          <input id="sp-quantity" name="quantity" type="number" min="1" placeholder="Enter quantity" required />
+          <span class="error-message"></span>
+          <small class="field-hint" id="sp-serial-hint" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+        </div>
+        <div class="form-row">
+          <label for="sp-condition">Condition</label>
+          <select id="sp-condition" name="condition">
+            <option value="">-- Select Condition --</option>
+            <option value="New">New</option>
+            <option value="Repair">Repair</option>
+            <option value="Demo">Demo</option>
+          </select>
+        </div>
+
+        <!-- Serial Numbers (Quantity-Based Dynamic Inputs) -->
+        <div class="form-row serial-number-section" id="supplier-serial-section" style="display:none; grid-column:1/-1;">
+          <div class="serial-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <label style="margin: 0; font-weight: 600;">🔢 Serial Numbers <span class="required">*</span></label>
+            <div class="serial-actions">
+              <button type="button" class="btn secondary btn-sm" id="supplier-auto-generate-serials">
+                ⚡ Auto Generate
+              </button>
+              <button type="button" class="btn secondary btn-sm" id="supplier-clear-serials">
+                🗑️ Clear All
+              </button>
+            </div>
+          </div>
+          <div class="serial-info-bar" style="background: #f0f9ff; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+            <span id="supplier-serial-count">Enter <strong>0</strong> serial numbers</span>
+            <span id="supplier-serial-status" class="badge">0 / 0 filled</span>
+          </div>
+          <div id="supplier-serial-inputs" class="serial-inputs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 300px; overflow-y: auto; padding: 4px;">
+            <!-- Dynamic serial number inputs will be inserted here -->
+          </div>
+          <div class="serial-bulk-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e7eb;">
+            <details>
+              <summary style="cursor: pointer; color: #6b7280; font-size: 0.9rem;">📋 Bulk Entry (paste or upload)</summary>
+              <div style="margin-top: 10px;">
+                <textarea id="supplier-bulk-serials" rows="3" placeholder="Paste serial numbers here (one per line or comma-separated)" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;"></textarea>
+                <div style="margin-top: 8px; display: flex; gap: 10px;">
+                  <button type="button" class="btn secondary btn-sm" id="supplier-apply-bulk">Apply Bulk Entry</button>
+                  <label for="supplier-serial-file" class="btn secondary btn-sm" style="cursor: pointer;">
+                    📤 Upload CSV
+                  </label>
+                  <input type="file" id="supplier-serial-file" accept=".csv,.txt" style="display:none;" />
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <!-- Supplier Information -->
+        <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+          <h4>🏢 Supplier Details</h4>
+        </div>
+
+        <div class="form-row" style="grid-column: 1/-1;">
+          <label for="sp-companySelect">Select Company</label>
+          <select id="sp-companySelect" name="companySelect">
+            <option value="">-- Select Existing Company or Enter New --</option>
+          </select>
+          <small class="helper-text">Select a company to auto-fill details, or leave empty to enter manually</small>
+        </div>
+        <div class="form-row">
+          <label for="sp-companyName">Company Name <span class="required">*</span></label>
+          <input id="sp-companyName" name="companyName" placeholder="Enter company name" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="sp-customerName">Contact Person</label>
+          <input id="sp-customerName" name="customerName" placeholder="Enter contact person name" />
+        </div>
+        <div class="form-row">
+          <label for="sp-customerPhone">Phone <span class="required">*</span></label>
+          <input id="sp-customerPhone" name="customerPhone" placeholder="Enter phone number" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="sp-customerEmail">Email</label>
+          <input id="sp-customerEmail" name="customerEmail" type="email" placeholder="Enter email" />
+        </div>
+        <div class="form-row">
+          <label for="sp-customerAddress">Address</label>
+          <input id="sp-customerAddress" name="customerAddress" placeholder="Enter address" />
+        </div>
+        <div class="form-row">
+          <label for="sp-city">City</label>
+          <input id="sp-city" name="city" placeholder="Enter city" />
+        </div>
+        <div class="form-row">
+          <label for="sp-state">State</label>
+          <input id="sp-state" name="state" placeholder="Enter state" />
+        </div>
+        <div class="form-row">
+          <label for="sp-pincode">Pincode</label>
+          <input id="sp-pincode" name="pincode" placeholder="Enter pincode" />
+        </div>
+
+        <!-- Transaction Details -->
+        <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+          <h4>💳 Transaction Details</h4>
+        </div>
+
+        <div class="form-row">
+          <label for="sp-supplierType">Supplier Type</label>
+          <select id="sp-supplierType" name="supplierType">
+            <option value="">-- Select Type --</option>
+              <option value="Retail">END USER</option>
+              <option value="Wholesale">RESELLER</option>
+              <option value="Distributor">SI PARTNER</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="sp-paymentMethod">Payment Method</label>
+          <select id="sp-paymentMethod" name="paymentMethod">
+            <option value="">-- Select Method --</option>
+            <option value="Cash">Cash</option>
+            <option value="Credit Card">Credit Card</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+            <option value="UPI">UPI</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="sp-transactionId">Transaction ID</label>
+          <input id="sp-transactionId" name="transactionId" placeholder="Enter transaction ID" />
+        </div>
+        <div class="form-row">
+          <label for="sp-supplyDate">Purchase Date <span class="required">*</span></label>
+          <input id="sp-supplyDate" name="supplyDate" type="date" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="sp-warrantyPeriod">Purchase Warranty <span class="hint-text">(from supplier)</span></label>
+          <input id="sp-warrantyPeriod" name="warrantyPeriod" placeholder="e.g., 12 months, 2 years" />
+        </div>
+        <div class="form-row">
+          <label for="sp-deliveredBy">Delivered By</label>
+          <input id="sp-deliveredBy" name="deliveredBy" placeholder="Enter delivery person name" />
+        </div>
+
+        <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+          <button type="button" class="btn ghost" id="stock-supplier-cancel">Cancel</button>
+          <button type="submit" class="btn primary" id="stock-supplier-save">Save Entry</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <!-- Stock OUT Template (Buyer Entry) - Same as Admin -->
+  <template id="stock-out">
+    <section class="card">
+      <div class="card-head">
+        <h3>Stock Buyer Entry</h3>
+        <p class="card-subtitle">Record outgoing stock to buyer</p>
+      </div>
+      <form id="stock-buyer-form" class="card-body form-grid">
+        
+        <!-- Product Information -->
+        <div class="form-section-header" style="grid-column: 1/-1;">
+          <h4>📦 Product Details</h4>
+        </div>
+
+        <div class="form-row">
+          <label for="by-productName">Product Name <span class="required">*</span></label>
+          <select id="by-productName" name="productName" required>
+            <option value="">-- Select Product Name --</option>
+          </select>
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="by-productId">Model / Short Name <span class="required">*</span></label>
+          <select id="by-productId" name="productId" required disabled>
+            <option value="">-- Select Product Name First --</option>
+          </select>
+          <span class="error-message"></span>
+          <small class="field-hint" id="by-stock-info" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+        </div>
+        <div class="form-row">
+          <label for="by-modelVariant">Variant (Optional)</label>
+          <input id="by-modelVariant" name="modelVariant" placeholder="Enter variant if any" />
+        </div>
+        <div class="form-row">
+          <label for="by-quantity">Quantity <span class="required">*</span></label>
+          <input id="by-quantity" name="quantity" type="number" min="1" placeholder="Enter quantity" required />
+          <span class="error-message"></span>
+          <small class="field-hint" id="by-serial-hint" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+        </div>
+        <div class="form-row">
+          <label for="by-condition">Condition</label>
+          <select id="by-condition" name="condition">
+            <option value="">-- Select Condition --</option>
+            <option value="New">New</option>
+            <option value="Repair">Repair</option>
+            <option value="Demo">Demo</option>
+          </select>
+        </div>
+
+        <!-- Serial Numbers (Quantity-Based Dynamic Inputs) -->
+        <div class="form-row serial-number-section" id="buyer-serial-section" style="display:none; grid-column:1/-1;">
+          <div class="serial-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <label style="margin: 0; font-weight: 600;">🔢 Serial Numbers <span class="required">*</span></label>
+            <div class="serial-actions">
+              <button type="button" class="btn secondary btn-sm" id="buyer-scan-serials">
+                📷 Scan Barcode
+              </button>
+              <button type="button" class="btn secondary btn-sm" id="buyer-clear-serials">
+                🗑️ Clear All
+              </button>
+            </div>
+          </div>
+          <div class="serial-info-bar" style="background: #fff7ed; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+            <span id="buyer-serial-count">Enter <strong>0</strong> serial numbers</span>
+            <span id="buyer-serial-status" class="badge">0 / 0 filled</span>
+          </div>
+          <div id="buyer-serial-inputs" class="serial-inputs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 300px; overflow-y: auto; padding: 4px;">
+            <!-- Dynamic serial number inputs will be inserted here -->
+          </div>
+          <div class="serial-available-list" id="buyer-available-serials" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e7eb;">
+            <details>
+              <summary style="cursor: pointer; color: #6b7280; font-size: 0.9rem;">📋 Available Serial Numbers (click to select)</summary>
+              <div id="buyer-serials-list" style="margin-top: 10px; max-height: 150px; overflow-y: auto;">
+                <!-- Available serials will be loaded here -->
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <!-- Buyer Information -->
+        <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+          <h4>🏢 Buyer Details</h4>
+        </div>
+
+        <div class="form-row" style="grid-column: 1/-1;">
+          <label for="by-companySelect">Select Company</label>
+          <select id="by-companySelect" name="companySelect">
+            <option value="">-- Select Existing Company or Enter New --</option>
+          </select>
+          <small class="helper-text">Select a company to auto-fill details, or leave empty to enter manually</small>
+        </div>
+        <div class="form-row">
+          <label for="by-companyName">Company Name <span class="required">*</span></label>
+          <input id="by-companyName" name="companyName" placeholder="Enter company name" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="by-customerName">Contact Person</label>
+          <input id="by-customerName" name="customerName" placeholder="Enter contact person name" />
+        </div>
+        <div class="form-row">
+          <label for="by-customerPhone">Phone <span class="required">*</span></label>
+          <input id="by-customerPhone" name="customerPhone" placeholder="Enter phone number" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="by-customerEmail">Email</label>
+          <input id="by-customerEmail" name="customerEmail" type="email" placeholder="Enter email" />
+        </div>
+        <div class="form-row">
+          <label for="by-customerAddress">Address</label>
+          <input id="by-customerAddress" name="customerAddress" placeholder="Enter address" />
+        </div>
+        <div class="form-row">
+          <label for="by-city">City</label>
+          <input id="by-city" name="city" placeholder="Enter city" />
+        </div>
+        <div class="form-row">
+          <label for="by-state">State</label>
+          <input id="by-state" name="state" placeholder="Enter state" />
+        </div>
+        <div class="form-row">
+          <label for="by-pincode">Pincode</label>
+          <input id="by-pincode" name="pincode" placeholder="Enter pincode" />
+        </div>
+
+        <!-- Transaction Details -->
+        <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+          <h4>💳 Transaction Details</h4>
+        </div>
+
+        <div class="form-row">
+          <label for="by-buyerType">Buyer Type</label>
+          <select id="by-buyerType" name="buyerType">
+            <option value="">-- Select Type --</option>
+              <option value="Retail">END USER</option>
+              <option value="Wholesale">RESELLER</option>
+              <option value="Distributor">SI PARTNER</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="by-paymentMethod">Payment Method</label>
+          <select id="by-paymentMethod" name="paymentMethod">
+            <option value="">-- Select Method --</option>
+            <option value="Cash">Cash</option>
+            <option value="Credit Card">Credit Card</option>
+            <option value="Bank Transfer">Bank Transfer</option>
+            <option value="UPI">UPI</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="by-transactionId">Transaction ID</label>
+          <input id="by-transactionId" name="transactionId" placeholder="Enter transaction ID" />
+        </div>
+        <div class="form-row">
+          <label for="by-purchaseDate">Sales Date <span class="required">*</span></label>
+          <input id="by-purchaseDate" name="purchaseDate" type="date" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="by-sellerWarrantyPeriod">Seller Warranty <span class="hint-text">(given to customer, optional)</span></label>
+          <input id="by-sellerWarrantyPeriod" name="sellerWarrantyPeriod" placeholder="e.g., 6 months, 1 year" />
+        </div>
+        <div class="form-row">
+          <label for="by-receivedBy">Received By</label>
+          <input id="by-receivedBy" name="receivedBy" placeholder="Enter receiver name" />
+        </div>
+        <div class="form-row">
+          <label for="by-courierPartner">Courier Partner</label>
+          <input id="by-courierPartner" name="courierPartner" placeholder="Enter courier partner name" />
+        </div>
+
+        <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+          <button type="button" class="btn ghost" id="stock-buyer-cancel">Cancel</button>
+          <button type="submit" class="btn primary" id="stock-buyer-save">Save Entry</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <!-- Stock Ledger Template -->
+  <template id="stock-ledger">
+    <section class="card full">
+      <div class="card-head">
+        <h3>📒 Stock Ledger (SAP-Style)</h3>
+        <div class="head-actions">
+          <select id="ledger-product-filter">
+            <option value="">All Products</option>
+          </select>
+          <select id="ledger-type-filter">
+            <option value="">All Types</option>
+            <option value="IN">Stock IN</option>
+            <option value="OUT">Stock OUT</option>
+          </select>
+          <input id="ledger-search" placeholder="Search..." />
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="info-banner">
+          <span class="info-icon">📒</span>
+          <span>SAP-style ledger: No edit, no delete. Every entry is permanent and auditable.</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="ledger-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Product</th>
+                <th>Company</th>
+                <th>Quantity</th>
+                <th>Running Balance</th>
+                <th>Created By</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button id="ledger-prev" class="btn ghost" disabled>← Previous</button>
+          <span id="ledger-page-info">Page 1 of 1</span>
+          <button id="ledger-next" class="btn ghost" disabled>Next →</button>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Company List Template -->
+  <template id="company-list">
+    <section class="card full">
+      <div class="card-head">
+        <h3>🏢 Companies</h3>
+        <div class="head-actions">
+          <input id="company-search" placeholder="Search companies..." />
+          <button class="btn primary" data-section="company-add">+ Add Company</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table class="table" id="company-table">
+            <thead>
+              <tr>
+                <th>Company Name</th>
+                <th>Industry</th>
+                <th>Phone</th>
+                <th>Email</th>
+                <th>City</th>
+                <th>Created By</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <button id="company-prev" class="btn ghost" disabled>← Previous</button>
+          <span id="company-page-info">Page 1 of 1</span>
+          <button id="company-next" class="btn ghost" disabled>Next →</button>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Company Add Template -->
+  <template id="company-add">
+    <section class="card">
+      <div class="card-head">
+        <h3>➕ Add Company</h3>
+        <p class="card-subtitle">Register a new company in the system</p>
+      </div>
+      <form id="company-add-form" class="card-body form-grid">
+        <div class="form-row">
+          <label for="company-name">Company Name <span class="required">*</span></label>
+          <input id="company-name" name="name" placeholder="Enter company name" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-email">Email <span class="required">*</span></label>
+          <input id="company-email" name="email" type="email" placeholder="Enter company email" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-phone">Phone Number <span class="required">*</span></label>
+          <input id="company-phone" name="phone" placeholder="Enter phone number (e.g., +91-1234567890)" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-industry">Industry <span class="required">*</span></label>
+          <select id="company-industry" name="industry" required>
+            <option value="">-- Select Industry --</option>
+            <option value="Manufacturing">Manufacturing</option>
+            <option value="Retail">Retail</option>
+            <option value="Healthcare">Healthcare</option>
+            <option value="Technology">Technology</option>
+            <option value="Construction">Construction</option>
+            <option value="Finance">Finance</option>
+            <option value="Other">Other</option>
+          </select>
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-street">Street Address <span class="required">*</span></label>
+          <input id="company-street" name="street" placeholder="Enter street address" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-city">City <span class="required">*</span></label>
+          <input id="company-city" name="city" placeholder="Enter city" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-state">State <span class="required">*</span></label>
+          <input id="company-state" name="state" placeholder="Enter state" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-zipcode">Zip/Pin Code <span class="required">*</span></label>
+          <input id="company-zipcode" name="zipCode" placeholder="Enter zip/pin code" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="company-country">Country <span class="required">*</span></label>
+          <select id="company-country" name="country" required>
+            <option value="India" selected>India</option>
+            <option value="USA">USA</option>
+            <option value="UK">UK</option>
+            <option value="Australia">Australia</option>
+            <option value="Canada">Canada</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="company-website">Website</label>
+          <input id="company-website" name="website" type="url" placeholder="https://example.com" />
+        </div>
+        <div class="form-row">
+          <label for="company-taxid">Tax ID / GSTIN</label>
+          <input id="company-taxid" name="taxId" placeholder="Enter Tax ID or GSTIN" />
+        </div>
+        <div class="form-actions full" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+          <button type="button" class="btn ghost" id="company-cancel">Cancel</button>
+          <button type="submit" class="btn primary">Save Company</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <!-- User List Template -->
+  <template id="user-list">
+    <section class="card full">
+      <div class="card-head">
+        <h3>👥 Users (Created by You)</h3>
+        <div class="head-actions">
+          <input id="user-search" placeholder="Search users..." />
+          <button class="btn primary" data-section="user-add">+ Add User</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="info-banner">
+          <span class="info-icon">ℹ️</span>
+          <span>You can create and manage users. Users can perform stock operations but cannot add other users.</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="user-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Last Login</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- User Add Template -->
+  <template id="user-add">
+    <section class="card">
+      <div class="card-head">
+        <h3>➕ Add User</h3>
+      </div>
+      <form id="user-add-form" class="card-body form-grid">
+        <div class="form-row">
+          <label for="user-name">Full Name <span class="required">*</span></label>
+          <input id="user-name" name="name" placeholder="Enter full name" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="user-phone">Phone Number <span class="required">*</span></label>
+          <input id="user-phone" name="phone" type="tel" placeholder="Enter phone (login credential)" required />
+          <span class="error-message"></span>
+          <small class="helper-text">User will login with this phone number</small>
+        </div>
+        <div class="form-row">
+          <label for="user-email">Email</label>
+          <input id="user-email" name="email" type="email" placeholder="Enter email (optional)" />
+        </div>
+        <div class="form-row">
+          <label for="user-password">Password <span class="required">*</span></label>
+          <input id="user-password" name="password" type="password" placeholder="Create password (min 8 chars)" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-actions full">
+          <button type="button" class="btn ghost" id="user-cancel">Cancel</button>
+          <button type="submit" class="btn primary">Create User</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <!-- Reports Template -->
+  <template id="reports">
+    <section class="dashboard-section">
+      <div class="card full">
+        <div class="card-head">
+          <h3>📋 Reports</h3>
+        </div>
+        <div class="card-body">
+          <div class="report-cards">
+            <div class="report-card" data-report="stock-summary">
+              <div class="report-icon">📊</div>
+              <h4>Stock Summary</h4>
+              <p>Current stock levels for all products</p>
+            </div>
+            <div class="report-card" data-report="stock-movement">
+              <div class="report-icon">📈</div>
+              <h4>Stock Movement</h4>
+              <p>IN/OUT transactions by date range</p>
+            </div>
+            <div class="report-card" data-report="low-stock">
+              <div class="report-icon">⚠️</div>
+              <h4>Low Stock Alert</h4>
+              <p>Products below minimum threshold</p>
+            </div>
+            <div class="report-card" data-report="activity">
+              <div class="report-icon">📋</div>
+              <h4>Activity Log</h4>
+              <p>Your stock operation history</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Report Output Area -->
+      <div class="card full" id="report-output" style="display: none;">
+        <div class="card-head">
+          <h3 id="report-title">Report</h3>
+          <div class="head-actions">
+            <button class="btn ghost" id="export-csv">📥 Export CSV</button>
+            <button class="btn ghost" id="print-report">🖨️ Print</button>
+          </div>
+        </div>
+        <div class="card-body" id="report-content">
+          <!-- Report content will be loaded here -->
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Logistics Templates -->
+  <template id="logistics-add">
+    <section class="card">
+      <div class="card-head">
+        <h3>Add Transporter</h3>
+        <p class="card-subtitle">Register a new logistics partner</p>
+      </div>
+      <form id="logistics-add-form" class="card-body form-grid">
+        <div class="form-row">
+          <label for="transporterName">Transporter Name <span class="required">*</span></label>
+          <input id="transporterName" name="transporterName" placeholder="Enter transporter name" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="trans-gstin">GSTIN Number</label>
+          <input id="trans-gstin" name="gstin" placeholder="Enter GSTIN" />
+        </div>
+        <div class="form-row">
+          <label for="trans-contact">Primary Contact <span class="required">*</span></label>
+          <input id="trans-contact" name="contact" placeholder="Primary phone" required />
+          <span class="error-message"></span>
+        </div>
+        <div class="form-row">
+          <label for="trans-email">Email</label>
+          <input id="trans-email" name="email" type="email" placeholder="Email address" />
+        </div>
+        <div class="form-row">
+          <label for="trans-address1">Address Line 1</label>
+          <input id="trans-address1" name="address1" placeholder="Address line 1" />
+        </div>
+        <div class="form-row">
+          <label for="trans-address2">Address Line 2</label>
+          <input id="trans-address2" name="address2" placeholder="Address line 2" />
+        </div>
+        <div class="form-row">
+          <label for="trans-address3">Address Line 3</label>
+          <input id="trans-address3" name="address3" placeholder="Address line 3" />
+        </div>
+        <div class="form-row">
+          <label for="trans-country">Country</label>
+          <select id="trans-country" name="country">
+            <option selected>India</option>
+            <option>USA</option>
+            <option>UK</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="trans-state">State</label>
+          <input id="trans-state" name="state" placeholder="Enter state" />
+        </div>
+        <div class="form-row">
+          <label for="trans-city">City</label>
+          <input id="trans-city" name="city" placeholder="Enter city" />
+        </div>
+        <div class="form-row">
+          <label for="trans-pincode">Pincode</label>
+          <input id="trans-pincode" name="pincode" placeholder="Enter pincode" />
+        </div>
+        
+        <!-- Additional Contacts -->
+        <div class="form-section-header" style="grid-column: 1/-1; margin-top: 16px;">
+          <h4>Additional Contacts (Optional)</h4>
+        </div>
+        <div class="form-row">
+          <label for="trans-c1">Contact Person 1</label>
+          <input id="trans-c1" name="c1" placeholder="Name / Phone" />
+        </div>
+        <div class="form-row">
+          <label for="trans-c2">Contact Person 2</label>
+          <input id="trans-c2" name="c2" placeholder="Name / Phone" />
+        </div>
+        <div class="form-row">
+          <label for="trans-c3">Contact Person 3</label>
+          <input id="trans-c3" name="c3" placeholder="Name / Phone" />
+        </div>
+
+        <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+          <button type="button" class="btn ghost" id="logistics-add-cancel">Cancel</button>
+          <button type="submit" class="btn primary" id="logistics-add-save">Save Transporter</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <template id="logistics-modify">
+    <section class="card">
+      <div class="card-head">
+        <h3>Modify Transporter</h3>
+        <p class="card-subtitle">Update transporter information</p>
+      </div>
+      <form id="logistics-modify-form" class="card-body">
+        <div class="form-row">
+          <label for="modify-trans-select">Select Transporter</label>
+          <select id="modify-trans-select" name="transporterId">
+            <option value="">-- Select a transporter --</option>
+          </select>
+        </div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="modify-trans-name">Transporter Name</label>
+            <input id="modify-trans-name" name="transporterName" />
+          </div>
+          <div class="form-row">
+            <label for="modify-trans-gstin">GSTIN Number</label>
+            <input id="modify-trans-gstin" name="gstin" />
+          </div>
+          <div class="form-row">
+            <label for="modify-trans-contact">Primary Contact</label>
+            <input id="modify-trans-contact" name="contact" />
+          </div>
+          <div class="form-row">
+            <label for="modify-trans-email">Email</label>
+            <input id="modify-trans-email" name="email" type="email" />
+          </div>
+          <div class="form-row">
+            <label for="modify-trans-city">City</label>
+            <input id="modify-trans-city" name="city" />
+          </div>
+          <div class="form-row">
+            <label for="modify-trans-state">State</label>
+            <input id="modify-trans-state" name="state" />
+          </div>
+        </div>
+        <div class="card-foot">
+          <button type="button" class="btn ghost" id="logistics-modify-cancel">Cancel</button>
+          <button type="submit" class="btn primary" id="logistics-modify-save">Save Changes</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <template id="logistics-list">
+    <section class="card full">
+      <div class="card-head">
+        <h3>Transporter List</h3>
+        <div class="head-actions">
+          <input id="trans-search" placeholder="🔍 Search transporters..." />
+          <button class="btn primary btn-sm" data-section="logistics-add">➕ Add New</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap">
+          <table class="table" id="trans-table">
+            <thead>
+              <tr>
+                <th>Transporter Name</th>
+                <th>Primary Contact</th>
+                <th>Email</th>
+                <th>City</th>
+                <th>Pincode</th>
+                <th>GSTIN</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card-foot pager">
+        <button class="btn ghost" id="trans-prev">← Previous</button>
+        <span id="trans-page-info">Page 1 of 1</span>
+        <button class="btn ghost" id="trans-next">Next →</button>
+      </div>
+    </section>
+  </template>
+
+  <!-- Profile Template -->
+  <template id="profile">
+    <section class="profile-section">
+      <!-- Profile Header -->
+      <div class="card profile-card">
+        <div class="profile-header">
+          <div class="profile-avatar" id="profile-avatar">
+            <span class="avatar-text">M</span>
+          </div>
+          <div class="profile-info">
+            <h2 id="profile-name">Manager Name</h2>
+            <p class="profile-role">
+              <span class="role-badge manager">MANAGER</span>
+            </p>
+            <p class="profile-joined">Member since <span id="profile-joined">January 2026</span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Profile Details -->
+      <div class="card">
+        <div class="card-head">
+          <h3>👤 Personal Information</h3>
+          <button class="btn ghost" id="edit-profile-btn">✏️ Edit</button>
+        </div>
+        <div class="card-body">
+          <form id="profile-form" class="profile-form">
+            <div class="form-row">
+              <label for="profile-fullname">Full Name</label>
+              <input type="text" id="profile-fullname" name="name" placeholder="Your full name" required />
+            </div>
+            <div class="form-row">
+              <label for="profile-email">Email Address</label>
+              <input type="email" id="profile-email" name="email" placeholder="your@email.com" readonly class="readonly-field" />
+              <small class="field-note">Email cannot be changed</small>
+            </div>
+            <div class="form-row">
+              <label for="profile-phone">Phone Number</label>
+              <input type="tel" id="profile-phone" name="phone" placeholder="Phone number" />
+            </div>
+            <div class="form-row">
+              <label for="profile-department">Department</label>
+              <input type="text" id="profile-department" name="department" placeholder="Your department" />
+            </div>
+
+            <div class="form-actions">
+              <button type="button" class="btn ghost" id="cancel-profile-btn" style="display:none;">Cancel</button>
+              <button type="submit" class="btn primary" id="save-profile-btn" style="display:none;">💾 Save Changes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Change Password -->
+      <div class="card">
+        <div class="card-head">
+          <h3>🔐 Change Password</h3>
+        </div>
+        <div class="card-body">
+          <form id="password-form" class="profile-form">
+            <div class="form-row">
+              <label for="current-password">Current Password</label>
+              <input type="password" id="current-password" name="currentPassword" placeholder="Enter current password" required />
+            </div>
+            <div class="form-row">
+              <label for="new-password">New Password</label>
+              <input type="password" id="new-password" name="newPassword" placeholder="Enter new password" required />
+              <small class="field-hint">Minimum 8 characters with uppercase, lowercase, and number</small>
+            </div>
+            <div class="form-row">
+              <label for="confirm-password">Confirm New Password</label>
+              <input type="password" id="confirm-password" name="confirmPassword" placeholder="Confirm new password" required />
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn primary">🔐 Update Password</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Activity Summary -->
+      <div class="card">
+        <div class="card-head">
+          <h3>📊 Your Activity Summary</h3>
+        </div>
+        <div class="card-body">
+          <div class="activity-stats">
+            <div class="stat-box">
+              <div class="stat-value" id="total-stock-in">0</div>
+              <div class="stat-label">Stock IN Entries</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="total-stock-out">0</div>
+              <div class="stat-label">Stock OUT Entries</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="companies-added">0</div>
+              <div class="stat-label">Companies Added</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="users-managed">0</div>
+              <div class="stat-label">Users Managed</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Activity -->
+      <div class="card">
+        <div class="card-head">
+          <h3>🕐 Recent Activity</h3>
+        </div>
+        <div class="card-body">
+          <div class="activity-timeline" id="activity-timeline">
+            <div class="timeline-item">
+              <div class="timeline-icon">📥</div>
+              <div class="timeline-content">
+                <p class="timeline-title">Loading activities...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- Settings Template (Admin-style with tabs) -->
+  <template id="settings">
+    <div class="settings-page">
+      <!-- Settings Navigation Tabs -->
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-tab="my-profile">👤 My Profile</button>
+        <button class="settings-tab" data-tab="user-management">👥 User Management</button>
+        <button class="settings-tab" data-tab="notifications">🔔 Notifications</button>
+        <button class="settings-tab" data-tab="display">🎨 Display</button>
+        <button class="settings-tab" data-tab="permissions">🔐 My Permissions</button>
+      </div>
+
+      <!-- Tab Content -->
+      <div class="settings-content">
+        
+        <!-- 1. MY PROFILE TAB -->
+        <div class="settings-panel active" id="my-profile-panel">
+          <section class="card">
+            <div class="card-head">
+              <h3>👤 Manager Profile</h3>
+              <p class="card-subtitle">Manage your account settings</p>
+            </div>
+            <div class="card-body">
+              <form id="manager-profile-form">
+                <div class="form-grid">
+                  <div class="form-row">
+                    <label for="mgr-name">Full Name <span class="required">*</span></label>
+                    <input type="text" id="mgr-name" name="name" placeholder="Your name" required />
+                  </div>
+                  <div class="form-row">
+                    <label for="mgr-email">Email Address</label>
+                    <input type="email" id="mgr-email" name="email" readonly class="readonly-field" />
+                    <small class="field-note">Email cannot be changed</small>
+                  </div>
+                  <div class="form-row">
+                    <label for="mgr-phone">Phone Number</label>
+                    <input type="tel" id="mgr-phone" name="phone" placeholder="Phone number" />
+                  </div>
+                  <div class="form-row">
+                    <label for="mgr-department">Department</label>
+                    <input type="text" id="mgr-department" name="department" placeholder="Your department" />
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn primary">💾 Save Profile</button>
+                </div>
+              </form>
+              
+              <hr class="section-divider">
+              
+              <!-- Change Password -->
+              <h4>🔑 Change Password</h4>
+              <form id="manager-password-form">
+                <div class="form-grid">
+                  <div class="form-row">
+                    <label for="mgr-current-password">Current Password <span class="required">*</span></label>
+                    <input type="password" id="mgr-current-password" name="currentPassword" required />
+                  </div>
+                  <div class="form-row">
+                    <label for="mgr-new-password">New Password <span class="required">*</span></label>
+                    <input type="password" id="mgr-new-password" name="newPassword" placeholder="Minimum 8 characters" required />
+                  </div>
+                  <div class="form-row">
+                    <label for="mgr-confirm-password">Confirm New Password <span class="required">*</span></label>
+                    <input type="password" id="mgr-confirm-password" name="confirmPassword" required />
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button type="submit" class="btn primary">🔑 Change Password</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+
+        <!-- 2. USER MANAGEMENT TAB -->
+        <div class="settings-panel" id="user-management-panel">
+          <section class="card">
+            <div class="card-head">
+              <h3>👥 Manage Users You Created</h3>
+              <p class="card-subtitle">Activate/deactivate and manage users under your supervision</p>
+            </div>
+            <div class="card-body">
+              <!-- Stats Row -->
+              <div class="stats-row" id="user-stats-row">
+                <div class="stat-mini">
+                  <span class="stat-label">Total Users</span>
+                  <span class="stat-value" id="stat-total-users">0</span>
+                  <span class="stat-sub">created by you</span>
+                </div>
+                <div class="stat-mini success">
+                  <span class="stat-label">Active</span>
+                  <span class="stat-value" id="stat-active-users">0</span>
+                  <span class="stat-sub">users</span>
+                </div>
+                <div class="stat-mini warning">
+                  <span class="stat-label">Inactive</span>
+                  <span class="stat-value" id="stat-inactive-users">0</span>
+                  <span class="stat-sub">users</span>
+                </div>
+              </div>
+              
+              <hr class="section-divider">
+              
+              <!-- User Selection -->
+              <div class="form-row">
+                <label for="settings-user-select">Select User</label>
+                <select id="settings-user-select">
+                  <option value="">-- Select a user to manage --</option>
+                </select>
+              </div>
+              
+              <div id="user-action-panel" class="action-panel" style="display: none;">
+                <div class="account-info-card">
+                  <div class="account-avatar" id="selected-user-avatar">👤</div>
+                  <div class="account-details">
+                    <h4 id="selected-user-name">-</h4>
+                    <p id="selected-user-email">-</p>
+                    <span class="badge" id="selected-user-phone">-</span>
+                    <span class="badge" id="selected-user-status">-</span>
+                  </div>
+                </div>
+                
+                <div class="action-buttons">
+                  <button type="button" class="btn primary" id="btn-toggle-user-status">
+                    <span id="toggle-user-text">Activate/Deactivate</span>
+                  </button>
+                  <button type="button" class="btn secondary" id="btn-reset-user-password">
+                    🔑 Reset Password
+                  </button>
+                </div>
+              </div>
+              
+              <!-- Reset Password Modal -->
+              <div id="user-reset-password-modal" class="modal-overlay" style="display: none;">
+                <div class="modal-content">
+                  <h4>🔑 Reset User Password</h4>
+                  <p id="reset-user-name">-</p>
+                  
+                  <div class="alert alert-info" style="margin: 16px 0; padding: 12px; background: rgba(59, 130, 246, 0.1); border-radius: 8px; font-size: 0.9rem;">
+                    <strong>Note:</strong> User will be required to change their password on next login.
+                  </div>
+                  
+                  <div class="form-row">
+                    <label for="user-new-password">New Password</label>
+                    <input type="password" id="user-new-password" placeholder="Minimum 8 characters" />
+                  </div>
+                  
+                  <div id="user-temp-password-notice" style="display: none;"></div>
+                  
+                  <div class="modal-actions" style="display: flex; justify-content: space-between; gap: 12px;">
+                    <button type="button" class="btn ghost" id="cancel-user-reset">Cancel</button>
+                    <div style="display: flex; gap: 12px;">
+                      <button type="button" class="btn secondary" id="generate-user-temp-password">🎲 Generate Temporary</button>
+                      <button type="button" class="btn primary" id="confirm-user-reset">Set Password</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 3. NOTIFICATIONS TAB -->
+        <div class="settings-panel" id="notifications-panel">
+          <section class="card">
+            <div class="card-head">
+              <h3>🔔 Notification Preferences</h3>
+              <p class="card-subtitle">Configure how you want to receive notifications</p>
+            </div>
+            <div class="card-body">
+              <form id="notification-settings-form" class="settings-form">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Low Stock Alerts</label>
+                    <p class="setting-desc">Receive notifications when products are running low</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="notify-low-stock" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Stock Entry Notifications</label>
+                    <p class="setting-desc">Get notified when stock IN/OUT entries are made</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="notify-stock-entries" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>User Activity Alerts</label>
+                    <p class="setting-desc">Get notified about activities from users you manage</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="notify-user-activity" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Daily Summary Email</label>
+                    <p class="setting-desc">Receive a daily summary of stock activities</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="notify-daily-summary" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Browser Notifications</label>
+                    <p class="setting-desc">Enable browser push notifications</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="notify-browser" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </form>
+              <div class="form-actions">
+                <button type="button" class="btn primary" id="save-notification-settings">💾 Save Preferences</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 4. DISPLAY TAB -->
+        <div class="settings-panel" id="display-panel">
+          <section class="card">
+            <div class="card-head">
+              <h3>🎨 Display & Preferences</h3>
+              <p class="card-subtitle">Customize your dashboard experience</p>
+            </div>
+            <div class="card-body">
+              <form id="display-settings-form" class="settings-form">
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Dashboard Refresh Interval</label>
+                    <p class="setting-desc">How often to auto-refresh dashboard data</p>
+                  </div>
+                  <select id="dashboard-refresh" class="setting-select">
+                    <option value="30">Every 30 seconds</option>
+                    <option value="60" selected>Every 1 minute</option>
+                    <option value="300">Every 5 minutes</option>
+                    <option value="0">Manual refresh only</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Items Per Page</label>
+                    <p class="setting-desc">Number of items to display in tables</p>
+                  </div>
+                  <select id="items-per-page" class="setting-select">
+                    <option value="10">10 items</option>
+                    <option value="25" selected>25 items</option>
+                    <option value="50">50 items</option>
+                    <option value="100">100 items</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Date Format</label>
+                    <p class="setting-desc">How dates are displayed</p>
+                  </div>
+                  <select id="date-format" class="setting-select">
+                    <option value="DD/MM/YYYY">DD/MM/YYYY</option>
+                    <option value="MM/DD/YYYY">MM/DD/YYYY</option>
+                    <option value="YYYY-MM-DD">YYYY-MM-DD</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Compact Table Mode</label>
+                    <p class="setting-desc">Use compact layout for tables to fit more data</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="compact-mode" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label>Show Stock Warnings</label>
+                    <p class="setting-desc">Highlight low stock items in red</p>
+                  </div>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="show-stock-warnings" checked />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+              </form>
+              <div class="form-actions">
+                <button type="button" class="btn primary" id="save-display-settings">💾 Save Display Settings</button>
+              </div>
+            </div>
+          </section>
+          
+          <!-- Data Export -->
+          <section class="card">
+            <div class="card-head">
+              <h3>� Data Export</h3>
+              <p class="card-subtitle">Download your data in various formats</p>
+            </div>
+            <div class="card-body">
+              <div class="export-options">
+                <div class="export-item">
+                  <div class="export-info">
+                    <h4>📊 My Stock Activities</h4>
+                    <p>Export all your stock IN/OUT entries</p>
+                  </div>
+                  <button class="btn ghost" id="export-stock-activities">Download CSV</button>
+                </div>
+                <div class="export-item">
+                  <div class="export-info">
+                    <h4>👥 My Users List</h4>
+                    <p>Export list of users you've created</p>
+                  </div>
+                  <button class="btn ghost" id="export-my-users">Download CSV</button>
+                </div>
+                <div class="export-item">
+                  <div class="export-info">
+                    <h4>🏢 My Companies</h4>
+                    <p>Export companies you've added</p>
+                  </div>
+                  <button class="btn ghost" id="export-my-companies">Download CSV</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- 5. PERMISSIONS TAB -->
+        <div class="settings-panel" id="permissions-panel">
+          <section class="card">
+            <div class="card-head">
+              <h3>🔐 Your Permissions</h3>
+              <p class="card-subtitle">View what actions you're allowed to perform (set by Admin)</p>
+            </div>
+            <div class="card-body">
+              <div class="alert alert-info">
+                <span>ℹ️</span>
+                <span>These permissions are configured by the Admin. Contact your administrator to request changes.</span>
+              </div>
+              
+              <div class="permissions-grid" id="my-permissions-grid">
+                <!-- Will be populated by JS -->
+              </div>
+            </div>
+          </section>
+          
+          <!-- Session Info -->
+          <section class="card">
+            <div class="card-head">
+              <h3>� Session Information</h3>
+              <p class="card-subtitle">Your current login session details</p>
+            </div>
+            <div class="card-body">
+              <div class="session-info">
+                <div class="session-row">
+                  <span class="session-label">Logged in as:</span>
+                  <span class="session-value" id="session-user-name">-</span>
+                </div>
+                <div class="session-row">
+                  <span class="session-label">Role:</span>
+                  <span class="session-value"><span class="badge manager">MANAGER</span></span>
+                </div>
+                <div class="session-row">
+                  <span class="session-label">Session Started:</span>
+                  <span class="session-value" id="session-start-time">-</span>
+                </div>
+                <div class="session-row">
+                  <span class="session-label">Last Activity:</span>
+                  <span class="session-value" id="session-last-activity">-</span>
+                </div>
+              </div>
+              
+              <div class="form-actions">
+                <button type="button" class="btn warning" id="logout-all-sessions">� Logout from All Devices</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Warranty Template -->
+  <template id="warranty-list">
+    <section class="card full">
+      <div class="card-head">
+        <div>
+          <h3>🛡️ Warranty Management</h3>
+          <p class="card-subtitle">Track purchase &amp; seller warranties across all stock</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn secondary btn-sm" id="warranty-export-btn">📥 Export CSV</button>
+        </div>
+      </div>
+      <div class="card-body">
+
+        <!-- Stats Cards -->
+        <div class="warranty-stats-grid">
+          <div class="warranty-stat-card pw-card" id="ws-pw-active-card">
+            <div class="ws-icon">📦</div>
+            <div class="ws-value" id="ws-pw-active">—</div>
+            <div class="ws-label">Purchase Active</div>
+          </div>
+          <div class="warranty-stat-card pw-card warn" id="ws-pw-expiring-card">
+            <div class="ws-icon">⚠️</div>
+            <div class="ws-value" id="ws-pw-expiring">—</div>
+            <div class="ws-label">Purchase Expiring</div>
+          </div>
+          <div class="warranty-stat-card pw-card danger" id="ws-pw-expired-card">
+            <div class="ws-icon">❌</div>
+            <div class="ws-value" id="ws-pw-expired">—</div>
+            <div class="ws-label">Purchase Expired</div>
+          </div>
+          <div class="warranty-stat-card sw-card">
+            <div class="ws-icon">🏷️</div>
+            <div class="ws-value" id="ws-sw-active">—</div>
+            <div class="ws-label">Seller Active</div>
+          </div>
+          <div class="warranty-stat-card sw-card warn">
+            <div class="ws-icon">⚠️</div>
+            <div class="ws-value" id="ws-sw-expiring">—</div>
+            <div class="ws-label">Seller Expiring</div>
+          </div>
+          <div class="warranty-stat-card sw-card danger">
+            <div class="ws-icon">❌</div>
+            <div class="ws-value" id="ws-sw-expired">—</div>
+            <div class="ws-label">Seller Expired</div>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="warranty-filters">
+          <input id="warranty-search" type="text" placeholder="🔍 Search serial / buyer / supplier…" class="warranty-search-input" />
+          <select id="warranty-type-filter">
+            <option value="">All Types</option>
+            <option value="purchase">Purchase Warranty</option>
+            <option value="seller">Seller Warranty</option>
+          </select>
+          <select id="warranty-status-filter">
+            <option value="">All Status</option>
+            <option value="active">✅ Active</option>
+            <option value="expiring-soon">⚠️ Expiring Soon</option>
+            <option value="expired">❌ Expired</option>
+            <option value="not-sold">📦 Not Sold</option>
+          </select>
+        </div>
+
+        <!-- Table -->
+        <div class="table-wrap">
+          <table class="table" id="warranty-table">
+            <thead>
+              <tr>
+                <th>Serial #</th>
+                <th>Product</th>
+                <th>📦 Purchase Warranty</th>
+                <th>PW Days Left</th>
+                <th>Supplier</th>
+                <th>🏷️ Seller Warranty</th>
+                <th>SW Days Left</th>
+                <th>Buyer</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="warranty-tbody">
+              <tr><td colspan="9" style="text-align:center;padding:40px;color:#6B7280;">Loading warranties…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="card-foot pager">
+          <button class="btn ghost" id="warranty-prev">← Previous</button>
+          <span id="warranty-page-info">Page 1 of 1</span>
+          <button class="btn ghost" id="warranty-next">Next →</button>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <!-- ============================================ -->
+  <!-- ALL NOTIFICATIONS PAGE                       -->
+  <!-- ============================================ -->
+  <template id="all-notifications">
+    <section class="notif-page">
+      <div class="notif-page-header">
+        <div class="notif-page-title-row">
+          <h2>🔔 All Notifications</h2>
+          <div class="notif-page-actions">
+            <button class="btn ghost sm" id="notif-mark-all-read">✓ Mark all read</button>
+            <button class="btn ghost sm danger" id="notif-delete-read">🗑️ Clear read</button>
+          </div>
+        </div>
+        <div class="notif-tabs" id="notif-category-tabs">
+          <button class="notif-tab active" data-category="ALL">All</button>
+          <button class="notif-tab" data-category="STOCK">📦 Stock</button>
+          <button class="notif-tab" data-category="WARRANTY">🛡️ Warranty</button>
+          <button class="notif-tab" data-category="USER">👤 User</button>
+          <button class="notif-tab" data-category="SECURITY">🔒 Security</button>
+          <button class="notif-tab" data-category="COMPANY">🏢 Company</button>
+          <button class="notif-tab" data-category="SHIPMENT">🚚 Shipment</button>
+          <button class="notif-tab" data-category="SYSTEM">⚙️ System</button>
+        </div>
+        <div class="notif-filters">
+          <select id="notif-priority-filter" class="input sm">
+            <option value="">All Priorities</option>
+            <option value="CRITICAL">🔴 Critical</option>
+            <option value="HIGH">🟠 High</option>
+            <option value="MEDIUM">🟡 Medium</option>
+            <option value="LOW">🟢 Low</option>
+          </select>
+          <select id="notif-read-filter" class="input sm">
+            <option value="">All</option>
+            <option value="unread">Unread only</option>
+            <option value="read">Read only</option>
+          </select>
+        </div>
+      </div>
+      <div class="notif-page-body" id="notif-page-list">
+        <div class="loading-spinner">Loading notifications...</div>
+      </div>
+      <div class="notif-pagination" id="notif-pagination"></div>
+    </section>
+  </template>
+
+  <!-- Warranty Detail Modal -->
+  <div id="warranty-detail-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:2000;align-items:center;justify-content:center;">
+    <div style="background:#fff;border-radius:14px;width:95%;max-width:680px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+      <div class="modal-header" style="display:flex;align-items:center;justify-content:space-between;padding:20px 24px 16px;border-bottom:1px solid #E5E7EB;">
+        <h3 style="margin:0;font-size:1.1rem;font-weight:700;">🛡️ Warranty Details</h3>
+        <button type="button" onclick="closeWarrantyModal()" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#6B7280;line-height:1;">&times;</button>
+      </div>
+      <div id="warranty-detail-content" style="padding:20px 24px 8px;"></div>
+      <div style="padding:12px 24px 20px;display:flex;justify-content:flex-end;">
+        <button type="button" class="btn secondary" onclick="closeWarrantyModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stock Ledger Detail Modal -->
+  <div id="mgr-sd-modal-overlay" class="mgr-sd-overlay" style="display:none;">
+    <div class="mgr-sd-modal">
+      <div class="mgr-sd-header">
+        <div class="mgr-sd-header-left">
+          <div class="mgr-sd-icon" id="mgr-sd-icon"></div>
+          <div>
+            <div class="mgr-sd-product-name" id="mgr-sd-product-name"></div>
+            <div class="mgr-sd-badges" id="mgr-sd-badges"></div>
+          </div>
+        </div>
+        <div class="mgr-sd-qty-block" id="mgr-sd-qty-block">
+          <div class="mgr-sd-qty-num" id="mgr-sd-qty-num"></div>
+          <div class="mgr-sd-qty-label">units</div>
+        </div>
+        <button class="mgr-sd-close" id="mgr-sd-close-btn">&times;</button>
+      </div>
+      <div class="mgr-sd-body" id="mgr-sd-body"></div>
+      <div class="mgr-sd-footer">
+        <button class="mgr-sd-btn mgr-sd-btn-close" id="mgr-sd-footer-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Force Password Reset Modal -->
+  <div id="force-password-reset-modal" class="force-reset-overlay" style="display:none;">
+    <div class="force-reset-card">
+      <div class="force-reset-icon-wrap">
+        <span class="force-reset-icon">🔐</span>
+      </div>
+      <h2 class="force-reset-title">Password Reset Required</h2>
+      <p class="force-reset-desc">Your administrator has requested that you change your password before continuing.</p>
+
+      <form id="force-reset-form">
+        <div class="force-reset-field">
+          <label for="force-new-password" class="force-reset-label">New Password</label>
+          <div class="force-reset-input-wrap">
+            <input type="password" id="force-new-password" required minlength="8"
+                   placeholder="Minimum 8 characters" class="force-reset-input" />
+            <button type="button" id="toggle-new-password" class="force-reset-toggle" title="Show password">👁️</button>
+          </div>
+        </div>
+
+        <div class="force-reset-field">
+          <label for="force-confirm-password" class="force-reset-label">Confirm Password</label>
+          <div class="force-reset-input-wrap">
+            <input type="password" id="force-confirm-password" required minlength="8"
+                   placeholder="Confirm your password" class="force-reset-input" />
+            <button type="button" id="toggle-confirm-password" class="force-reset-toggle" title="Show password">👁️</button>
+          </div>
+        </div>
+
+        <div id="force-reset-error" class="force-reset-error" style="display:none;"></div>
+
+        <button type="submit" class="force-reset-submit">Change Password &amp; Continue</button>
+      </form>
+
+      <p class="force-reset-note">You cannot access the dashboard until you change your password.</p>
+    </div>
+  </div>
+
+  <!-- Notification Dropdown -->
+  <div id="notification-dropdown" class="notification-dropdown" style="display:none;">
+    <div class="notification-header">
+      <h4>🔔 Notifications</h4>
+      <button id="mark-all-read-btn" class="btn-link">Mark all read</button>
+    </div>
+    <div class="notification-list" id="notification-list">
+      <div class="empty-state">Loading...</div>
+    </div>
+    <div class="notification-footer">
+      <a href="#" id="view-all-notifications">View All Notifications</a>
+    </div>
+  </div>
+
+  <script src="manager.js?v=9"></script>
+</body>
+</html>

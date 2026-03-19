@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>AcuStock — Accept Invitation</title>
+    <link rel="stylesheet" href="../admin-css/style.css">
+  </head>
+  <body data-page="accept-invite">
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" hidden>
+      <div class="spinner"></div>
+      <p id="overlay-msg">Setting up your account...</p>
+    </div>
+
+    <main class="center-wrapper">
+      <section class="glass-card auth-card auth-card-wrapper">
+
+        <!-- Verifying state (shown on load while token is checked) -->
+        <div id="verifying-state" class="invite-state">
+          <div class="invite-icon-circle">⏳</div>
+          <h2 class="invite-state-title">Verifying your invite...</h2>
+          <p class="muted invite-state-desc">Please wait a moment.</p>
+        </div>
+
+        <!-- Invalid / Expired state -->
+        <div id="invalid-state" class="invite-state" hidden>
+          <div class="invite-icon-circle invite-icon-error">❌</div>
+          <h2 class="invite-state-title">Invalid Invite</h2>
+          <p id="invalid-msg" class="muted invite-state-desc">This invite link is invalid or has expired.</p>
+          <div class="invite-state-actions">
+            <a href="login.html" class="btn secondary btn-full">Back to Login</a>
+          </div>
+        </div>
+
+        <!-- Accept form (shown after token verified) -->
+        <div id="form-state" hidden>
+
+          <header class="auth-card-header">
+            <h1 class="brand">🏢 AcuStock</h1>
+            <p class="muted brand-sub">Inventory Management System</p>
+          </header>
+
+          <!-- Invite info banner -->
+          <div class="invite-info-banner">
+            <p id="invite-greeting">You've been invited to join AcuStock.</p>
+            <p id="invite-role-line" class="invite-role-line"></p>
+          </div>
+
+          <!-- Alert -->
+          <div id="invite-alert" class="alert" hidden role="alert"></div>
+
+          <!-- Form -->
+          <form id="invite-form" class="form" novalidate>
+
+            <!-- Email (read-only, from token) -->
+            <div class="form-row">
+              <label for="invite-email">Email</label>
+              <input id="invite-email" type="email" class="input-readonly" readonly aria-readonly="true" />
+            </div>
+
+            <!-- Full name -->
+            <div class="form-row">
+              <label for="invite-name">Full Name <span class="required">*</span></label>
+              <input
+                id="invite-name"
+                type="text"
+                placeholder="Enter your full name"
+                autocomplete="name"
+                required
+                autofocus
+                aria-required="true"
+                aria-describedby="name-error"
+              />
+              <span id="name-error" class="error-message" role="alert"></span>
+            </div>
+
+            <!-- Password -->
+            <div class="form-row">
+              <label for="invite-password">Create Password <span class="required">*</span></label>
+              <div class="password-wrapper">
+                <input
+                  id="invite-password"
+                  type="password"
+                  placeholder="Min 8 chars, include letters and numbers"
+                  autocomplete="new-password"
+                  required
+                  aria-required="true"
+                  aria-describedby="password-error"
+                />
+                <button type="button" class="toggle-password" aria-label="Toggle password visibility" tabindex="-1">
+                  <span class="eye-icon">👁️</span>
+                </button>
+              </div>
+              <span id="password-error" class="error-message" role="alert"></span>
+            </div>
+
+            <!-- Confirm Password -->
+            <div class="form-row">
+              <label for="invite-confirm">Confirm Password <span class="required">*</span></label>
+              <div class="password-wrapper">
+                <input
+                  id="invite-confirm"
+                  type="password"
+                  placeholder="Re-enter your password"
+                  autocomplete="new-password"
+                  required
+                  aria-required="true"
+                  aria-describedby="confirm-error"
+                />
+                <button type="button" class="toggle-password" aria-label="Toggle password visibility" tabindex="-1">
+                  <span class="eye-icon">👁️</span>
+                </button>
+              </div>
+              <span id="confirm-error" class="error-message" role="alert"></span>
+            </div>
+
+            <!-- Submit -->
+            <div class="auth-submit-wrap">
+              <button type="submit" class="btn primary btn-full" id="invite-btn">
+                <span class="btn-text">Create My Account</span>
+                <span class="btn-loader" hidden>
+                  <span class="spinner-small"></span> Creating account...
+                </span>
+              </button>
+            </div>
+
+          </form>
+        </div>
+
+        <!-- Success state -->
+        <div id="success-state" hidden>
+          <div class="invite-icon-circle invite-icon-success">✅</div>
+          <h2 class="invite-state-title invite-success-title">Account Created!</h2>
+          <p class="muted invite-state-desc">Your AcuStock account is ready. Redirecting to login...</p>
+          <div class="invite-state-actions">
+            <a href="login.html" class="btn primary btn-full">Go to Login</a>
+          </div>
+        </div>
+
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>© Copyright 2026 AcuStock. All Rights Reserved.</p>
+    </footer>
+
+    <script src="../../shared/config.js"></script>
+    <script src="../admin-js/invite.js"></script>
+  </body>
+</html>

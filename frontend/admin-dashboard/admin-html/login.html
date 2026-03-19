@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="description" content="AcuStock Inventory Management System - Secure Login Portal">
+    <title>AcuStock — Login | Inventory Management System</title>
+    <link rel="stylesheet" href="../admin-css/style.css">
+  </head>
+  <body data-page="login">
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" hidden>
+      <div class="spinner"></div>
+      <p>Signing you in...</p>
+    </div>
+
+    <main class="center-wrapper">
+      <section class="glass-card auth-card auth-card-wrapper">
+
+        <!-- Header -->
+        <header class="auth-card-header">
+          <h1 class="brand">🏢 AcuStock</h1>
+          <p class="muted brand-sub">Inventory Management System</p>
+          <p class="muted brand-tagline">Sign in to your account</p>
+        </header>
+
+        <!-- Alert -->
+        <div id="login-alert" class="alert" hidden role="alert"></div>
+
+        <!-- Login Form -->
+        <form id="login-form" class="form" novalidate>
+
+          <!-- Role -->
+          <div class="form-row">
+            <label for="login-role">Login as <span class="required">*</span></label>
+            <select id="login-role" name="role" required aria-required="true">
+              <option value="SUPER_ADMIN">👑 Super Admin (Owner)</option>
+              <option value="ADMIN">Admin</option>
+              <option value="MANAGER">Manager</option>
+              <option value="USER">User</option>
+            </select>
+          </div>
+
+          <!-- Identifier (email or phone, swapped by JS) -->
+          <div class="form-row" id="identifier-row">
+            <label for="login-identifier" id="identifier-label">
+              Email <span class="required">*</span>
+            </label>
+            <input
+              id="login-identifier"
+              name="identifier"
+              type="text"
+              placeholder="Enter email address"
+              autocomplete="username"
+              required
+              autofocus
+              aria-required="true"
+              aria-describedby="identifier-error"
+            />
+            <span id="identifier-error" class="error-message" role="alert"></span>
+          </div>
+
+          <!-- Password -->
+          <div class="form-row">
+            <label for="login-password">Password <span class="required">*</span></label>
+            <div class="password-wrapper">
+              <input
+                id="login-password"
+                name="password"
+                type="password"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                required
+                aria-required="true"
+                aria-describedby="password-error"
+              />
+              <button type="button" class="toggle-password" aria-label="Toggle password visibility" tabindex="-1">
+                <span class="eye-icon">👁️</span>
+              </button>
+            </div>
+            <span id="password-error" class="error-message" role="alert"></span>
+          </div>
+
+          <!-- Remember me / Forgot password -->
+          <div class="auth-meta-row">
+            <label class="checkbox-label">
+              <input type="checkbox" id="remember-me" name="remember">
+              <span>Remember me</span>
+            </label>
+            <a href="forgot.html" class="link-secondary">Forgot password?</a>
+          </div>
+
+          <!-- Submit -->
+          <div class="auth-submit-wrap">
+            <button type="submit" class="btn primary btn-full" id="login-btn">
+              <span class="btn-text">Sign in</span>
+              <span class="btn-loader" hidden>
+                <span class="spinner-small"></span> Signing in...
+              </span>
+            </button>
+          </div>
+
+          <!-- Role-contextual info (populated by auth.js) -->
+          <div class="auth-register-info" id="register-link-container"></div>
+        </form>
+
+        <!-- Support link -->
+        <div class="auth-divider-row">
+          <p class="muted">
+            Need help? <a href="mailto:support@acustock.com" class="link-secondary">Contact Support</a>
+          </p>
+        </div>
+
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <p>© Copyright 2026 AcuStock. All Rights Reserved.</p>
+      <p class="auth-footer-links">
+        <a href="#" class="link-secondary">Privacy Policy</a>
+        <a href="#" class="link-secondary">Terms of Service</a>
+      </p>
+    </footer>
+
+    <script src="../../shared/config.js"></script>
+    <script src="../admin-js/auth.js"></script>
+  </body>
+</html>

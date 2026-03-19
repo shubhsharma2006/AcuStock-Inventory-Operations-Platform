@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="description" content="AcuStock — First Time Setup">
+    <title>AcuStock — First Time Setup</title>
+    <link rel="stylesheet" href="../admin-css/style.css">
+  </head>
+  <body data-page="setup">
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" hidden>
+      <div class="spinner"></div>
+      <p>Creating Super Admin…</p>
+    </div>
+
+    <main class="center-wrapper">
+      <section class="glass-card auth-card setup-card-wrapper">
+
+        <!-- Header -->
+        <header class="setup-card-header">
+          <h1 class="brand">🏢 AcuStock</h1>
+          <div class="setup-badge">⚙️ First Time Setup</div>
+          <p class="muted">Create your Super Admin account to get started</p>
+        </header>
+
+        <!-- Alert -->
+        <div id="setup-alert" class="alert" hidden role="alert"></div>
+
+        <!-- Info Box -->
+        <div class="setup-info-box">
+          <div class="info-title">👑 What is Super Admin?</div>
+          <ul>
+            <li>Owner-level account — full control over the system</li>
+            <li>Can create &amp; remove other Admins</li>
+            <li>Cannot be deleted or deactivated</li>
+            <li>This setup page runs <strong>only once</strong></li>
+          </ul>
+        </div>
+
+        <div class="setup-divider">Your Details</div>
+
+        <!-- Form -->
+        <form id="setup-form" class="form" novalidate autocomplete="off">
+
+          <!-- Full Name -->
+          <div class="form-row">
+            <label for="sa-name">Full Name <span class="required">*</span></label>
+            <input id="sa-name" type="text" placeholder="e.g. Rajesh Kumar"
+              autocomplete="name" autofocus required />
+          </div>
+
+          <!-- Email -->
+          <div class="form-row">
+            <label for="sa-email">Email Address <span class="required">*</span></label>
+            <input id="sa-email" type="email" placeholder="admin@company.com"
+              autocomplete="email" required />
+          </div>
+
+          <!-- Password -->
+          <div class="form-row">
+            <label for="sa-password">Password <span class="required">*</span></label>
+            <div class="password-wrapper">
+              <input id="sa-password" type="password" placeholder="Minimum 8 characters"
+                autocomplete="new-password" required />
+              <button type="button" class="toggle-password" tabindex="-1" aria-label="Toggle password visibility">
+                <span class="eye-icon">👁️</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Confirm Password -->
+          <div class="form-row">
+            <label for="sa-confirm">Confirm Password <span class="required">*</span></label>
+            <div class="password-wrapper">
+              <input id="sa-confirm" type="password" placeholder="Re-enter your password"
+                autocomplete="new-password" required />
+              <button type="button" class="toggle-password" tabindex="-1" aria-label="Toggle confirm password visibility">
+                <span class="eye-icon">👁️</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Submit -->
+          <div class="setup-submit-wrap">
+            <button type="submit" id="setup-btn" class="btn primary btn-full">
+              👑 Create Super Admin Account
+            </button>
+          </div>
+
+        </form>
+
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+      <p>© Copyright 2026 AcuStock. All Rights Reserved.</p>
+    </footer>
+
+    <script src="../admin-js/setup.js"></script>
+  </body>
+</html>

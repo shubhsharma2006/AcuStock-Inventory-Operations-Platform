@@ -1,0 +1,3476 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="description" content="AcuStock -   Inventory Management System for Enterprises">
+    <title>AcuStock — Admin Dashboard</title>
+    <link rel="stylesheet" href="../admin-css/style.css">
+    
+    <!-- Chart.js for Dashboard Graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+    <!-- Tom Select — searchable dropdowns -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+
+    <!-- Socket.IO for Real-time Updates -->
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="../../shared/config.js"></script>
+    <script src="../../shared/realtime.js"></script>
+    
+    <!-- Prevent FOUC -->
+    <style>
+      body { opacity: 0; transition: opacity 0.3s ease-in; }
+      body.loaded { opacity: 1; }
+    </style>
+  </head>
+  <body data-page="admin" data-role="admin">
+    
+    <!-- Global Loading Overlay -->
+    <div id="global-loading" class="loading-overlay" style="display: none;">
+      <div class="spinner"></div>
+      <p>Processing...</p>
+    </div>
+
+    <!-- Toast Notifications Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Stock Details Modal -->
+    <div id="stock-details-modal" class="modal" style="display: none;">
+      <div class="modal-content stock-modal-large">
+        <div class="modal-header">
+          <h3 id="stock-modal-title">📦 Stock Entry Details</h3>
+          <button type="button" class="modal-close" onclick="closeStockDetailsModal()">&times;</button>
+        </div>
+        <div id="stock-details-content" class="modal-body">
+          <!-- Content populated by JavaScript -->
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" onclick="closeStockDetailsModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manager Details Modal -->
+    <div id="manager-details-modal" class="modal" style="display: none;">
+      <div class="modal-content stock-modal-large">
+        <div class="modal-header">
+          <h3>👤 Manager Details</h3>
+          <button type="button" class="modal-close" onclick="closeManagerDetailsModal()">&times;</button>
+        </div>
+        <div id="manager-details-content" class="modal-body">
+          <!-- Content populated by JavaScript -->
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" onclick="closeManagerDetailsModal()">Close</button>
+          <button type="button" class="btn primary" onclick="editManager(window.currentManagerId); closeManagerDetailsModal();">✏️ Edit</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Invite User Modal -->
+    <div id="invite-modal" class="modal" style="display:none;">
+      <div class="modal-content" style="max-width:480px;">
+        <div class="modal-header">
+          <h3>📬 Send Invite</h3>
+          <button type="button" class="modal-close" onclick="closeInviteModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="muted" style="margin-bottom:16px;">An email will be sent with a secure link. The invite expires in 48 hours.</p>
+          <div id="invite-modal-alert" class="alert" style="display:none;"></div>
+          <form id="invite-modal-form" class="form">
+            <div class="form-row">
+              <label for="invite-modal-email">Email Address <span class="required">*</span></label>
+              <input id="invite-modal-email" type="email" placeholder="Enter email address" required />
+              <span id="invite-modal-email-error" class="error-message"></span>
+            </div>
+            <div class="form-row">
+              <label for="invite-modal-role">Role <span class="required">*</span></label>
+              <select id="invite-modal-role" required>
+                <option value="ADMIN">🛡️ Admin</option>
+                <option value="MANAGER" selected>📋 Manager</option>
+                <option value="USER">👤 User</option>
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" onclick="closeInviteModal()">Cancel</button>
+          <button type="button" class="btn primary" id="invite-modal-send-btn" onclick="submitInvite()">
+            <span class="invite-btn-text">Send Invite</span>
+            <span class="invite-btn-loader" hidden><span class="spinner-small"></span> Sending...</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="app">
+      <!-- Sidebar -->
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <div class="brand-text">🏢 AcuStock</div>
+          <p class="brand-subtitle" id="user-role-badge">Admin Panel</p>
+        </div>
+
+        <!-- User Info Card -->
+        <div class="user-info-card">
+          <div class="user-avatar" id="user-avatar">👤</div>
+          <div class="user-details">
+            <div class="user-name" id="sidebar-user-name">Admin User</div>
+            <div class="user-email" id="sidebar-user-email">admin@acustock.com</div>
+          </div>
+        </div>
+
+        <nav class="menu">
+          <ul>
+            <!-- Dashboard -->
+            <li class="menu-group" data-roles="admin,manager,user">
+              <a href="#" class="single active" data-section="dashboard">
+                <span class="icon">📊</span>
+                <span>Dashboard</span>
+              </a>
+            </li>
+
+            <!-- System Settings (Admin Only) -->
+            <li class="menu-group" data-roles="admin">
+              <a href="#" class="single" data-section="settings">
+                <span class="icon">⚙️</span>
+                <span>System Settings</span>
+              </a>
+            </li>
+
+            <!-- Ownership & Admin Management (Super Admin Only) -->
+            <li class="menu-group" data-roles="super_admin" id="ownership-nav-item" style="display:none;">
+              <button class="menu-toggle" data-target="ownership-sub">
+                <span class="icon">👑</span>
+                <span>Ownership</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="ownership-sub" class="submenu">
+                <li><a href="#" data-section="ownership-admins">Manage Admins</a></li>
+                <li><a href="#" data-section="ownership-transfer">Transfer Ownership</a></li>
+              </ul>
+            </li>
+            
+            <!-- Company -->
+            <li class="menu-group" data-roles="admin">
+              <button class="menu-toggle" data-target="company-sub">
+                <span class="icon">🏢</span>
+                <span>Company</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="company-sub" class="submenu">
+                <li><a href="#" data-section="company-add">Add Company</a></li>
+                <li><a href="#" data-section="company-modify">Modify Company</a></li>
+                <li><a href="#" data-section="company-list">Company List</a></li>
+              </ul>
+            </li>
+
+            <!-- Manager -->
+            <li class="menu-group" data-roles="admin">
+              <button class="menu-toggle" data-target="manager-sub">
+                <span class="icon">👔</span>
+                <span>Manager</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="manager-sub" class="submenu">
+                <li><a href="#" data-section="manager-add">Add Manager</a></li>
+                <li><a href="#" data-section="manager-modify">Modify Manager</a></li>
+                <li><a href="#" data-section="manager-list">Manager List</a></li>
+              </ul>
+            </li>
+
+            <!-- User -->
+            <li class="menu-group" data-roles="admin,manager">
+              <button class="menu-toggle" data-target="user-sub">
+                <span class="icon">👥</span>
+                <span>Users</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="user-sub" class="submenu">
+                <li data-roles="admin,manager"><a href="#" data-section="user-add">Add User</a></li>
+                <li data-roles="admin,manager"><a href="#" data-section="user-modify">Modify User</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="user-list">User List</a></li>
+                <li data-roles="admin"><a href="#" data-section="user-assign">Assign Role</a></li>
+                <li data-roles="admin"><a href="#" data-section="invite-list">📬 Pending Invites</a></li>
+              </ul>
+            </li>
+
+            <!-- Item/Product -->
+            <li class="menu-group" data-roles="admin,manager">
+              <button class="menu-toggle" data-target="item-sub">
+                <span class="icon">📦</span>
+                <span>Products</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="item-sub" class="submenu">
+                <li data-roles="admin,manager"><a href="#" data-section="item-add">Add Product</a></li>
+                <li data-roles="admin,manager"><a href="#" data-section="item-modify">Modify Product</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="item-list">Product List</a></li>
+              </ul>
+            </li>
+
+            <!-- Unit -->
+            <li class="menu-group" data-roles="admin,manager">
+              <button class="menu-toggle" data-target="unit-sub">
+                <span class="icon">📏</span>
+                <span>Units</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="unit-sub" class="submenu">
+                <li data-roles="admin,manager"><a href="#" data-section="unit-add">Add Unit</a></li>
+                <li data-roles="admin,manager"><a href="#" data-section="unit-modify">Modify Unit</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="unit-list">Unit List</a></li>
+              </ul>
+            </li>
+
+            <!-- Stock Management -->
+            <li class="menu-group" data-roles="admin,manager,user">
+              <button class="menu-toggle" data-target="stock-sub">
+                <span class="icon">📊</span>
+                <span>Stock Management</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="stock-sub" class="submenu">
+                <li data-roles="admin,manager"><a href="#" data-section="stock-supplier">Supplier Entry</a></li>
+                <li data-roles="admin,manager"><a href="#" data-section="stock-buyer">Buyer Entry</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="stock-list">Stock List</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="remaining-stock">Remaining Stock</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="warranty-list">🛡️ Warranty</a></li>
+              </ul>
+            </li>
+
+            <!-- Logistics -->
+            <li class="menu-group" data-roles="admin,manager">
+              <button class="menu-toggle" data-target="logistics-sub">
+                <span class="icon">🚚</span>
+                <span>Logistics</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="logistics-sub" class="submenu">
+                <li data-roles="admin,manager"><a href="#" data-section="logistics-add">Add Transporter</a></li>
+                <li data-roles="admin,manager"><a href="#" data-section="logistics-modify">Modify Transporter</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="logistics-list">Transporter List</a></li>
+              </ul>
+            </li>
+
+            <!-- Reports -->
+            <li class="menu-group" data-roles="admin,manager,user">
+              <button class="menu-toggle" data-target="report-sub">
+                <span class="icon">📈</span>
+                <span>Reports</span>
+                <span class="caret">▸</span>
+              </button>
+              <ul id="report-sub" class="submenu">
+                <li data-roles="admin"><a href="#" data-section="report-user-activity">👤 User Activity</a></li>
+                <li data-roles="admin"><a href="#" data-section="report-user-summary">📊 User Summary</a></li>
+                <li data-roles="admin"><a href="#" data-section="report-all">📋 All Reports</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="report-generate">➕ Generate Report</a></li>
+                <li data-roles="admin,manager,user"><a href="#" data-section="report-view">📁 My Reports</a></li>
+              </ul>
+            </li>
+          </ul>
+
+          <!-- Logout Button -->
+          <li class="menu-group logout-group">
+            <button id="logout-btn" class="single logout-btn">
+              <span class="icon">🚪</span>
+              <span>Logout</span>
+            </button>
+          </li>
+        </nav>
+
+     
+      </aside>
+
+      <!-- Sidebar Resizer -->
+      <div id="sidebar-resizer" title="Drag to resize sidebar"></div>
+
+      <!-- Main Content Area -->
+      <div class="main">
+        <header class="topbar">
+          <div class="left">
+            <button id="toggle-sidebar" class="hamburger" aria-label="Toggle sidebar">☰</button>
+            <div class="logo-circle">
+              <img src="../../assets/image.png" alt="AcuStock Logo" onerror="this.style.display='none'" />
+            </div>
+            <h1 class="app-title">AcuStock</h1>
+          </div>
+          <div class="right">
+            <div class="search" style="position:relative;">
+              <input id="global-search" placeholder="🔍 Search serial / product…" aria-label="Global search" autocomplete="off" />
+              <div id="serial-search-dropdown" class="quick-search-results" style="display:none;"></div>
+            </div>
+            <div class="actions">
+              <!-- Notifications Dropdown -->
+              <div class="dropdown-wrapper">
+                <button class="btn ghost" id="notifications-btn" title="Notifications">
+                  🔔 <span class="notification-badge" id="notification-count">0</span>
+                </button>
+                <div class="dropdown-panel" id="notifications-panel">
+                  <div class="dropdown-header">
+                    <h4>Notifications</h4>
+                    <button class="btn-link" id="mark-all-read">Mark all read</button>
+                  </div>
+                  <div class="dropdown-body" id="notifications-list">
+                    <div class="empty-state">No notifications</div>
+                  </div>
+                  <div class="dropdown-footer">
+                    <a href="#" id="view-all-notifications">View All Notifications</a>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Support Dropdown -->
+              <div class="dropdown-wrapper">
+                <button class="btn ghost" id="support-btn">💬 Support</button>
+                <div class="dropdown-panel" id="support-panel">
+                  <div class="dropdown-header">
+                    <h4>Help & Support</h4>
+                  </div>
+                  <div class="dropdown-body">
+                    <a href="#" class="support-link" data-action="docs">
+                      <span class="support-icon">📖</span>
+                      <div class="support-info">
+                        <span class="support-title">Documentation</span>
+                        <span class="support-desc">Browse user guides & tutorials</span>
+                      </div>
+                    </a>
+                    <a href="#" class="support-link" data-action="faq">
+                      <span class="support-icon">❓</span>
+                      <div class="support-info">
+                        <span class="support-title">FAQ</span>
+                        <span class="support-desc">Frequently asked questions</span>
+                      </div>
+                    </a>
+                    <a href="#" class="support-link" data-action="contact">
+                      <span class="support-icon">📧</span>
+                      <div class="support-info">
+                        <span class="support-title">Contact Support</span>
+                        <span class="support-desc">Get help from our team</span>
+                      </div>
+                    </a>
+                    <a href="#" class="support-link" data-action="feedback">
+                      <span class="support-icon">💡</span>
+                      <div class="support-info">
+                        <span class="support-title">Send Feedback</span>
+                        <span class="support-desc">Help us improve AcuStock</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div class="dropdown-footer">
+                    <span class="version-info">AcuStock v1.0.0</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Profile Dropdown -->
+              <div class="dropdown-wrapper">
+                <button class="btn ghost profile-btn" id="user-profile-btn" title="User Profile">
+                  <span id="topbar-user-name">Admin</span>
+                  <span class="profile-avatar" id="topbar-avatar">A</span>
+                </button>
+                <div class="dropdown-panel profile-panel" id="profile-panel">
+                  <div class="profile-header">
+                    <div class="profile-avatar-large" id="profile-avatar-large">A</div>
+                    <div class="profile-info">
+                      <span class="profile-name" id="profile-name">Admin User</span>
+                      <span class="profile-email" id="profile-email">admin@acustock.com</span>
+                      <span class="profile-role-badge" id="profile-role">ADMIN</span>
+                    </div>
+                  </div>
+                  <div class="dropdown-body">
+                    <a href="#" class="profile-link" data-action="my-profile">
+                      <span class="profile-link-icon">👤</span>
+                      <span>My Profile</span>
+                    </a>
+                    <a href="#" class="profile-link" data-action="account-settings">
+                      <span class="profile-link-icon">⚙️</span>
+                      <span>Account Settings</span>
+                    </a>
+                    <a href="#" class="profile-link" data-action="activity-log">
+                      <span class="profile-link-icon">📋</span>
+                      <span>Activity Log</span>
+                    </a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="profile-link logout-link" id="profile-logout">
+                      <span class="profile-link-icon">🚪</span>
+                      <span>Logout</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <!-- Breadcrumb Navigation -->
+        <div class="breadcrumb" id="breadcrumb">
+          <span class="breadcrumb-item">Dashboard</span>
+        </div>
+
+        <main class="content" id="content">
+          <!-- Default Welcome Screen with dashboard stats and chart placeholders -->
+          <div class="hero-card" data-role="admin">
+            <h2>Welcome to AcuStock 🎉</h2>
+            <p class="muted">Your complete inventory management solution. Select a module from the sidebar to begin.</p>
+            <div style="margin-top: 20px; display: flex; gap: 12px; flex-wrap: wrap;">
+              <!-- Dashboard Stats Cards -->
+              <div id="dashboard-stats" class="dashboard-stats" aria-label="Dashboard Statistics">
+                <div class="stat-card">
+                  <div class="stat-icon">📦</div>
+                  <div class="stat-content">
+                    <span class="stat-label">Total Products</span>
+                    <span class="stat-value" id="stat-total-products">0</span>
+                    <span class="stat-change positive" id="stat-products-change">+12% from last month</span>
+                  </div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-icon">�</div>
+                  <div class="stat-content">
+                    <span class="stat-label">Total Managers</span>
+                    <span class="stat-value" id="stat-total-managers">0</span>
+                    <span class="stat-subtext">Active users</span>
+                  </div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-icon">�</div>
+                  <div class="stat-content">
+                    <span class="stat-label">Stock Items</span>
+                    <span class="stat-value" id="stat-stock-items">0</span>
+                    <span class="stat-change negative" id="stat-stock-change">-5% from last week</span>
+                  </div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-icon">🏢</div>
+                  <div class="stat-content">
+                    <span class="stat-label">Companies</span>
+                    <span class="stat-value" id="stat-total-companies">0</span>
+                    <span class="stat-subtext">Registered</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recent Activity Section -->
+          <div class="card" style="margin-top: 20px;">
+            <div class="card-head">
+              <h3>📋 Recent Activity</h3>
+            </div>
+            <div class="card-body">
+              <p id="recent-activity-text" class="muted">No recent activity to display.</p>
+            </div>
+          </div>
+
+          <!-- Quick Actions Section -->
+          <div class="card" style="margin-top: 20px;">
+            <div class="card-head">
+              <h3>⚡ Quick Actions</h3>
+            </div>
+            <div class="card-body" style="display: flex; gap: 12px; flex-wrap: wrap;">
+              <button class="btn ghost quick-action-btn" data-section="item-add">
+                <span>+ Add Product</span>
+              </button>
+              <button class="btn ghost quick-action-btn" data-section="stock-supplier">
+                <span>📦 Stock Entry</span>
+              </button>
+              <button class="btn ghost quick-action-btn" data-section="user-add">
+                <span>👤 Add User</span>
+              </button>
+              <button class="btn ghost quick-action-btn" data-section="reports-view">
+                <span>📊 Generate Report</span>
+              </button>
+            </div>
+          </div>
+        </main>
+
+        <footer class="site-footer">
+          <p>© Copyright 2026 AcuStock. All Rights Reserved.</p>
+          <p style="font-size: 0.8rem; margin-top: 4px;">
+            <a href="#" class="link-secondary">Privacy Policy</a> · 
+            <a href="#" class="link-secondary">Terms of Service</a> · 
+            <a href="#" class="link-secondary">Help Center</a>
+          </p>
+        </footer>
+      </div>
+    </div>
+
+    <!-- ==================== TEMPLATES ==================== -->
+
+    <!-- System Settings Template (Admin Only) -->
+    <template id="settings">
+      <div class="settings-page">
+        <!-- Settings Navigation Tabs -->
+        <div class="settings-tabs">
+          <button class="settings-tab active" data-tab="serial-policy">📦 Serial Policy</button>
+          <button class="settings-tab" data-tab="role-permissions">🔐 Role Permissions</button>
+          <button class="settings-tab" data-tab="account-control">👥 Account Control</button>
+          <button class="settings-tab" data-tab="admin-profile">👤 Admin Profile</button>
+          <button class="settings-tab" data-tab="general-settings">⚙️ General</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="settings-content">
+          
+          <!-- 1. SERIAL NUMBER POLICY TAB -->
+          <div class="settings-panel active" id="serial-policy-panel">
+            <section class="card">
+              <div class="card-head">
+                <h3>📦 Product Serial Number Policy</h3>
+                <p class="card-subtitle">Configure serial number tracking per product</p>
+              </div>
+              <div class="card-body">
+                <div class="alert alert-info">
+                  <strong>⚠️ Important:</strong> Policy becomes locked after any stock movement for that product.
+                </div>
+                
+                <div class="form-row">
+                  <label for="serial-product-select">Select Product <span class="required">*</span></label>
+                  <select id="serial-product-select">
+                    <option value="">-- Select a product first --</option>
+                  </select>
+                </div>
+                
+                <div id="serial-policy-fields" style="opacity: 0.5; pointer-events: none;">
+                  <div class="form-row switch-row">
+                    <label for="serial-enable">Enable Serial Number Tracking</label>
+                    <label class="switch">
+                      <input type="checkbox" id="serial-enable" />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                  
+                  <div class="form-row switch-row">
+                    <label for="serial-in">Require Serial on Stock IN</label>
+                    <label class="switch">
+                      <input type="checkbox" id="serial-in" />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                  
+                  <div class="form-row switch-row">
+                    <label for="serial-out">Require Serial on Stock OUT</label>
+                    <label class="switch">
+                      <input type="checkbox" id="serial-out" />
+                      <span class="slider"></span>
+                    </label>
+                  </div>
+                  
+                  <div id="policy-lock-warning" class="alert alert-warning" style="display: none;">
+                    🔒 This policy is locked and cannot be modified.
+                  </div>
+                </div>
+                
+                <div class="card-foot">
+                  <button type="button" class="btn ghost" id="serial-policy-reset">Reset</button>
+                  <button type="button" class="btn primary" id="serial-policy-save" disabled>Save Policy</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 2. ROLE PERMISSIONS TAB -->
+          <div class="settings-panel" id="role-permissions-panel">
+            <section class="card">
+              <div class="card-head">
+                <h3>� Role & Permission Management</h3>
+                <p class="card-subtitle">Configure what each role can access</p>
+              </div>
+              <div class="card-body">
+                <!-- Manager Permissions -->
+                <div class="permission-group">
+                  <h4>👔 Manager Permissions</h4>
+                  <div class="permission-grid">
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-add-product">Can Add Products</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-add-product" data-role="MANAGER" data-perm="canAddProduct" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-edit-product">Can Edit Products</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-edit-product" data-role="MANAGER" data-perm="canEditProduct" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-stock-in">Can Add Stock IN</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-stock-in" data-role="MANAGER" data-perm="canStockIn" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-stock-out">Can Add Stock OUT</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-stock-out" data-role="MANAGER" data-perm="canStockOut" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-view-ledger">Can View Stock Ledger</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-view-ledger" data-role="MANAGER" data-perm="canViewStockLedger" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-edit-stock">Can Update/Reedit Stock</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-edit-stock" data-role="MANAGER" data-perm="canEditStock" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-reports">Can View All Reports</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-reports" data-role="MANAGER" data-perm="canViewAllReports" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-manage-users">Can Manage Users</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-manage-users" data-role="MANAGER" data-perm="canManageUsers" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-manage-companies">Can Add Companies</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-manage-companies" data-role="MANAGER" data-perm="canManageCompanies" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-mgr-add-logistics">Can Add Logistics</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-mgr-add-logistics" data-role="MANAGER" data-perm="canAddLogistics" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                  <button type="button" class="btn primary btn-sm" id="save-manager-perms">Save Manager Permissions</button>
+                </div>
+                
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);">
+                
+                <!-- User Permissions -->
+                <div class="permission-group">
+                  <h4>👤 User Permissions</h4>
+                  <div class="permission-grid">
+                    <div class="form-row switch-row">
+                      <label for="perm-user-stock-in">Can Add Stock IN</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-user-stock-in" data-role="USER" data-perm="canStockIn" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-user-stock-out">Can Add Stock OUT</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-user-stock-out" data-role="USER" data-perm="canStockOut" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-user-view-ledger">Can View Stock Ledger</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-user-view-ledger" data-role="USER" data-perm="canViewStockLedger" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                    <div class="form-row switch-row">
+                      <label for="perm-user-own-reports">Can View Own Reports</label>
+                      <label class="switch">
+                        <input type="checkbox" id="perm-user-own-reports" data-role="USER" data-perm="canViewOwnReports" />
+                        <span class="slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                  <button type="button" class="btn primary btn-sm" id="save-user-perms">Save User Permissions</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 3. ACCOUNT CONTROL TAB -->
+          <div class="settings-panel" id="account-control-panel">
+            <section class="card">
+              <div class="card-head">
+                <h3>👥 User & Manager Account Control</h3>
+                <p class="card-subtitle">Manage account status, reset passwords, force logout</p>
+              </div>
+              <div class="card-body">
+                <!-- Account Stats -->
+                <div class="stats-row" id="account-stats">
+                  <div class="stat-mini">
+                    <span class="stat-label">Managers</span>
+                    <span class="stat-value" id="stat-managers-active">0</span>
+                    <span class="stat-sub">active</span>
+                  </div>
+                  <div class="stat-mini">
+                    <span class="stat-label">Users</span>
+                    <span class="stat-value" id="stat-users-active">0</span>
+                    <span class="stat-sub">active</span>
+                  </div>
+                  <div class="stat-mini warning">
+                    <span class="stat-label">Inactive</span>
+                    <span class="stat-value" id="stat-inactive">0</span>
+                    <span class="stat-sub">accounts</span>
+                  </div>
+                </div>
+                
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);">
+                
+                <!-- Account Actions -->
+                <div class="form-row">
+                  <label for="account-user-select">Select Account</label>
+                  <select id="account-user-select">
+                    <option value="">-- Select a user or manager --</option>
+                  </select>
+                </div>
+                
+                <div id="account-actions" style="opacity: 0.5; pointer-events: none;">
+                  <div class="account-info-card" id="selected-account-info">
+                    <div class="account-avatar">👤</div>
+                    <div class="account-details">
+                      <h4 id="account-name">-</h4>
+                      <p id="account-email">-</p>
+                      <span class="badge" id="account-role">-</span>
+                      <span class="badge" id="account-status">-</span>
+                    </div>
+                  </div>
+                  
+                  <!-- Password Info Section (Admin visibility only - NEVER shows actual password) -->
+                  <div id="password-info-section" class="password-info-card" style="display: none; margin: 16px 0; padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px; border-left: 4px solid var(--accent);">
+                    <h5 style="margin: 0 0 12px 0; color: var(--text-muted);">🔐 Password Status</h5>
+                    <!-- Content populated by JavaScript -->
+                  </div>
+                  
+                  <div class="action-buttons" style="display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px;">
+                    <button type="button" class="btn primary" id="btn-toggle-status">
+                      <span id="toggle-status-text">Activate/Deactivate</span>
+                    </button>
+                    <button type="button" class="btn secondary" id="btn-reset-password">
+                      🔑 Reset Password
+                    </button>
+                    <button type="button" class="btn warning" id="btn-force-logout">
+                      🚪 Force Logout
+                    </button>
+                  </div>
+                </div>
+                
+                <!-- Reset Password Modal -->
+                <div id="reset-password-modal" class="modal" style="display: none;">
+                  <div class="modal-content">
+                    <h4>🔑 Reset Password</h4>
+                    <p id="reset-password-user" style="margin-bottom: 16px;">-</p>
+                    
+                    <div class="alert alert-info" style="margin-bottom: 16px;">
+                      <strong>Note:</strong> User will be required to change their password on next login.
+                    </div>
+                    
+                    <div class="form-row" style="margin-bottom: 16px;">
+                      <label for="new-password-input">New Password</label>
+                      <input type="password" id="new-password-input" placeholder="Minimum 8 characters" autocomplete="new-password" />
+                    </div>
+                    
+                    <div id="temp-password-notice" style="display: none;"></div>
+                    
+                    <div class="modal-actions" style="display: flex; gap: 12px; justify-content: space-between;">
+                      <button type="button" class="btn ghost" id="cancel-reset-password">Cancel</button>
+                      <div style="display: flex; gap: 12px;">
+                        <button type="button" class="btn secondary" id="generate-temp-password">🎲 Generate Temporary</button>
+                        <button type="button" class="btn primary" id="confirm-reset-password">✓ Set Password</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 4. ADMIN PROFILE TAB -->
+          <div class="settings-panel" id="admin-profile-panel">
+            <section class="card">
+              <div class="card-head">
+                <h3>👤 Admin Profile</h3>
+                <p class="card-subtitle">Manage your account settings</p>
+              </div>
+              <div class="card-body">
+                <form id="admin-profile-form">
+                  <div class="form-grid">
+                    <div class="form-row">
+                      <label for="admin-name">Full Name</label>
+                      <input type="text" id="admin-name" placeholder="Your name" autocomplete="name" />
+                    </div>
+                    <div class="form-row">
+                      <label for="admin-email">Email Address</label>
+                      <input type="email" id="admin-email" placeholder="Your email" autocomplete="email" />
+                    </div>
+                  </div>
+                  <button type="submit" class="btn primary">Save Profile</button>
+                </form>
+                
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);">
+                
+                <!-- Change Password -->
+                <h4>🔑 Change Password</h4>
+                <form id="change-password-form">
+                  <div class="form-grid">
+                    <div class="form-row">
+                      <label for="current-password">Current Password</label>
+                      <input type="password" id="current-password" autocomplete="current-password" />
+                    </div>
+                    <div class="form-row">
+                      <label for="new-password">New Password</label>
+                      <input type="password" id="new-password" placeholder="Minimum 8 characters" autocomplete="new-password" />
+                    </div>
+                  </div>
+                  <button type="submit" class="btn primary">Change Password</button>
+                </form>
+                
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);">
+                
+                <!-- 2FA Settings -->
+                <h4>🔐 Two-Factor Authentication</h4>
+                <div class="form-row switch-row">
+                  <label for="enable-2fa">Enable 2FA</label>
+                  <label class="switch">
+                    <input type="checkbox" id="enable-2fa" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <p class="muted">Two-factor authentication adds an extra layer of security to your account.</p>
+                
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);">
+                
+                <!-- Active Sessions -->
+                <h4>📱 Active Sessions</h4>
+                <div id="active-sessions-list">
+                  <p class="muted">Loading sessions...</p>
+                </div>
+                <button type="button" class="btn warning" id="logout-all-sessions">🚪 Logout All Other Sessions</button>
+              </div>
+            </section>
+          </div>
+
+          <!-- 5. GENERAL SETTINGS TAB -->
+          <div class="settings-panel" id="general-settings-panel">
+            <section class="card">
+              <div class="card-head">
+                <h3>⚙️ General Settings</h3>
+                <p class="card-subtitle">System-wide configuration</p>
+              </div>
+              <div class="card-body">
+                <div class="form-grid">
+                  <div class="form-row">
+                    <label for="company-name-setting">Company Name</label>
+                    <input id="company-name-setting" type="text" placeholder="Your company name" autocomplete="organization" />
+                  </div>
+                  <div class="form-row">
+                    <label for="timezone-setting">Timezone</label>
+                    <select id="timezone-setting">
+                      <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
+                      <option value="UTC">UTC</option>
+                      <option value="America/New_York">America/New_York (EST)</option>
+                      <option value="Europe/London">Europe/London (GMT)</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label for="currency-setting">Default Currency</label>
+                    <select id="currency-setting">
+                      <option value="INR" selected>INR (₹)</option>
+                      <option value="USD">USD ($)</option>
+                      <option value="EUR">EUR (€)</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <hr style="margin: 24px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);">
+                
+                <div class="form-row switch-row">
+                  <label for="maintenance-mode">Maintenance Mode</label>
+                  <label class="switch">
+                    <input type="checkbox" id="maintenance-mode" />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <div class="form-row switch-row">
+                  <label for="audit-logs">Enable Audit Logs</label>
+                  <label class="switch">
+                    <input type="checkbox" id="audit-logs" checked />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <div class="form-row switch-row">
+                  <label for="enable-notifications">Email Notifications</label>
+                  <label class="switch">
+                    <input type="checkbox" id="enable-notifications" checked />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                <div class="form-row switch-row">
+                  <label for="enable-low-stock-alerts">Low Stock Alerts</label>
+                  <label class="switch">
+                    <input type="checkbox" id="enable-low-stock-alerts" checked />
+                    <span class="slider"></span>
+                  </label>
+                </div>
+                
+                <div class="card-foot">
+                  <button type="button" class="btn ghost" id="settings-reset">Reset to Default</button>
+                  <button type="button" class="btn primary" id="settings-save">Save Settings</button>
+                </div>
+              </div>
+            </section>
+          </div>
+          
+        </div>
+      </div>
+    </template>
+
+    <!-- Dashboard Template -->
+    <template id="dashboard">
+      <section class="dashboard-grid">
+        <!-- Stats Cards Row 1 - Core Metrics -->
+        <div class="stats-container">
+          <div class="stat-card">
+            <div class="stat-icon">📦</div>
+            <div class="stat-content">
+              <h4>Total Products</h4>
+              <div class="stat-value" id="dash-total-products">0</div>
+              <span class="stat-sub" id="dash-products-active">0 active</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon">🏢</div>
+            <div class="stat-content">
+              <h4>Companies</h4>
+              <div class="stat-value" id="dash-total-companies">0</div>
+              <span class="stat-sub" id="dash-companies-active">Registered</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon">📊</div>
+            <div class="stat-content">
+              <h4>Total Stock</h4>
+              <div class="stat-value" id="dash-total-stock">0</div>
+              <span class="stat-sub">From ledger</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon">🔢</div>
+            <div class="stat-content">
+              <h4>Serial-Enabled</h4>
+              <div class="stat-value" id="dash-serial-products">0</div>
+              <span class="stat-sub">Products with serial tracking</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stats Cards Row 2 - User Metrics -->
+        <div class="stats-container">
+          <div class="stat-card">
+            <div class="stat-icon">👔</div>
+            <div class="stat-content">
+              <h4>Total Managers</h4>
+              <div class="stat-value" id="dash-total-managers">0</div>
+              <span class="stat-sub"><span id="dash-managers-active">0</span> active</span>
+            </div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-icon">�</div>
+            <div class="stat-content">
+              <h4>Total Users</h4>
+              <div class="stat-value" id="dash-total-users">0</div>
+              <span class="stat-sub"><span id="dash-users-active">0</span> active</span>
+            </div>
+          </div>
+
+          <div class="stat-card positive">
+            <div class="stat-icon">📥</div>
+            <div class="stat-content">
+              <h4>Stock IN (Today)</h4>
+              <div class="stat-value" id="dash-stock-in-today">0</div>
+              <span class="stat-sub">Units received</span>
+            </div>
+          </div>
+
+          <div class="stat-card warning">
+            <div class="stat-icon">📤</div>
+            <div class="stat-content">
+              <h4>Stock OUT (Today)</h4>
+              <div class="stat-value" id="dash-stock-out-today">0</div>
+              <span class="stat-sub">Units dispatched</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts Row 1 -->
+        <div class="charts-container">
+          <!-- Stock IN vs OUT Chart -->
+          <section class="card chart-card">
+            <div class="card-head">
+              <h3>📈 Stock IN vs OUT (Last 7 Days)</h3>
+            </div>
+            <div class="card-body">
+              <div class="chart-wrapper">
+                <canvas id="stockMovementChart"></canvas>
+              </div>
+            </div>
+          </section>
+
+          <!-- Product-wise Stock Distribution -->
+          <section class="card chart-card">
+            <div class="card-head">
+              <h3>🥧 Product-wise Stock</h3>
+            </div>
+            <div class="card-body">
+              <div class="chart-wrapper">
+                <canvas id="productWiseStockChart"></canvas>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Activity Summary Cards -->
+        <div class="activity-summary-container">
+          <!-- Manager Activity Summary -->
+          <section class="card">
+            <div class="card-head">
+              <h3>👔 Manager Activity Summary</h3>
+              <a href="#" class="btn-link" onclick="loadSection('report-user-summary')">View All →</a>
+            </div>
+            <div class="card-body">
+              <div id="top-performers-list" class="activity-list">
+                <p class="muted">Loading manager activity...</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- User Activity Summary -->
+          <section class="card">
+            <div class="card-head">
+              <h3>👥 User Activity Summary</h3>
+              <a href="#" class="btn-link" onclick="loadSection('report-user-summary')">View All →</a>
+            </div>
+            <div class="card-body">
+              <div id="user-activity-summary" class="activity-list">
+                <p class="muted">Loading user activity...</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Recent Activity -->
+        <section class="card full">
+          <div class="card-head">
+            <h3>📋 Recent Stock Activity</h3>
+            <a href="#" class="btn-link" onclick="loadSection('stock-list')">View All →</a>
+          </div>
+          <div class="card-body">
+            <div id="recent-activity">
+              <p class="muted">Loading recent activity...</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Low Stock Alerts -->
+        <section class="card full">
+          <div class="card-head">
+            <h3>⚠️ Low Stock Alerts</h3>
+          </div>
+          <div class="card-body">
+            <div id="low-stock-alerts">
+              <p class="muted">Checking stock levels...</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Quick Actions -->
+        <section class="card full">
+          <div class="card-head">
+            <h3>⚡ Quick Actions</h3>
+          </div>
+          <div class="card-body">
+            <div class="quick-actions">
+              <button class="quick-action-btn" onclick="loadSection('item-add')">
+                ➕ Add Product
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('company-add')">
+                🏢 Add Company
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('manager-add')">
+                � Add Manager
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('user-add')">
+                👤 Add User
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('stock-supplier')">
+                📥 Stock IN
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('stock-buyer')">
+                � Stock OUT
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('settings')">
+                ⚙️ Serial Policy
+              </button>
+              <button class="quick-action-btn" onclick="loadSection('report-all')">
+                📊 Reports
+              </button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </template>
+
+    <!-- Company Templates -->
+    <template id="company-add">
+      <section class="card">
+        <div class="card-head">
+          <h3>Add Company</h3>
+          <p class="card-subtitle">Register a new company in the system</p>
+        </div>
+        <form id="company-add-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="company-name">Company Name <span class="required">*</span></label>
+            <input id="company-name" name="name" placeholder="Enter company name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-email">Email <span class="required">*</span></label>
+            <input id="company-email" name="email" type="email" placeholder="Enter company email" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-phone">Phone Number <span class="required">*</span></label>
+            <input id="company-phone" name="phone" placeholder="Enter phone number (e.g., +91-1234567890)" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-industry">Industry <span class="required">*</span></label>
+            <select id="company-industry" name="industry" required>
+              <option value="">-- Select Industry --</option>
+              <option value="Manufacturing">Manufacturing</option>
+              <option value="Retail">Retail</option>
+              <option value="Healthcare">Healthcare</option>
+              <option value="Technology">Technology</option>
+              <option value="Construction">Construction</option>
+              <option value="Other">Other</option>
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-street">Street Address <span class="required">*</span></label>
+            <input id="company-street" name="street" placeholder="Enter street address" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-city">City <span class="required">*</span></label>
+            <input id="company-city" name="city" placeholder="Enter city" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-state">State <span class="required">*</span></label>
+            <input id="company-state" name="state" placeholder="Enter state" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-zipcode">Zip/Pin Code <span class="required">*</span></label>
+            <input id="company-zipcode" name="zipCode" placeholder="Enter zip/pin code" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="company-country">Country <span class="required">*</span></label>
+            <select id="company-country" name="country" required>
+              <option value="India" selected>India</option>
+              <option value="USA">USA</option>
+              <option value="UK">UK</option>
+              <option value="Australia">Australia</option>
+              <option value="Canada">Canada</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="company-website">Website</label>
+            <input id="company-website" name="website" type="url" placeholder="https://example.com" />
+          </div>
+          <div class="form-row">
+            <label for="company-taxid">Tax ID / GSTIN</label>
+            <input id="company-taxid" name="taxId" placeholder="Enter Tax ID or GSTIN" />
+          </div>
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" id="company-add-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="company-add-save">
+              <span class="btn-text">Save Company</span>
+              <span class="btn-loader" style="display:none">
+                <span class="spinner-small"></span> Saving...
+              </span>
+            </button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="company-modify">
+      <section class="card">
+        <div class="card-head">
+          <h3>Modify Company</h3>
+          <p class="card-subtitle">Update existing company information</p>
+        </div>
+        <form id="company-modify-form" class="card-body form-grid">
+          <div class="form-row" style="grid-column:1/-1;">
+            <label for="modify-company-select">Select Company <span class="required">*</span></label>
+            <select id="modify-company-select" required>
+              <option value="">-- Select a company --</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="modify-company-name">Company Name <span class="required">*</span></label>
+            <input id="modify-company-name" name="name" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-email">Email <span class="required">*</span></label>
+            <input id="modify-company-email" name="email" type="email" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-phone">Phone Number <span class="required">*</span></label>
+            <input id="modify-company-phone" name="phone" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-industry">Industry <span class="required">*</span></label>
+            <select id="modify-company-industry" name="industry" required>
+              <option value="">-- Select Industry --</option>
+              <option value="Manufacturing">Manufacturing</option>
+              <option value="Retail">Retail</option>
+              <option value="Healthcare">Healthcare</option>
+              <option value="Technology">Technology</option>
+              <option value="Construction">Construction</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="modify-company-street">Street Address <span class="required">*</span></label>
+            <input id="modify-company-street" name="street" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-city">City <span class="required">*</span></label>
+            <input id="modify-company-city" name="city" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-state">State <span class="required">*</span></label>
+            <input id="modify-company-state" name="state" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-zipcode">Zip/Pin Code <span class="required">*</span></label>
+            <input id="modify-company-zipcode" name="zipCode" required />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-country">Country <span class="required">*</span></label>
+            <select id="modify-company-country" name="country" required>
+              <option value="India">India</option>
+              <option value="USA">USA</option>
+              <option value="UK">UK</option>
+              <option value="Australia">Australia</option>
+              <option value="Canada">Canada</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="modify-company-website">Website</label>
+            <input id="modify-company-website" name="website" type="url" />
+          </div>
+          <div class="form-row">
+            <label for="modify-company-taxid">Tax ID / GSTIN</label>
+            <input id="modify-company-taxid" name="taxId" />
+          </div>
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;">
+            <button type="button" class="btn ghost" id="company-modify-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="company-modify-save">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="company-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>Company List</h3>
+          <div class="head-actions">
+            <input id="company-search" placeholder="🔍 Search companies..." />
+            <button class="btn primary btn-sm" onclick="loadSection('company-add')">➕ Add New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="company-table">
+              <thead>
+                <tr>
+                  <th>Company Name</th>
+                  <th>Industry</th>
+                  <th>Phone</th>
+                  <th>Email</th>
+                  <th>City</th>
+                  <th>State</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card-foot pager">
+          <button class="btn ghost" id="company-prev">← Previous</button>
+          <span id="company-page-info">Page 1 of 1</span>
+          <button class="btn ghost" id="company-next">Next →</button>
+        </div>
+      </section>
+    </template>
+
+    <!-- User Templates -->
+    <template id="user-add">
+      <section class="card">
+        <div class="card-head">
+          <h3>Add User</h3>
+          <p class="card-subtitle">Create a new user account (users login with phone number)</p>
+        </div>
+        <form id="user-add-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="uname">Full Name <span class="required">*</span></label>
+            <input id="uname" name="uname" placeholder="Enter full name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="uphone">Phone Number <span class="required">*</span></label>
+            <input id="uphone" name="uphone" placeholder="Enter 10-15 digit phone number" required />
+            <span class="error-message"></span>
+            <small class="helper-text">This will be the user's login identifier</small>
+          </div>
+          <div class="form-row">
+            <label for="umail">Email ID</label>
+            <input id="umail" name="umail" type="email" placeholder="Enter email (optional)" />
+          </div>
+          <div class="form-row">
+            <label for="upass">Password <span class="required">*</span></label>
+            <input id="upass" name="upass" type="password" placeholder="Minimum 8 characters" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" id="user-add-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="user-add-save">Save User</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="user-modify">
+      <section class="card">
+        <div class="card-head">
+          <h3>Modify User</h3>
+          <p class="card-subtitle">Update user information</p>
+        </div>
+        <form id="user-modify-form" class="card-body">
+          <div class="form-row">
+            <label for="modify-user-select">Select User</label>
+            <select id="modify-user-select" name="userId">
+              <option value="">-- Select a user --</option>
+            </select>
+          </div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="modify-uname">Full Name</label>
+              <input id="modify-uname" name="uname" />
+            </div>
+            <div class="form-row">
+              <label for="modify-uphone">Phone Number</label>
+              <input id="modify-uphone" name="uphone" />
+            </div>
+            <div class="form-row">
+              <label for="modify-umail">Email ID</label>
+              <input id="modify-umail" name="umail" type="email" />
+            </div>
+            <div class="form-row">
+              <label for="modify-upass">Password (leave blank to keep current)</label>
+              <input id="modify-upass" name="upass" type="password" />
+            </div>
+            <div class="form-row">
+              <label for="modify-urole">Role</label>
+              <select id="modify-urole" name="urole">
+                <option value="User">User</option>
+                <option value="Manager">Manager</option>
+                <option value="Admin">Admin</option>
+              </select>
+            </div>
+          </div>
+          <div class="card-foot">
+            <!-- CONTINUATION OF index.html TEMPLATES -->
+
+            <button type="button" class="btn ghost" id="user-modify-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="user-modify-save">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="user-assign">
+      <section class="card">
+        <div class="card-head">
+          <h3>Assign Role</h3>
+          <p class="card-subtitle">Change user role (Admin only)</p>
+        </div>
+        <form id="user-assign-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="assign-user-select">Select User <span class="required">*</span></label>
+            <select id="assign-user-select" required>
+              <option value="">-- Select a user --</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="current-role">Current Role</label>
+            <input id="current-role" readonly disabled class="readonly-field" />
+          </div>
+          <div class="form-row">
+            <label for="assign-role-select">New Role <span class="required">*</span></label>
+            <select id="assign-role-select" required>
+              <option value="">-- Select new role --</option>
+              <option value="ADMIN">Admin</option>
+              <option value="MANAGER">Manager</option>
+              <option value="USER">User</option>
+            </select>
+          </div>
+          <div class="alert alert-warning" style="grid-column:1/-1;">
+            ⚠️ <strong>Warning:</strong> Changing a user's role will affect their access permissions immediately. The user may need to log in again.
+          </div>
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" id="assign-role-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="assign-role-save">Update Role</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="user-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>User List</h3>
+          <div class="head-actions">
+            <input id="user-search" placeholder="🔍 Search users..." />
+            <button class="btn secondary btn-sm" onclick="openInviteModal('USER')" data-roles="admin,manager">📬 Invite</button>
+            <button class="btn primary btn-sm" onclick="loadSection('user-add')" data-roles="admin,manager">➕ Add New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="user-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Phone</th>
+                  <th>Email</th>
+                  <th>Status</th>
+                  <th>Last Login</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Manager Templates -->
+    <template id="manager-add">
+      <section class="card">
+        <div class="card-head">
+          <h3>Add Manager</h3>
+          <p class="card-subtitle">Register a new manager</p>
+        </div>
+        <form id="manager-add-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="mname">Full Name <span class="required">*</span></label>
+            <input id="mname" name="mname" placeholder="Full name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="mmail">Work Email <span class="required">*</span></label>
+            <input id="mmail" name="mmail" type="email" placeholder="Work email (used for login)" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="mphone">Phone Number</label>
+            <input id="mphone" name="mphone" placeholder="Phone number (optional)" />
+          </div>
+          <div class="form-row">
+            <label for="mrole">Role</label>
+            <select id="mrole" name="mrole">
+              <option>Manager</option>
+              <option>Supervisor</option>
+              <option>Staff</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="mpass">Password</label>
+            <input id="mpass" name="mpass" type="password" placeholder="Set temporary password (optional)" />
+          </div>
+          <div class="form-row switch-row">
+            <label for="minvite">Send Invite Email</label>
+            <label class="switch">
+              <input type="checkbox" id="minvite" name="minvite">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="form-row">
+            <label for="memployeeId">Employee ID</label>
+            <input id="memployeeId" name="memployeeId" placeholder="Internal employee ID" />
+          </div>
+          <div class="form-row">
+            <label for="mdepartment">Department</label>
+            <select id="mdepartment" name="mdepartment">
+              <option value="">-- Select Department --</option>
+              <option>Sales</option>
+              <option>Operations</option>
+              <option>Finance</option>
+              <option>HR</option>
+              <option>Other</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="mteam">Team / Region</label>
+            <input id="mteam" name="mteam" placeholder="e.g., North Zone, Retail Team" />
+          </div>
+          <div class="form-row">
+            <label for="mstatus">Account Status</label>
+            <select id="mstatus" name="mstatus">
+              <option>Active</option>
+              <option>Inactive</option>
+              <option>Suspended</option>
+            </select>
+          </div>
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" id="manager-add-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="manager-add-save">Save Manager</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="manager-modify">
+      <section class="card">
+        <div class="card-head">
+          <h3>Modify Manager</h3>
+          <p class="card-subtitle">Update manager information</p>
+        </div>
+        <form id="manager-modify-form" class="card-body">
+          <div class="form-row">
+            <label for="modify-manager-select">Select Manager</label>
+            <select id="modify-manager-select" name="managerId">
+              <option value="">-- Select a manager --</option>
+            </select>
+          </div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="modify-mname">Full Name</label>
+              <input id="modify-mname" name="mname" />
+            </div>
+            <div class="form-row">
+              <label for="modify-mmail">Work Email</label>
+              <input id="modify-mmail" name="mmail" type="email" />
+            </div>
+            <div class="form-row">
+              <label for="modify-mphone">Phone Number</label>
+              <input id="modify-mphone" name="mphone" />
+            </div>
+            <div class="form-row">
+              <label for="modify-memployeeId">Employee ID</label>
+              <input id="modify-memployeeId" name="memployeeId" />
+            </div>
+            <div class="form-row">
+              <label for="modify-mdepartment">Department</label>
+              <select id="modify-mdepartment" name="mdepartment">
+                <option value="">-- Select Department --</option>
+                <option>Sales</option>
+                <option>Operations</option>
+                <option>Finance</option>
+                <option>HR</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="modify-mstatus">Account Status</label>
+              <select id="modify-mstatus" name="mstatus">
+                <option>Active</option>
+                <option>Inactive</option>
+                <option>Suspended</option>
+              </select>
+            </div>
+          </div>
+          <div class="card-foot">
+            <button type="button" class="btn ghost" id="manager-modify-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="manager-modify-save">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="manager-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>Manager List</h3>
+          <div class="head-actions">
+            <input id="manager-search" placeholder="🔍 Search managers..." />
+            <button class="btn secondary btn-sm" onclick="openInviteModal('MANAGER')">📬 Invite</button>
+            <button class="btn primary btn-sm" onclick="loadSection('manager-add')">➕ Add New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="manager-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email</th>
+                  <th>Status</th>
+                  <th>Last Login</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Item/Product Templates -->
+    <template id="item-add">
+      <section class="card" data-role="admin,manager" aria-label="Add Product">
+        <div class="card-head">
+          <h3>Add Product</h3>
+          <p class="card-subtitle">Register a new product in inventory</p>
+        </div>
+        <form id="item-add-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="productName">Product Name <span class="required">*</span></label>
+            <input id="productName" name="productName" placeholder="Product name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="shortName">Short Name</label>
+            <input id="shortName" name="shortName" placeholder="Short name / alias" />
+          </div>
+          <div class="form-row">
+            <label for="hsn">HSN/SAC Code</label>
+            <input id="hsn" name="hsn" placeholder="HSN/SAC code" />
+          </div>
+          <div class="form-row">
+            <label for="salesPrice">Sales Price <span class="required">*</span></label>
+            <input id="salesPrice" name="salesPrice" type="number" step="0.01" placeholder="Sales price" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="purchasePrice">Purchase Price <span class="required">*</span></label>
+            <input id="purchasePrice" name="purchasePrice" type="number" step="0.01" placeholder="Purchase price" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="mrp">MRP</label>
+            <input id="mrp" name="mrp" type="number" step="0.01" placeholder="Maximum retail price" />
+          </div>
+          <div class="form-row">
+            <label for="warranty">Default Purchase Warranty <span class="hint-text">(from supplier)</span></label>
+            <input id="warranty" name="warranty" placeholder="e.g., 12 months, 2 years" />
+          </div>
+          <div class="form-row">
+            <label for="defaultSellerWarranty">Default Seller Warranty <span class="hint-text">(given to customer)</span></label>
+            <input id="defaultSellerWarranty" name="defaultSellerWarranty" placeholder="e.g., 6 months, 1 year" />
+          </div>
+          
+          <!-- Serial Policy Section (Admin Only) -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 20px;">
+            <h4>🔢 Serial Number Policy</h4>
+            <p class="card-subtitle" style="margin-top: 4px;">Configure serial number tracking for this product (SAP/Zoho style)</p>
+          </div>
+          
+          <div class="form-row" style="grid-column: 1/-1;">
+            <div class="toggle-group" style="display: flex; flex-direction: column; gap: 12px;">
+              <label class="toggle-switch" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                <input type="checkbox" id="enableSerial" name="enableSerial" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">
+                  <strong>Enable Serial Numbers</strong>
+                  <small style="display: block; color: #6b7280;">Turn on serial number tracking for this product</small>
+                </span>
+              </label>
+              
+              <div id="serial-options" style="display: none; padding-left: 24px; border-left: 3px solid var(--accent-light);">
+                <label class="toggle-switch" style="display: flex; align-items: center; gap: 12px; cursor: pointer; margin-bottom: 12px;">
+                  <input type="checkbox" id="requireSerialOnIN" name="requireSerialOnIN" />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label">
+                    <strong>Require on Stock IN</strong>
+                    <small style="display: block; color: #6b7280;">Serial numbers must be entered when receiving stock</small>
+                  </span>
+                </label>
+                
+                <label class="toggle-switch" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                  <input type="checkbox" id="requireSerialOnOUT" name="requireSerialOnOUT" />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label">
+                    <strong>Require on Stock OUT</strong>
+                    <small style="display: block; color: #6b7280;">Serial numbers must be entered when dispatching stock</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+          
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" id="item-add-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="item-add-save">Save Product</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="item-modify">
+      <section class="card">
+        <div class="card-head">
+          <h3>Modify Product</h3>
+          <p class="card-subtitle">Update product information</p>
+        </div>
+        <form id="item-modify-form" class="card-body">
+          <div class="form-row">
+            <label for="modify-item-select">Select Product</label>
+            <select id="modify-item-select" name="itemId">
+              <option value="">-- Select a product --</option>
+            </select>
+          </div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="modify-productName">Product Name <span class="required">*</span></label>
+              <input id="modify-productName" name="productName" required />
+            </div>
+            <div class="form-row">
+              <label for="modify-shortName">Short Name</label>
+              <input id="modify-shortName" name="shortName" />
+            </div>
+            <div class="form-row">
+              <label for="modify-hsn">HSN/SAC Code</label>
+              <input id="modify-hsn" name="hsn" />
+            </div>
+            <div class="form-row">
+              <label for="modify-salesPrice">Sales Price <span class="required">*</span></label>
+              <input id="modify-salesPrice" name="salesPrice" type="number" step="0.01" required />
+            </div>
+            <div class="form-row">
+              <label for="modify-purchasePrice">Purchase Price <span class="required">*</span></label>
+              <input id="modify-purchasePrice" name="purchasePrice" type="number" step="0.01" required />
+            </div>
+            <div class="form-row">
+              <label for="modify-mrp">MRP</label>
+              <input id="modify-mrp" name="mrp" type="number" step="0.01" />
+            </div>
+            <div class="form-row">
+              <label for="modify-warranty">Default Purchase Warranty <span class="hint-text">(from supplier)</span></label>
+              <input id="modify-warranty" name="warranty" placeholder="e.g., 12 months, 2 years" />
+            </div>
+            <div class="form-row">
+              <label for="modify-defaultSellerWarranty">Default Seller Warranty <span class="hint-text">(given to customer)</span></label>
+              <input id="modify-defaultSellerWarranty" name="defaultSellerWarranty" placeholder="e.g., 6 months, 1 year" />
+            </div>
+          </div>
+          
+          <!-- Serial Policy Section (Admin Only) -->
+          <div class="form-section-header" style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 20px;">
+            <h4>🔢 Serial Number Policy</h4>
+            <p class="card-subtitle" style="margin-top: 4px;">Configure serial number tracking for this product</p>
+          </div>
+          
+          <div class="form-row">
+            <div class="toggle-group" style="display: flex; flex-direction: column; gap: 12px;">
+              <label class="toggle-switch" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                <input type="checkbox" id="modify-enableSerial" name="enableSerial" />
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">
+                  <strong>Enable Serial Numbers</strong>
+                  <small style="display: block; color: #6b7280;">Turn on serial number tracking for this product</small>
+                </span>
+              </label>
+              
+              <div id="modify-serial-options" style="display: none; padding-left: 24px; border-left: 3px solid var(--accent-light);">
+                <label class="toggle-switch" style="display: flex; align-items: center; gap: 12px; cursor: pointer; margin-bottom: 12px;">
+                  <input type="checkbox" id="modify-requireSerialOnIN" name="requireSerialOnIN" />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label">
+                    <strong>Require on Stock IN</strong>
+                    <small style="display: block; color: #6b7280;">Serial numbers must be entered when receiving stock</small>
+                  </span>
+                </label>
+                
+                <label class="toggle-switch" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                  <input type="checkbox" id="modify-requireSerialOnOUT" name="requireSerialOnOUT" />
+                  <span class="toggle-slider"></span>
+                  <span class="toggle-label">
+                    <strong>Require on Stock OUT</strong>
+                    <small style="display: block; color: #6b7280;">Serial numbers must be entered when dispatching stock</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+          
+          <div class="card-foot">
+            <button type="button" class="btn ghost" id="item-modify-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="item-modify-save">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="item-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>Product List</h3>
+          <div class="head-actions">
+            <input id="item-search" placeholder="🔍 Search products..." />
+            <button class="btn secondary btn-sm" onclick="exportTableToCSV('item-table', 'products.csv')">📥 Export CSV</button>
+            <button class="btn secondary btn-sm" id="bulk-import-btn">📤 Import CSV</button>
+            <button class="btn primary btn-sm" onclick="loadSection('item-add')" data-roles="admin,manager">➕ Add New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <!-- Bulk Import Panel (Hidden by default) -->
+          <div id="bulk-import-panel" style="display: none; margin-bottom: 20px; padding: 20px; background: #f8fafc; border-radius: 12px; border: 2px dashed #cbd5e1;">
+            <div style="text-align: center;">
+              <h4 style="margin: 0 0 8px 0; color: #1e293b;">📤 Bulk Import Products</h4>
+              <p style="color: #64748b; margin-bottom: 16px; font-size: 0.9rem;">Upload a CSV file to add multiple products at once</p>
+              
+              <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px;">
+                <a href="#" id="download-csv-template" class="btn secondary btn-sm">📋 Download Template</a>
+                <label class="btn primary btn-sm" style="cursor: pointer;">
+                  📁 Select CSV File
+                  <input type="file" id="csv-file-input" accept=".csv" style="display: none;" />
+                </label>
+              </div>
+              
+              <div id="csv-file-name" style="color: #059669; font-weight: 500; margin-bottom: 12px; display: none;"></div>
+              
+              <div id="csv-preview" style="display: none; text-align: left; margin: 16px 0; max-height: 200px; overflow-y: auto; background: white; border-radius: 8px; padding: 12px;">
+                <strong style="color: #475569;">Preview (first 5 rows):</strong>
+                <table class="table" id="csv-preview-table" style="margin-top: 8px; font-size: 0.85rem;"></table>
+              </div>
+              
+              <div style="display: flex; gap: 12px; justify-content: center;">
+                <button class="btn ghost btn-sm" id="cancel-bulk-import">Cancel</button>
+                <button class="btn primary btn-sm" id="confirm-bulk-import" disabled>📤 Upload & Import</button>
+              </div>
+              
+              <div id="import-progress" style="display: none; margin-top: 16px;">
+                <div style="background: #e2e8f0; border-radius: 4px; height: 8px; overflow: hidden;">
+                  <div id="import-progress-bar" style="background: #3b82f6; height: 100%; width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <p id="import-status" style="color: #64748b; font-size: 0.85rem; margin-top: 8px;">Processing...</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="table-wrap">
+            <table class="table" id="item-table">
+              <thead>
+                <tr>
+                  <th>Product Name</th>
+                  <th>Short Name</th>
+                  <th>HSN Code</th>
+                  <th>Quantity</th>
+                  <th>Sales Price</th>
+                  <th>Purchase Price</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Unit Templates -->
+    <template id="unit-add">
+      <section class="card">
+        <div class="card-head">
+          <h3>Add Unit</h3>
+          <p class="card-subtitle">Define a new measurement unit</p>
+        </div>
+        <form id="unit-add-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="unitName">Unit Name <span class="required">*</span></label>
+            <input id="unitName" name="unitName" placeholder="e.g., Kilograms, Pieces" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="unitShort">Short Name <span class="required">*</span></label>
+            <input id="unitShort" name="unitShort" placeholder="e.g., Kg, Pcs" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="card-foot" style="grid-column:1/-1;">
+            <button type="button" class="btn ghost" id="unit-add-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="unit-add-save">Save Unit</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="unit-modify">
+      <section class="card">
+        <div class="card-head">
+          <h3>Modify Unit</h3>
+          <p class="card-subtitle">Update unit information</p>
+        </div>
+        <form id="unit-modify-form" class="card-body">
+          <div class="form-row">
+            <label for="modify-unit-select">Select Unit</label>
+            <select id="modify-unit-select" name="unitId">
+              <option value="">-- Select a unit --</option>
+            </select>
+          </div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="modify-unitName">Unit Name</label>
+              <input id="modify-unitName" name="unitName" />
+            </div>
+            <div class="form-row">
+              <label for="modify-unitShort">Short Name</label>
+              <input id="modify-unitShort" name="unitShort" />
+            </div>
+          </div>
+          <div class="card-foot">
+            <button type="button" class="btn ghost" id="unit-modify-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="unit-modify-save">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="unit-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>Unit List</h3>
+          <div class="head-actions">
+            <input id="unit-search" placeholder="🔍 Search units..." />
+            <button class="btn primary btn-sm" onclick="loadSection('unit-add')" data-roles="admin,manager">➕ Add New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="unit-table">
+              <thead>
+                <tr>
+                  <th>Unit Name</th>
+                  <th>Short Name</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Stock Management Templates -->
+    <template id="stock-supplier">
+      <section class="card">
+        <div class="card-head">
+          <h3>Stock Supplier Entry</h3>
+          <p class="card-subtitle">Record incoming stock from supplier</p>
+        </div>
+        <form id="stock-supplier-form" class="card-body form-grid">
+          
+          <!-- Product Information -->
+          <div class="form-section-header" style="grid-column: 1/-1;">
+            <h4>📦 Product Details</h4>
+          </div>
+          
+          <div class="form-row">
+            <label for="sp-productName">Product <span class="required">*</span></label>
+            <select id="sp-productName" name="productName" required>
+              <option value="">-- Select Product Name --</option>
+              <!-- Product names will be loaded dynamically -->
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-productId">Model / Variant</label>
+            <select id="sp-productId" name="productId" required disabled>
+              <option value="">-- Select Product Name First --</option>
+              <!-- Models will be loaded based on product name selection -->
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-quantity">Quantity <span class="required">*</span></label>
+            <input id="sp-quantity" name="quantity" type="number" min="1" placeholder="Enter quantity" required />
+            <span class="error-message"></span>
+            <small class="field-hint" id="sp-serial-hint" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+          </div>
+          <div class="form-row">
+            <label for="sp-condition">Condition</label>
+            <select id="sp-condition" name="condition">
+              <option value="">-- Select Condition --</option>
+              <option value="New">New</option>
+              <option value="Repair">Repair</option>
+              <option value="Demo">Demo</option>
+            </select>
+          </div>
+
+          <!-- Serial Numbers (Quantity-Based Dynamic Inputs) -->
+          <div class="form-row serial-number-section" id="supplier-serial-section" style="display:none; grid-column:1/-1;">
+            <div class="serial-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <label style="margin: 0; font-weight: 600;">🔢 Serial Numbers <span class="required">*</span></label>
+              <div class="serial-actions">
+                <button type="button" class="btn secondary btn-sm" id="supplier-auto-generate-serials">
+                  ⚡ Auto Generate
+                </button>
+                <button type="button" class="btn secondary btn-sm" id="supplier-clear-serials">
+                  🗑️ Clear All
+                </button>
+              </div>
+            </div>
+            <div class="serial-info-bar" style="background: #f0f9ff; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+              <span id="supplier-serial-count">Enter <strong>0</strong> serial numbers</span>
+              <span id="supplier-serial-status" class="badge">0 / 0 filled</span>
+            </div>
+            <div id="supplier-serial-inputs" class="serial-inputs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 300px; overflow-y: auto; padding: 4px;">
+              <!-- Dynamic serial number inputs will be inserted here -->
+            </div>
+            <div class="serial-bulk-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e7eb;">
+              <details>
+                <summary style="cursor: pointer; color: #6b7280; font-size: 0.9rem;">📋 Bulk Entry (paste or upload)</summary>
+                <div style="margin-top: 10px;">
+                  <textarea id="supplier-bulk-serials" rows="3" placeholder="Paste serial numbers here (one per line or comma-separated)" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;"></textarea>
+                  <div style="margin-top: 8px; display: flex; gap: 10px;">
+                    <button type="button" class="btn secondary btn-sm" id="supplier-apply-bulk">Apply Bulk Entry</button>
+                    <label for="supplier-serial-file" class="btn secondary btn-sm" style="cursor: pointer;">
+                      📤 Upload CSV
+                    </label>
+                    <input type="file" id="supplier-serial-file" accept=".csv,.txt" style="display:none;" />
+                  </div>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <!-- Supplier Information -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>🏢 Supplier Details</h4>
+          </div>
+
+          <div class="form-row" style="grid-column: 1/-1;">
+            <label for="sp-companySelect">Select Company</label>
+            <select id="sp-companySelect" name="companySelect">
+              <option value="">-- Select Existing Company or Enter New --</option>
+            </select>
+            <small class="helper-text">Select a company to auto-fill details, or leave empty to enter manually</small>
+          </div>
+          <div class="form-row">
+            <label for="sp-companyName">Company Name <span class="required">*</span></label>
+            <input id="sp-companyName" name="companyName" placeholder="Enter company name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-customerName">Contact Person</label>
+            <input id="sp-customerName" name="customerName" placeholder="Enter contact person name" />
+          </div>
+          <div class="form-row">
+            <label for="sp-customerPhone">Phone <span class="required">*</span></label>
+            <input id="sp-customerPhone" name="customerPhone" placeholder="Enter phone number" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-customerEmail">Email</label>
+            <input id="sp-customerEmail" name="customerEmail" type="email" placeholder="Enter email" />
+          </div>
+          <div class="form-row">
+            <label for="sp-customerAddress">Address</label>
+            <input id="sp-customerAddress" name="customerAddress" placeholder="Enter address" />
+          </div>
+          <div class="form-row">
+            <label for="sp-city">City</label>
+            <input id="sp-city" name="city" placeholder="Enter city" />
+          </div>
+          <div class="form-row">
+            <label for="sp-state">State</label>
+            <input id="sp-state" name="state" placeholder="Enter state" />
+          </div>
+          <div class="form-row">
+            <label for="sp-pincode">Pincode</label>
+            <input id="sp-pincode" name="pincode" placeholder="Enter pincode" />
+          </div>
+
+          <!-- Transaction Details -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>💳 Transaction Details</h4>
+          </div>
+
+          <div class="form-row">
+            <label for="sp-supplierType">Supplier Type</label>
+            <select id="sp-supplierType" name="supplierType">
+              <option value="">-- Select Type --</option>
+              <option value="Retail">END USER</option>
+              <option value="Wholesale">RESELLER</option>
+              <option value="Distributor">SI PARTNER</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="sp-paymentMethod">Payment Method</label>
+            <select id="sp-paymentMethod" name="paymentMethod">
+              <option value="">-- Select Method --</option>
+              <option value="Cash">Cash</option>
+              <option value="Credit Card">Credit Card</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="UPI">UPI</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="sp-transactionId">Transaction ID</label>
+            <input id="sp-transactionId" name="transactionId" placeholder="Enter transaction ID" />
+          </div>
+          <div class="form-row">
+            <label for="sp-supplyDate">Purchase Date <span class="required">*</span></label>
+            <input id="sp-supplyDate" name="supplyDate" type="date" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-warrantyPeriod">Purchase Warranty <span class="hint-text">(from supplier)</span></label>
+            <input id="sp-warrantyPeriod" name="warrantyPeriod" placeholder="e.g., 12 months, 2 years" />
+          </div>
+          <div class="form-row">
+            <label for="sp-deliveredBy">Delivered By</label>
+            <input id="sp-deliveredBy" name="deliveredBy" placeholder="Enter delivery person name" />
+          </div>
+
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+            <button type="button" class="btn ghost" id="stock-supplier-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="stock-supplier-save">Save Entry</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="stock-buyer">
+      <section class="card">
+        <div class="card-head">
+          <h3>Stock Buyer Entry</h3>
+          <p class="card-subtitle">Record outgoing stock to buyer</p>
+        </div>
+        <form id="stock-buyer-form" class="card-body form-grid">
+          
+          <!-- Product Information -->
+          <div class="form-section-header" style="grid-column: 1/-1;">
+            <h4>📦 Product Details</h4>
+          </div>
+
+          <div class="form-row">
+            <label for="by-productName">Product <span class="required">*</span></label>
+            <select id="by-productName" name="productName" required>
+              <option value="">-- Select Product Name --</option>
+              <!-- Product names will be loaded dynamically -->
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-productId">Model / Variant</label>
+            <select id="by-productId" name="productId" required disabled>
+              <option value="">-- Select Product Name First --</option>
+              <!-- Models will be loaded based on product name selection -->
+            </select>
+            <span class="error-message"></span>
+            <small class="field-hint" id="by-stock-info" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+          </div>
+          <div class="form-row">
+            <label for="by-quantity">Quantity <span class="required">*</span></label>
+         <!-- CONTINUATION OF index.html - Part 3 -->
+
+            <input id="by-quantity" name="quantity" type="number" min="1" placeholder="Enter quantity" required />
+            <span class="error-message"></span>
+            <small class="field-hint" id="by-serial-hint" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+          </div>
+          <div class="form-row">
+            <label for="by-condition">Condition</label>
+            <select id="by-condition" name="condition">
+              <option value="">-- Select Condition --</option>
+              <option value="New">New</option>
+              <option value="Repair">Repair</option>
+              <option value="Demo">Demo</option>
+            </select>
+          </div>
+
+          <!-- Serial Numbers (Quantity-Based Dynamic Inputs) -->
+          <div class="form-row serial-number-section" id="buyer-serial-section" style="display:none; grid-column:1/-1;">
+            <div class="serial-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <label style="margin: 0; font-weight: 600;">🔢 Serial Numbers <span class="required">*</span></label>
+              <div class="serial-actions">
+                <button type="button" class="btn secondary btn-sm" id="buyer-scan-serials">
+                  📷 Scan Barcode
+                </button>
+                <button type="button" class="btn secondary btn-sm" id="buyer-clear-serials">
+                  🗑️ Clear All
+                </button>
+              </div>
+            </div>
+            <div class="serial-info-bar" style="background: #fff7ed; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+              <span id="buyer-serial-count">Enter <strong>0</strong> serial numbers</span>
+              <span id="buyer-serial-status" class="badge">0 / 0 filled</span>
+            </div>
+            <div id="buyer-serial-inputs" class="serial-inputs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 300px; overflow-y: auto; padding: 4px;">
+              <!-- Dynamic serial number inputs will be inserted here -->
+            </div>
+            <div class="serial-available-list" id="buyer-available-serials" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e7eb;">
+              <details>
+                <summary style="cursor: pointer; color: #6b7280; font-size: 0.9rem;">📋 Available Serial Numbers (click to select)</summary>
+                <div id="buyer-serials-list" style="margin-top: 10px; max-height: 150px; overflow-y: auto;">
+                  <!-- Available serials will be loaded here -->
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <!-- Buyer Information -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>🏢 Buyer Details</h4>
+          </div>
+
+          <div class="form-row" style="grid-column: 1/-1;">
+            <label for="by-companySelect">Select Company</label>
+            <select id="by-companySelect" name="companySelect">
+              <option value="">-- Select Existing Company or Enter New --</option>
+            </select>
+            <small class="helper-text">Select a company to auto-fill details, or leave empty to enter manually</small>
+          </div>
+          <div class="form-row">
+            <label for="by-companyName">Company Name <span class="required">*</span></label>
+            <input id="by-companyName" name="companyName" placeholder="Enter company name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-customerName">Contact Person</label>
+            <input id="by-customerName" name="customerName" placeholder="Enter contact person name" />
+          </div>
+          <div class="form-row">
+            <label for="by-customerPhone">Phone <span class="required">*</span></label>
+            <input id="by-customerPhone" name="customerPhone" placeholder="Enter phone number" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-customerEmail">Email</label>
+            <input id="by-customerEmail" name="customerEmail" type="email" placeholder="Enter email" />
+          </div>
+          <div class="form-row">
+            <label for="by-customerAddress">Address</label>
+            <input id="by-customerAddress" name="customerAddress" placeholder="Enter address" />
+          </div>
+          <div class="form-row">
+            <label for="by-city">City</label>
+            <input id="by-city" name="city" placeholder="Enter city" />
+          </div>
+          <div class="form-row">
+            <label for="by-state">State</label>
+            <input id="by-state" name="state" placeholder="Enter state" />
+          </div>
+          <div class="form-row">
+            <label for="by-pincode">Pincode</label>
+            <input id="by-pincode" name="pincode" placeholder="Enter pincode" />
+          </div>
+
+          <!-- Transaction Details -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>💳 Transaction Details</h4>
+          </div>
+
+          <div class="form-row">
+            <label for="by-buyerType">Buyer Type</label>
+            <select id="by-buyerType" name="buyerType">
+              <option value="">-- Select Type --</option>
+             <option value="Retail">END USER</option>
+              <option value="Wholesale">RESELLER</option>
+              <option value="Distributor">SI PARTNER</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="by-paymentMethod">Payment Method</label>
+            <select id="by-paymentMethod" name="paymentMethod">
+              <option value="">-- Select Method --</option>
+              <option value="Cash">Cash</option>
+              <option value="Credit Card">Credit Card</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="UPI">UPI</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="by-transactionId">Transaction ID</label>
+            <input id="by-transactionId" name="transactionId" placeholder="Enter transaction ID" />
+          </div>
+          <div class="form-row">
+            <label for="by-purchaseDate">Sales Date <span class="required">*</span></label>
+            <input id="by-purchaseDate" name="purchaseDate" type="date" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-sellerWarrantyPeriod">Seller Warranty <span class="hint-text">(given to customer, optional)</span></label>
+            <input id="by-sellerWarrantyPeriod" name="sellerWarrantyPeriod" placeholder="e.g., 6 months, 1 year" />
+          </div>
+          <div class="form-row">
+            <label for="by-receivedBy">Received By</label>
+            <input id="by-receivedBy" name="receivedBy" placeholder="Enter receiver name" />
+          </div>
+          <div class="form-row">
+            <label for="by-courierPartner">Courier Partner</label>
+            <input id="by-courierPartner" name="courierPartner" placeholder="Enter courier partner name" />
+          </div>
+
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+            <button type="button" class="btn ghost" id="stock-buyer-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="stock-buyer-save">Save Entry</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="stock-list">
+      <!-- Supplier Stock -->
+      <section class="card full">
+        <div class="card-head">
+          <h3>📥 Supplier Stock</h3>
+          <div class="head-actions">
+            <input id="supplier-stock-search" placeholder="🔍 Search supplier stock..." />
+            <button class="btn secondary btn-sm" onclick="exportTableToCSV('supplier-stock-table', 'supplier-stock.csv')">📥 Export</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="supplier-stock-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Model/Variant</th>
+                  <th>Quantity</th>
+                  <th>Company</th>
+                  <th>Supplier Type</th>
+                  <th>Date</th>
+                  <th class="serial-column">Serials</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <div style="height: 24px;"></div>
+
+      <!-- Buyer Stock -->
+      <section class="card full">
+        <div class="card-head">
+          <h3>📤 Buyer Stock</h3>
+          <div class="head-actions">
+            <input id="buyer-stock-search" placeholder="🔍 Search buyer stock..." />
+            <button class="btn secondary btn-sm" onclick="exportTableToCSV('buyer-stock-table', 'buyer-stock.csv')">📥 Export</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="buyer-stock-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Model/Variant</th>
+                  <th>Quantity</th>
+                  <th>Company</th>
+                  <th>Buyer Type</th>
+                  <th>Date</th>
+                  <th class="serial-column">Serials</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Remaining Stock Template -->
+    <template id="remaining-stock">
+      <section class="card rs-section">
+        <div class="card-head">
+          <div>
+            <h3>📦 Remaining Stock</h3>
+            <p class="card-subtitle">Live inventory snapshot — what you have left across all products</p>
+          </div>
+          <div class="rs-last-updated" id="rs-last-updated"></div>
+        </div>
+        <div class="card-body">
+
+          <!-- Summary Cards -->
+          <div class="rs-summary-grid">
+            <div class="rs-stat-card rs-stat-in">
+              <div class="rs-stat-icon">📥</div>
+              <div class="rs-stat-value" id="rs-total-in">—</div>
+              <div class="rs-stat-label">Total IN</div>
+            </div>
+            <div class="rs-stat-card rs-stat-out">
+              <div class="rs-stat-icon">📤</div>
+              <div class="rs-stat-value" id="rs-total-out">—</div>
+              <div class="rs-stat-label">Total OUT</div>
+            </div>
+            <div class="rs-stat-card rs-stat-remaining">
+              <div class="rs-stat-icon">📦</div>
+              <div class="rs-stat-value" id="rs-total-remaining">—</div>
+              <div class="rs-stat-label">Total Remaining</div>
+            </div>
+            <div class="rs-stat-card rs-stat-alert">
+              <div class="rs-stat-icon">⚠️</div>
+              <div class="rs-stat-value" id="rs-low-stock">—</div>
+              <div class="rs-stat-label">Low / Out of Stock</div>
+            </div>
+          </div>
+
+          <!-- Controls -->
+          <div class="rs-controls">
+            <div class="rs-search-wrap">
+              <span class="rs-search-icon">🔍</span>
+              <input id="rs-search" type="text" placeholder="Search by product or short name…" class="rs-search-input">
+            </div>
+            <select id="rs-status-filter" class="rs-filter-select">
+              <option value="all">All Status</option>
+              <option value="in-stock">✅ In Stock</option>
+              <option value="low-stock">⚠️ Low Stock</option>
+              <option value="out-of-stock">❌ Out of Stock</option>
+            </select>
+            <button id="rs-export-btn" class="btn ghost btn-sm">⬇ Export CSV</button>
+            <button id="rs-refresh-btn" class="btn primary btn-sm">🔄 Refresh</button>
+          </div>
+
+          <!-- Table -->
+          <div class="table-wrap">
+            <table class="table" id="rs-table">
+              <thead>
+                <tr>
+                  <th style="width:44px">#</th>
+                  <th>Product Name</th>
+                  <th>Short Name</th>
+                  <th class="rs-th-in">Total IN</th>
+                  <th class="rs-th-out">Total OUT</th>
+                  <th>Remaining</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="rs-tbody">
+                <tr><td colspan="7" class="rs-loading">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p id="rs-row-count" class="rs-row-count"></p>
+        </div>
+      </section>
+    </template>
+
+    <!-- Logistics Templates -->
+    <template id="logistics-add">
+      <section class="card">
+        <div class="card-head">
+          <h3>Add Transporter</h3>
+          <p class="card-subtitle">Register a new logistics partner</p>
+        </div>
+        <form id="logistics-add-form" class="card-body form-grid" onsubmit="return false;">
+          <div class="form-row">
+            <label for="transporterName">Transporter Name <span class="required">*</span></label>
+            <input id="transporterName" name="transporterName" placeholder="Enter transporter name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="trans-gstin">GSTIN Number</label>
+            <input id="trans-gstin" name="gstin" placeholder="Enter GSTIN" />
+          </div>
+          <div class="form-row">
+            <label for="trans-contact">Primary Contact <span class="required">*</span></label>
+            <input id="trans-contact" name="contact" placeholder="Primary phone" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="trans-email">Email</label>
+            <input id="trans-email" name="email" type="email" placeholder="Email address" />
+          </div>
+          <div class="form-row">
+            <label for="trans-address1">Address Line 1</label>
+            <input id="trans-address1" name="address1" placeholder="Address line 1" />
+          </div>
+          <div class="form-row">
+            <label for="trans-address2">Address Line 2</label>
+            <input id="trans-address2" name="address2" placeholder="Address line 2" />
+          </div>
+          <div class="form-row">
+            <label for="trans-address3">Address Line 3</label>
+            <input id="trans-address3" name="address3" placeholder="Address line 3" />
+          </div>
+          <div class="form-row">
+            <label for="trans-country">Country</label>
+            <select id="trans-country" name="country">
+              <option selected>India</option>
+              <option>USA</option>
+              <option>UK</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="trans-state">State</label>
+            <input id="trans-state" name="state" placeholder="Enter state" />
+          </div>
+          <div class="form-row">
+            <label for="trans-city">City</label>
+            <input id="trans-city" name="city" placeholder="Enter city" />
+          </div>
+          <div class="form-row">
+            <label for="trans-pincode">Pincode</label>
+            <input id="trans-pincode" name="pincode" placeholder="Enter pincode" />
+          </div>
+          
+          <!-- Additional Contacts -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 16px;">
+            <h4>Additional Contacts (Optional)</h4>
+          </div>
+          <div class="form-row">
+            <label for="trans-c1">Contact Person 1</label>
+            <input id="trans-c1" name="c1" placeholder="Name / Phone" />
+          </div>
+          <div class="form-row">
+            <label for="trans-c2">Contact Person 2</label>
+            <input id="trans-c2" name="c2" placeholder="Name / Phone" />
+          </div>
+          <div class="form-row">
+            <label for="trans-c3">Contact Person 3</label>
+            <input id="trans-c3" name="c3" placeholder="Name / Phone" />
+          </div>
+
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" onclick="loadSection('logistics-list')">Cancel</button>
+            <button type="button" class="btn primary" onclick="saveTransporter()">Save Transporter</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="logistics-modify">
+      <section class="card">
+        <div class="card-head">
+          <h3>Modify Transporter</h3>
+          <p class="card-subtitle">Update transporter information</p>
+        </div>
+        <form id="logistics-modify-form" class="card-body">
+          <div class="form-row">
+            <label for="modify-trans-select">Select Transporter</label>
+            <select id="modify-trans-select" name="transporterId">
+              <option value="">-- Select a transporter --</option>
+            </select>
+          </div>
+          <div class="form-grid">
+            <div class="form-row">
+              <label for="modify-trans-name">Transporter Name</label>
+              <input id="modify-trans-name" name="transporterName" />
+            </div>
+            <div class="form-row">
+              <label for="modify-trans-gstin">GSTIN Number</label>
+              <input id="modify-trans-gstin" name="gstin" />
+            </div>
+            <div class="form-row">
+              <label for="modify-trans-contact">Primary Contact</label>
+              <input id="modify-trans-contact" name="contact" />
+            </div>
+            <div class="form-row">
+              <label for="modify-trans-email">Email</label>
+              <input id="modify-trans-email" name="email" type="email" />
+            </div>
+            <div class="form-row">
+              <label for="modify-trans-city">City</label>
+              <input id="modify-trans-city" name="city" />
+            </div>
+            <div class="form-row">
+              <label for="modify-trans-state">State</label>
+              <input id="modify-trans-state" name="state" />
+            </div>
+          </div>
+          <div class="card-foot">
+            <button type="button" class="btn ghost" id="logistics-modify-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="logistics-modify-save">Save Changes</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="logistics-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>Transporter List</h3>
+          <div class="head-actions">
+            <input id="trans-search" placeholder="🔍 Search transporters..." />
+            <button class="btn primary btn-sm" onclick="loadSection('logistics-add')" data-roles="admin,manager">➕ Add New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="trans-table">
+              <thead>
+                <tr>
+                  <th>Transporter Name</th>
+                  <th>Primary Contact</th>
+                  <th>Email</th>
+                  <th>City</th>
+                  <th>Pincode</th>
+                  <th>GSTIN</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card-foot pager">
+          <button class="btn ghost" id="trans-prev">← Previous</button>
+          <span id="trans-page-info">Page 1 of 1</span>
+          <button class="btn ghost" id="trans-next">Next →</button>
+        </div>
+      </section>
+    </template>
+
+    <!-- Reports Templates -->
+    
+    <!-- User Activity Report (Admin Only) -->
+    <template id="report-user-activity">
+      <section class="card full">
+        <div class="card-head">
+          <h3>👤 User/Manager Activity Report</h3>
+          <p class="card-subtitle">View stock activity for a specific user or manager</p>
+        </div>
+        <div class="card-body">
+          <!-- Filters -->
+          <div class="report-filters" style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: flex-end;">
+            <div class="form-row" style="flex: 2; min-width: 200px; margin: 0;">
+              <label for="activity-user-select">Select User/Manager</label>
+              <select id="activity-user-select">
+                <option value="">-- Select a user or manager --</option>
+              </select>
+            </div>
+            <div class="form-row" style="flex: 1; min-width: 120px; margin: 0;">
+              <label for="activity-type-filter">Type</label>
+              <select id="activity-type-filter">
+                <option value="">All</option>
+                <option value="IN">Stock IN</option>
+                <option value="OUT">Stock OUT</option>
+              </select>
+            </div>
+            <div class="form-row" style="flex: 1; min-width: 140px; margin: 0;">
+              <label for="activity-date-from">From Date</label>
+              <input type="date" id="activity-date-from" />
+            </div>
+            <div class="form-row" style="flex: 1; min-width: 140px; margin: 0;">
+              <label for="activity-date-to">To Date</label>
+              <input type="date" id="activity-date-to" />
+            </div>
+            <button class="btn primary" id="activity-filter-btn" style="height: 42px;">🔍 View Report</button>
+          </div>
+          
+          <!-- User Info Card -->
+          <div id="activity-user-info" class="account-info-card" style="display: none;">
+            <div class="account-avatar">👤</div>
+            <div class="account-details">
+              <h4 id="activity-user-name">-</h4>
+              <p id="activity-user-contact">-</p>
+              <span class="badge" id="activity-user-role">-</span>
+            </div>
+            <div class="activity-stats" style="margin-left: auto; display: flex; gap: 20px;">
+              <div class="stat-mini">
+                <span class="stat-label">Stock IN</span>
+                <span class="stat-value positive" id="activity-stock-in">0</span>
+              </div>
+              <div class="stat-mini">
+                <span class="stat-label">Stock OUT</span>
+                <span class="stat-value negative" id="activity-stock-out">0</span>
+              </div>
+              <div class="stat-mini">
+                <span class="stat-label">Net Change</span>
+                <span class="stat-value" id="activity-net-change">0</span>
+              </div>
+              <div class="stat-mini">
+                <span class="stat-label">Transactions</span>
+                <span class="stat-value" id="activity-total-txn">0</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Activity Table -->
+          <div class="table-wrap">
+            <table class="table" id="activity-table">
+              <thead>
+                <tr>
+                  <th>Date & Time</th>
+                  <th>Product</th>
+                  <th>Type</th>
+                  <th>Quantity</th>
+                  <th>Serial Numbers</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="5" style="text-align: center; padding: 40px;">
+                    <p class="muted">Select a user or manager and click "View Report" to see their activity.</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Export Buttons -->
+          <div class="card-foot" id="activity-export-btns" style="display: none;">
+            <button class="btn secondary" onclick="exportActivityToCSV()">📥 Export CSV</button>
+            <button class="btn secondary" onclick="printActivityReport()">🖨️ Print Report</button>
+          </div>
+        </div>
+      </section>
+    </template>
+    
+    <!-- User Summary Report (Admin Only) -->
+    <template id="report-user-summary">
+      <section class="card full">
+        <div class="card-head">
+          <h3>📊 User Activity Summary</h3>
+          <p class="card-subtitle">Overview of all users and managers with their stock activity</p>
+        </div>
+        <div class="card-body">
+          <!-- Filters -->
+          <div class="report-filters" style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: flex-end;">
+            <div class="form-row" style="flex: 1; min-width: 150px; margin: 0;">
+              <label for="summary-role-filter">Role</label>
+              <select id="summary-role-filter">
+                <option value="">All Roles</option>
+                <option value="MANAGER">Managers Only</option>
+                <option value="USER">Users Only</option>
+              </select>
+            </div>
+            <div class="form-row" style="flex: 1; min-width: 140px; margin: 0;">
+              <label for="summary-date-from">From Date</label>
+              <input type="date" id="summary-date-from" />
+            </div>
+            <div class="form-row" style="flex: 1; min-width: 140px; margin: 0;">
+              <label for="summary-date-to">To Date</label>
+              <input type="date" id="summary-date-to" />
+            </div>
+            <button class="btn primary" id="summary-filter-btn" style="height: 42px;">🔍 Load Summary</button>
+          </div>
+          
+          <!-- Summary Table -->
+          <div class="table-wrap">
+            <table class="table" id="summary-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Role</th>
+                  <th>Contact</th>
+                  <th>Stock IN</th>
+                  <th>Stock OUT</th>
+                  <th>Total Transactions</th>
+                  <th>Last Login</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="8" style="text-align: center; padding: 40px;">
+                    <p class="muted">Click "Load Summary" to view user activity summary.</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Export -->
+          <div class="card-foot">
+            <button class="btn secondary" id="export-summary-csv">📥 Export CSV</button>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <template id="report-all">
+      <section class="card full">
+        <div class="card-head">
+          <h3>📊 All Reports (Admin View)</h3>
+          <p class="card-subtitle">View reports from all users across the system</p>
+        </div>
+        <div class="card-body">
+          <div class="report-filters" style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+            <select id="report-role-filter" style="flex: 1; min-width: 150px;">
+              <option value="">All Roles</option>
+              <option value="admin">Admin</option>
+              <option value="manager">Manager</option>
+              <option value="user">User</option>
+            </select>
+            <select id="report-type-filter" style="flex: 1; min-width: 150px;">
+              <option value="">All Report Types</option>
+              <option value="inventory">Inventory</option>
+              <option value="sales">Sales</option>
+              <option value="purchases">Purchases</option>
+              <option value="stock">Stock Movement</option>
+            </select>
+            <input type="date" id="report-date-from" placeholder="From Date" style="flex: 1; min-width: 150px;" />
+            <input type="date" id="report-date-to" placeholder="To Date" style="flex: 1; min-width: 150px;" />
+            <button class="btn primary" onclick="filterAllReports()">Apply Filters</button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table" id="all-reports-table">
+              <thead>
+                <tr>
+                  <th>Report Name</th>
+                  <th>Generated By</th>
+                  <th>Role</th>
+                  <th>Type</th>
+                  <th>Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="6" style="text-align: center; padding: 40px;">
+                    <p class="muted">No reports available. Reports generated by users will appear here.</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <template id="report-generate">
+      <section class="card">
+        <div class="card-head">
+          <h3>📊 Generate Report</h3>
+          <p class="card-subtitle">Create a new report</p>
+        </div>
+        <form id="report-generate-form" class="card-body form-grid">
+          <div class="form-row">
+            <label for="report-name">Report Name <span class="required">*</span></label>
+            <input id="report-name" name="reportName" placeholder="Enter report name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="report-type">Report Type <span class="required">*</span></label>
+            <select id="report-type" name="reportType" required>
+              <option value="">-- Select Type --</option>
+              <option value="inventory">Inventory Summary</option>
+              <option value="sales">Sales Report</option>
+              <option value="purchases">Purchase Report</option>
+              <option value="stock">Stock Movement</option>
+              <option value="custom">Custom Report</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="report-date-range">Date Range</label>
+            <select id="report-date-range" name="dateRange">
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month" selected>This Month</option>
+              <option value="quarter">This Quarter</option>
+              <option value="year">This Year</option>
+              <option value="custom">Custom Range</option>
+            </select>
+          </div>
+          <div class="form-row" id="custom-date-range" style="display: none;">
+            <label for="report-from-date">From Date</label>
+            <input id="report-from-date" name="fromDate" type="date" />
+          </div>
+          <div class="form-row" id="custom-date-range-to" style="display: none;">
+            <label for="report-to-date">To Date</label>
+            <input id="report-to-date" name="toDate" type="date" />
+          </div>
+          <div class="form-row">
+            <label for="report-format">Export Format</label>
+            <select id="report-format" name="format">
+              <option value="pdf">PDF</option>
+              <option value="excel">Excel (.xlsx)</option>
+              <option value="csv">CSV</option>
+            </select>
+          </div>
+
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:16px;">
+            <button type="button" class="btn ghost" id="report-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="report-generate-btn">Generate Report</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <template id="report-view">
+      <section class="card full">
+        <div class="card-head">
+          <h3>📋 My Reports</h3>
+          <div class="head-actions">
+            <button class="btn primary btn-sm" onclick="loadSection('report-generate')">➕ Generate New</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="my-reports-table">
+              <thead>
+                <tr>
+                  <th>Report Name</th>
+                  <th>Type</th>
+                  <th>Date Range</th>
+                  <th>Generated On</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="5" style="text-align: center; padding: 40px;">
+                    <p class="muted">You haven't generated any reports yet.</p>
+                    <button class="btn primary" onclick="loadSection('report-generate')" style="margin-top: 16px;">
+                      Generate Your First Report
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Warranty Template -->
+    <template id="warranty-list">
+      <section class="card full">
+        <div class="card-head">
+          <div>
+            <h3>🛡️ Warranty Management</h3>
+            <p class="card-subtitle">Track purchase &amp; seller warranties across all stock</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn secondary btn-sm" id="warranty-export-btn">📥 Export CSV</button>
+          </div>
+        </div>
+        <div class="card-body">
+
+          <!-- Stats Cards -->
+          <div class="warranty-stats-grid" id="warranty-stats-grid">
+            <!-- Purchase warranty stats — hidden for USER via JS -->
+            <div class="warranty-stat-card pw-card" id="ws-pw-active-card">
+              <div class="ws-icon">📦</div>
+              <div class="ws-value" id="ws-pw-active">—</div>
+              <div class="ws-label">Purchase Active</div>
+            </div>
+            <div class="warranty-stat-card pw-card warn" id="ws-pw-expiring-card">
+              <div class="ws-icon">⚠️</div>
+              <div class="ws-value" id="ws-pw-expiring">—</div>
+              <div class="ws-label">Purchase Expiring</div>
+            </div>
+            <div class="warranty-stat-card pw-card danger" id="ws-pw-expired-card">
+              <div class="ws-icon">❌</div>
+              <div class="ws-value" id="ws-pw-expired">—</div>
+              <div class="ws-label">Purchase Expired</div>
+            </div>
+            <!-- Seller warranty stats — visible to all roles -->
+            <div class="warranty-stat-card sw-card">
+              <div class="ws-icon">🏷️</div>
+              <div class="ws-value" id="ws-sw-active">—</div>
+              <div class="ws-label">Seller Active</div>
+            </div>
+            <div class="warranty-stat-card sw-card warn">
+              <div class="ws-icon">⚠️</div>
+              <div class="ws-value" id="ws-sw-expiring">—</div>
+              <div class="ws-label">Seller Expiring</div>
+            </div>
+            <div class="warranty-stat-card sw-card danger">
+              <div class="ws-icon">❌</div>
+              <div class="ws-value" id="ws-sw-expired">—</div>
+              <div class="ws-label">Seller Expired</div>
+            </div>
+          </div>
+
+          <!-- Filters -->
+          <div class="warranty-filters">
+            <input id="warranty-search" type="text" placeholder="🔍 Search serial / buyer / supplier…" class="warranty-search-input" />
+            <select id="warranty-type-filter">
+              <option value="">All Types</option>
+              <option value="purchase">Purchase Warranty</option>
+              <option value="seller">Seller Warranty</option>
+            </select>
+            <select id="warranty-status-filter">
+              <option value="">All Status</option>
+              <option value="active">✅ Active</option>
+              <option value="expiring-soon">⚠️ Expiring Soon</option>
+              <option value="expired">❌ Expired</option>
+              <option value="not-sold">📦 Not Sold</option>
+            </select>
+          </div>
+
+          <!-- Table -->
+          <div class="table-wrap">
+            <table class="table" id="warranty-table">
+              <thead>
+                <tr>
+                  <th>Serial #</th>
+                  <th>Product</th>
+                  <th class="warranty-col-purchase">📦 Purchase Warranty</th>
+                  <th class="warranty-col-purchase">PW Days Left</th>
+                  <th class="warranty-col-purchase">Supplier</th>
+                  <th>🏷️ Seller Warranty</th>
+                  <th>SW Days Left</th>
+                  <th>Buyer</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="warranty-tbody">
+                <tr><td colspan="9" style="text-align:center;padding:40px;" class="muted">Loading warranties…</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination -->
+          <div class="card-foot pager">
+            <button class="btn ghost" id="warranty-prev">← Previous</button>
+            <span id="warranty-page-info">Page 1 of 1</span>
+            <button class="btn ghost" id="warranty-next">Next →</button>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- ====================================================== -->
+    <!-- OWNERSHIP: Manage Admins                              -->
+    <!-- ====================================================== -->
+    <template id="ownership-admins">
+      <section class="card full">
+        <div class="card-head">
+          <div>
+            <h3>👑 Manage Admins</h3>
+            <p class="card-subtitle">Promote managers to admin or demote admins to manager</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn secondary btn-sm" onclick="initOwnershipAdmins()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <!-- Info Banner -->
+          <div class="ownership-info-banner">
+            <span class="ownership-banner-icon">ℹ️</span>
+            <span>As <strong>Super Admin</strong>, you can promote trusted managers to Admin role, or demote admins back to Manager. Admins cannot be deleted — only demoted.</span>
+          </div>
+          <!-- Table -->
+          <div class="table-wrap">
+            <table class="table" id="ownership-admins-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Email / Username</th>
+                  <th>Current Role</th>
+                  <th>Status</th>
+                  <th>Since</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="ownership-admins-tbody">
+                <tr><td colspan="6" style="text-align:center;padding:40px;" class="muted">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Promote/Demote Confirm Modal -->
+      <div id="ownership-role-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 id="ownership-role-modal-title">Confirm Role Change</h3>
+            <button type="button" class="modal-close" onclick="closeOwnershipRoleModal()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <p id="ownership-role-modal-msg"></p>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" onclick="closeOwnershipRoleModal()">Cancel</button>
+            <button type="button" class="btn primary" id="ownership-role-modal-confirm">Confirm</button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- ====================================================== -->
+    <!-- OWNERSHIP: Transfer Ownership                          -->
+    <!-- ====================================================== -->
+    <template id="ownership-transfer">
+      <section class="card full">
+        <div class="card-head">
+          <div>
+            <h3>🔄 Transfer Ownership</h3>
+            <p class="card-subtitle">Hand over Super Admin privileges to another Admin</p>
+          </div>
+        </div>
+        <div class="card-body">
+
+          <!-- Danger Warning -->
+          <div class="ownership-danger-banner">
+            <div class="ownership-danger-icon">⚠️</div>
+            <div>
+              <strong>This action is irreversible.</strong>
+              <p>Once transferred, you will become a regular Admin. The selected Admin will become the new Super Admin (Owner) with full system control.</p>
+            </div>
+          </div>
+
+          <div class="ownership-transfer-form">
+            <div class="form-row">
+              <label for="transfer-target-select">Select New Owner (must be an Admin)</label>
+              <select id="transfer-target-select" class="form-control">
+                <option value="">— Loading admins… —</option>
+              </select>
+            </div>
+            <div id="transfer-target-preview" class="ownership-target-preview" style="display:none;">
+              <div class="ownership-target-avatar" id="transfer-target-avatar">A</div>
+              <div>
+                <div class="ownership-target-name" id="transfer-target-name">—</div>
+                <div class="ownership-target-email" id="transfer-target-email">—</div>
+              </div>
+            </div>
+            <div class="form-row" style="margin-top:1.5rem;">
+              <label for="transfer-password">Your Current Password (confirmation)</label>
+              <div class="password-wrapper">
+                <input type="password" id="transfer-password" class="form-control" placeholder="Enter your current password to confirm" autocomplete="current-password" />
+                <button type="button" class="toggle-password" onclick="toggleTransferPassword()" aria-label="Toggle password">
+                  <svg id="transfer-pw-eye" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Confirmation checkbox -->
+            <div class="ownership-confirm-check">
+              <input type="checkbox" id="transfer-confirm-check" />
+              <label for="transfer-confirm-check">I understand this will permanently transfer Super Admin ownership and cannot be undone.</label>
+            </div>
+
+            <div style="margin-top:1.5rem;text-align:right;">
+              <button class="btn danger" id="transfer-submit-btn" onclick="submitOwnershipTransfer()" disabled>
+                🔄 Transfer Ownership
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- Warranty Detail Modal -->
+    <div id="warranty-detail-modal" class="modal" style="display:none;">
+      <div class="modal-content stock-modal-large">
+        <div class="modal-header">
+          <h3>🛡️ Warranty Details</h3>
+          <button type="button" class="modal-close" onclick="closeWarrantyModal()">&times;</button>
+        </div>
+        <div id="warranty-detail-content" class="modal-body"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn secondary" onclick="closeWarrantyModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================
+         MODAL TEMPLATES (cloned by JS — not rendered directly)
+         ============================================================ -->
+
+    <!-- Force Password Reset Modal -->
+    <template id="tpl-force-reset-modal">
+      <div id="force-password-reset-modal" class="modal" style="display:flex;">
+        <div class="modal-content" style="max-width:450px;">
+          <div class="modal-header force-reset-header">
+            <h3>🔐 Password Reset Required</h3>
+          </div>
+          <div class="modal-body">
+            <div class="alert alert-warning mb-2">
+              <strong>⚠️ Security Notice:</strong> Your password was reset by an administrator.
+              You must create a new password before continuing.
+            </div>
+            <form id="force-password-reset-form">
+              <div class="form-row mb-2">
+                <label for="force-current-password">Current/Temporary Password <span class="required">*</span></label>
+                <input type="password" id="force-current-password" placeholder="Enter your temporary password" required />
+              </div>
+              <div class="form-row mb-2">
+                <label for="force-new-password">New Password <span class="required">*</span></label>
+                <input type="password" id="force-new-password" placeholder="At least 8 characters" required minlength="8" />
+              </div>
+              <div class="form-row mb-2">
+                <label for="force-confirm-password">Confirm New Password <span class="required">*</span></label>
+                <input type="password" id="force-confirm-password" placeholder="Confirm your new password" required />
+              </div>
+              <div id="force-reset-error" class="alert alert-danger d-none"></div>
+              <div class="modal-actions mt-2">
+                <button type="button" class="btn warning" onclick="auth.logout()">🚪 Logout Instead</button>
+                <button type="submit" class="btn primary" id="force-reset-btn">
+                  <span class="btn-text">🔑 Change Password</span>
+                  <span class="btn-loader d-none">Changing...</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <!-- User Profile Modal -->
+    <template id="tpl-user-profile-modal">
+      <div class="profile-modal">
+        <button class="profile-modal-close" id="close-profile-modal">&times;</button>
+        <div class="profile-modal-header">
+          <div class="profile-modal-avatar"></div>
+          <h2 class="profile-modal-name"></h2>
+          <p class="profile-modal-email"></p>
+          <span class="profile-modal-role"></span>
+        </div>
+        <div class="profile-modal-body">
+          <div class="profile-modal-item">
+            <span class="profile-modal-label"><span class="profile-item-icon">✅</span> Status</span>
+            <span class="profile-modal-value"><span class="status-badge active">Active</span></span>
+          </div>
+          <div class="profile-modal-item">
+            <span class="profile-modal-label"><span class="profile-item-icon">📅</span> Member Since</span>
+            <span class="profile-modal-value" data-field="member-since">N/A</span>
+          </div>
+          <div class="profile-modal-item">
+            <span class="profile-modal-label"><span class="profile-item-icon">🕐</span> Last Login</span>
+            <span class="profile-modal-value" data-field="last-login">Today</span>
+          </div>
+          <div class="profile-modal-item">
+            <span class="profile-modal-label"><span class="profile-item-icon">🔐</span> Account Type</span>
+            <span class="profile-modal-value" data-field="account-type">USER</span>
+          </div>
+        </div>
+        <div class="profile-modal-footer">
+          <button class="btn ghost" id="profile-modal-settings">⚙️ Settings</button>
+          <button class="btn primary" id="profile-modal-close-btn">Close</button>
+        </div>
+      </div>
+    </template>
+
+    <!-- Contact Support Modal -->
+    <template id="tpl-contact-modal">
+      <div class="support-modal">
+        <div class="support-modal-header">
+          <div class="support-modal-icon">📧</div>
+          <h3>Contact Support</h3>
+          <p>We're here to help! Send us a message.</p>
+        </div>
+        <button class="profile-modal-close" id="close-contact-modal">&times;</button>
+        <div class="support-modal-body">
+          <form id="contact-support-form">
+            <div class="form-group">
+              <label for="contact-subject">Subject</label>
+              <select id="contact-subject" class="form-control" required>
+                <option value="">-- Select Subject --</option>
+                <option value="bug">🐛 Bug Report</option>
+                <option value="feature">💡 Feature Request</option>
+                <option value="account">👤 Account Issue</option>
+                <option value="billing">💳 Billing Question</option>
+                <option value="other">📝 Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="contact-message">Message</label>
+              <textarea id="contact-message" class="form-control" rows="5" placeholder="Please describe your issue in detail..." required></textarea>
+            </div>
+            <div class="support-modal-actions">
+              <button type="button" class="btn ghost" id="cancel-contact">Cancel</button>
+              <button type="submit" class="btn primary">📤 Send Message</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </template>
+
+    <!-- Feedback Modal -->
+    <template id="tpl-feedback-modal">
+      <div class="support-modal feedback-modal">
+        <div class="support-modal-header feedback-header">
+          <div class="support-modal-icon">💡</div>
+          <h3>Send Feedback</h3>
+          <p>Help us improve AcuStock!</p>
+        </div>
+        <button class="profile-modal-close" id="close-feedback-modal">&times;</button>
+        <div class="support-modal-body">
+          <form id="feedback-form">
+            <div class="form-group">
+              <label>How would you rate AcuStock?</label>
+              <div class="rating-container">
+                <button type="button" class="rating-star" data-rating="1">★</button>
+                <button type="button" class="rating-star" data-rating="2">★</button>
+                <button type="button" class="rating-star" data-rating="3">★</button>
+                <button type="button" class="rating-star" data-rating="4">★</button>
+                <button type="button" class="rating-star" data-rating="5">★</button>
+              </div>
+              <input type="hidden" id="feedback-rating" value="0">
+            </div>
+            <div class="form-group">
+              <label for="feedback-text">Your Feedback</label>
+              <textarea id="feedback-text" class="form-control" rows="4" placeholder="What can we improve? Share your thoughts..." required></textarea>
+            </div>
+            <div class="support-modal-actions">
+              <button type="button" class="btn ghost" id="cancel-feedback">Cancel</button>
+              <button type="submit" class="btn primary">🚀 Submit Feedback</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </template>
+
+    <!-- Pending Invites Template -->
+    <template id="invite-list">
+      <section class="card full">
+        <div class="card-head">
+          <h3>📬 Pending Invites</h3>
+          <div class="head-actions">
+            <button class="btn primary btn-sm" onclick="openInviteModal()">➕ Send New Invite</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="invite-table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Invited By</th>
+                  <th>Sent</th>
+                  <th>Expires</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- ============================================ -->
+    <!-- ALL NOTIFICATIONS PAGE                       -->
+    <!-- ============================================ -->
+    <template id="all-notifications">
+      <section class="notif-page">
+        <div class="notif-page-header">
+          <div class="notif-page-title-row">
+            <h2>🔔 All Notifications</h2>
+            <div class="notif-page-actions">
+              <button class="btn ghost sm" id="notif-mark-all-read">✓ Mark all read</button>
+              <button class="btn ghost sm danger" id="notif-delete-read">🗑️ Clear read</button>
+            </div>
+          </div>
+          <!-- Category Tabs -->
+          <div class="notif-tabs" id="notif-category-tabs">
+            <button class="notif-tab active" data-category="ALL">All</button>
+            <button class="notif-tab" data-category="STOCK">📦 Stock</button>
+            <button class="notif-tab" data-category="WARRANTY">🛡️ Warranty</button>
+            <button class="notif-tab" data-category="USER">👤 User</button>
+            <button class="notif-tab" data-category="SECURITY">🔒 Security</button>
+            <button class="notif-tab" data-category="COMPANY">🏢 Company</button>
+            <button class="notif-tab" data-category="SHIPMENT">🚚 Shipment</button>
+            <button class="notif-tab" data-category="SYSTEM">⚙️ System</button>
+          </div>
+          <!-- Filters Row -->
+          <div class="notif-filters">
+            <select id="notif-priority-filter" class="input sm">
+              <option value="">All Priorities</option>
+              <option value="CRITICAL">🔴 Critical</option>
+              <option value="HIGH">🟠 High</option>
+              <option value="MEDIUM">🟡 Medium</option>
+              <option value="LOW">🟢 Low</option>
+            </select>
+            <select id="notif-read-filter" class="input sm">
+              <option value="">All</option>
+              <option value="unread">Unread only</option>
+              <option value="read">Read only</option>
+            </select>
+          </div>
+        </div>
+        <!-- Notifications List -->
+        <div class="notif-page-body" id="notif-page-list">
+          <div class="loading-spinner">Loading notifications...</div>
+        </div>
+        <!-- Pagination -->
+        <div class="notif-pagination" id="notif-pagination"></div>
+      </section>
+    </template>
+
+    <!-- Scripts -->
+
+<script src="../admin-js/script.js?v=25"></script>
+    <script>
+      // Remove FOUC
+      document.body.classList.add('loaded');
+      // All authentication and dashboard initialization is handled by script.js
+      
+      // Global function for saving transporter (inline to bypass cache)
+      async function saveTransporter() {
+        const data = {
+          name: document.getElementById('transporterName')?.value || '',
+          contactPerson: document.getElementById('trans-contact')?.value || '',
+          phone: document.getElementById('trans-contact')?.value || '',
+          email: document.getElementById('trans-email')?.value || '',
+          gstin: document.getElementById('trans-gstin')?.value || '',
+          address: {
+            street: [
+              document.getElementById('trans-address1')?.value,
+              document.getElementById('trans-address2')?.value,
+              document.getElementById('trans-address3')?.value
+            ].filter(Boolean).join(', '),
+            city: document.getElementById('trans-city')?.value || '',
+            state: document.getElementById('trans-state')?.value || '',
+            pincode: document.getElementById('trans-pincode')?.value || '',
+            country: document.getElementById('trans-country')?.value || 'India'
+          }
+        };
+        
+        if (!data.name) {
+          showToast('Transporter name is required', 'error');
+          return;
+        }
+        
+        try {
+          const res = await fetch(API_URL + '/logistics', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(data)
+          });
+          
+          const result = await res.json();
+          
+          if (!res.ok) {
+            throw new Error(result.message || 'Failed to save');
+          }
+          
+          showToast('Transporter added successfully', 'success');
+          loadSection('logistics-list');
+        } catch (err) {
+          console.error('[Transporter] Error:', err);
+          showToast(err.message || 'Failed to add transporter', 'error');
+        }
+      }
+    </script>
+  </body>
+</html>

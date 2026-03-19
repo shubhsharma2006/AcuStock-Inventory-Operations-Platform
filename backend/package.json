@@ -1,0 +1,58 @@
+{
+  "name": "acustock-backend",
+  "version": "1.0.0",
+  "description": "AcuStock Inventory Management System - Backend API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "prod": "NODE_ENV=production node index.js",
+    "pm2:start": "pm2 start ecosystem.config.js --env production",
+    "pm2:stop": "pm2 stop acustock-api",
+    "pm2:restart": "pm2 restart acustock-api",
+    "pm2:logs": "pm2 logs acustock-api",
+    "seed": "node scripts/seedPermissions.js",
+    "verify": "node scripts/verify_fixes.js",
+    "lint": "echo 'Add ESLint configuration for linting'",
+    "test": "echo 'Add test configuration' && exit 0"
+  },
+  "keywords": [
+    "inventory",
+    "management",
+    "stock",
+    "erp",
+    "nodejs",
+    "express",
+    "mongodb"
+  ],
+  "author": "AcuStock Team",
+  "license": "ISC",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@socket.io/cluster-adapter": "^0.3.0",
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^8.2.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.1.1",
+    "morgan": "^1.10.0",
+    "multer": "^2.0.2",
+    "nodemailer": "^8.0.1",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11"
+  }
+}

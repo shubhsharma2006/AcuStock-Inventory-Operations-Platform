@@ -1,0 +1,1017 @@
+<!doctype html>
+<html lang="en">
+  <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="AcuStock - User Dashboard">
+  <title>AcuStock — User Dashboard</title>
+    <link rel="stylesheet" href="user.css">
+    
+    <!-- Socket.IO for Real-time Updates -->
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+    <script src="../shared/config.js"></script>
+    <script src="../shared/realtime.js"></script>
+
+    <!-- Tom Select — searchable dropdowns -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/css/tom-select.bootstrap5.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/tom-select@2.3.1/dist/js/tom-select.complete.min.js"></script>
+    
+    <style>
+      body { opacity: 0; transition: opacity 0.3s ease-in; }
+      body.loaded { opacity: 1; }
+    </style>
+  </head>
+  <body data-page="user">
+    
+    <!-- Toast Notifications Container -->
+    <div id="toast-container" class="toast-container"></div>
+    
+    <!-- Status Update Modal -->
+    <div class="modal-overlay hidden" id="status-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>Update Delivery Status</h3>
+          <button class="modal-close" id="status-modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="shipment-info" id="modal-shipment-info">
+            <p><strong>Reference:</strong> <span id="modal-reference">-</span></p>
+            <p><strong>Customer:</strong> <span id="modal-customer">-</span></p>
+            <p><strong>Product:</strong> <span id="modal-product">-</span></p>
+          </div>
+          <div class="form-row">
+            <label for="modal-status">New Status</label>
+            <select id="modal-status" required>
+              <option value="">Select Status</option>
+              <option value="PENDING">Pending</option>
+              <option value="DISPATCHED">Dispatched</option>
+              <option value="IN_TRANSIT">In Transit</option>
+              <option value="OUT_FOR_DELIVERY">Out for Delivery</option>
+              <option value="DELIVERED">Delivered</option>
+              <option value="RETURNED">Returned</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </div>
+          <div class="form-row" id="received-by-row" style="display:none;">
+            <label for="modal-received-by">Received By</label>
+            <input id="modal-received-by" placeholder="Name of person who received the package" />
+          </div>
+          <div class="form-row">
+            <label for="modal-notes">Notes (Optional)</label>
+            <textarea id="modal-notes" placeholder="Add any notes about this status update..."></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn ghost" id="status-modal-cancel">Cancel</button>
+          <button class="btn primary" id="status-modal-save">Update Status</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="app">
+      <!-- Sidebar -->
+      <aside class="sidebar" id="sidebar" data-role="user">
+        <div class="brand">
+          <div class="brand-text">🏢 AcuStock</div>
+          <p class="brand-subtitle">User Panel</p>
+        </div>
+
+        <!-- User Info Card -->
+        <div class="user-info-card">
+          <div class="user-avatar" id="sidebar-avatar">U</div>
+          <div class="user-details">
+            <div class="user-name" id="sidebar-user-name">User</div>
+            <div class="user-email" id="sidebar-user-phone">-</div>
+          </div>
+        </div>
+
+        <nav class="menu" data-role="user">
+          <ul>
+            <li class="menu-group">
+              <a href="#" class="single active" data-section="dashboard">
+                <span class="icon">📊</span>
+                <span>Dashboard</span>
+              </a>
+            </li>
+            <li class="menu-group">
+              <a href="#" class="single" data-section="all-products">
+                <span class="icon">📦</span>
+                <span>All Products</span>
+              </a>
+            </li>
+            <li class="menu-group">
+              <a href="#" class="single" data-section="shipping-management">
+                <span class="icon">🚚</span>
+                <span>Shipping (Stock OUT)</span>
+              </a>
+            </li>
+            <li class="menu-group">
+              <a href="#" class="single" data-section="supply-management">
+                <span class="icon">📥</span>
+                <span>Supply (Stock IN)</span>
+              </a>
+            </li>
+            <li class="menu-group">
+              <a href="#" class="single" data-section="warranty-list">
+                <span class="icon">🛡️</span>
+                <span>Warranty</span>
+              </a>
+            </li>
+            <li class="menu-group">
+              <a href="#" class="single" data-section="profile">
+                <span class="icon">👤</span>
+                <span>My Profile</span>
+              </a>
+            </li>
+            <li class="menu-group logout-group">
+              <button id="logout-btn" class="single logout-btn">
+                <span class="icon">🚪</span>
+                <span>Logout</span>
+              </button>
+            </li>
+          </ul>
+        </nav>
+      </aside>
+
+      <!-- Main panel -->
+      <div class="main">
+        <header class="topbar">
+          <div class="left">
+            <button id="toggle-sidebar" class="hamburger" aria-label="Toggle sidebar">☰</button>
+            <div class="logo-circle">
+              <img src="../assets/image.png" alt="AcuStock Logo" onerror="this.style.display='none'" />
+            </div>
+            <h1 class="app-title">AcuStock</h1>
+          </div>
+          <div class="right">
+            <div class="search">
+              <input id="global-search" placeholder="Quick search..." />
+            </div>
+            <div class="actions">
+              <!-- Notifications Dropdown -->
+              <div class="dropdown-wrapper">
+                <button class="btn ghost notification-bell" id="notification-btn">
+                  🔔
+                  <span class="notification-badge" id="notification-badge" style="display: none;">0</span>
+                </button>
+                <div class="dropdown-panel" id="notification-dropdown" style="display: none;">
+                  <div class="dropdown-header">
+                    <h4>Notifications</h4>
+                    <button class="btn-link" id="mark-all-read">Mark all read</button>
+                  </div>
+                  <div class="dropdown-body" id="notification-list">
+                    <p class="no-notifications">No notifications</p>
+                  </div>
+                  <div class="dropdown-footer">
+                    <a href="#" id="view-all-notifications">View All</a>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Support Dropdown -->
+              <div class="dropdown-wrapper">
+                <button class="btn ghost" id="support-btn">💬 Support</button>
+                <div class="dropdown-panel" id="support-panel" style="display: none;">
+                  <div class="dropdown-header">
+                    <h4>Help & Support</h4>
+                  </div>
+                  <div class="dropdown-body">
+                    <a href="#" class="support-link" data-action="docs">
+                      <span class="support-icon">📖</span>
+                      <div class="support-info">
+                        <span class="support-title">Documentation</span>
+                        <span class="support-desc">Browse user guides & tutorials</span>
+                      </div>
+                    </a>
+                    <a href="#" class="support-link" data-action="faq">
+                      <span class="support-icon">❓</span>
+                      <div class="support-info">
+                        <span class="support-title">FAQ</span>
+                        <span class="support-desc">Frequently asked questions</span>
+                      </div>
+                    </a>
+                    <a href="#" class="support-link" data-action="contact">
+                      <span class="support-icon">📧</span>
+                      <div class="support-info">
+                        <span class="support-title">Contact Support</span>
+                        <span class="support-desc">Get help from our team</span>
+                      </div>
+                    </a>
+                    <a href="#" class="support-link" data-action="feedback">
+                      <span class="support-icon">💡</span>
+                      <div class="support-info">
+                        <span class="support-title">Send Feedback</span>
+                        <span class="support-desc">Help us improve AcuStock</span>
+                      </div>
+                    </a>
+                  </div>
+                  <div class="dropdown-footer">
+                    <span class="version-info">AcuStock v1.0.0</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Profile Dropdown -->
+              <div class="dropdown-wrapper">
+                <button class="btn ghost profile-btn" id="user-profile-btn">
+                  <span id="header-name">User</span>
+                  <span class="profile-avatar" id="header-avatar">U</span>
+                </button>
+                <div class="dropdown-panel profile-panel" id="profile-panel" style="display: none;">
+                  <div class="profile-header">
+                    <div class="profile-avatar-large" id="profile-avatar-large">U</div>
+                    <div class="profile-info">
+                      <span class="profile-name" id="profile-name">User</span>
+                      <span class="profile-email" id="profile-email">user@acustock.com</span>
+                      <span class="profile-role-badge" id="profile-role">USER</span>
+                    </div>
+                  </div>
+                  <div class="dropdown-body">
+                    <a href="#" class="profile-link" data-action="my-profile">
+                      <span class="profile-link-icon">👤</span>
+                      <span>My Profile</span>
+                    </a>
+                    <a href="#" class="profile-link" data-action="change-password">
+                      <span class="profile-link-icon">🔑</span>
+                      <span>Change Password</span>
+                    </a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="profile-link logout-link" id="profile-logout">
+                      <span class="profile-link-icon">🚪</span>
+                      <span>Logout</span>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main class="content" id="content">
+          <!-- Area where templates will be loaded -->
+        </main>
+        
+        <footer class="dashboard-footer">
+          <p>© 2026 AcuStock. All Rights Reserved.</p>
+          <p class="footer-links">
+            <a href="#">Privacy Policy</a> · <a href="#">Terms of Service</a> · <a href="#">Help</a>
+          </p>
+        </footer>
+      </div>
+    </div>
+
+    <!-- Templates for sections -->
+    <!-- Dashboard -->
+    <template id="dashboard">
+      <section class="dashboard-section">
+        <div class="welcome-banner">
+          <div class="welcome-content">
+            <h2>Welcome back, <span id="welcome-name">User</span>! 👋</h2>
+            <p class="muted">Here's what's happening with your inventory today.</p>
+          </div>
+        </div>
+        
+        <h3 class="section-title">Dashboard Overview</h3>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">📦</div>
+            <div class="stat-info">
+              <h4>Total Products</h4>
+              <div class="stat-value" id="total-products">0</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">🚚</div>
+            <div class="stat-info">
+              <h4>Total Shipments</h4>
+              <div class="stat-value" id="total-shipments">0</div>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📥</div>
+            <div class="stat-info">
+              <h4>Total Supplies</h4>
+              <div class="stat-value" id="total-supplies">0</div>
+            </div>
+          </div>
+          <div class="stat-card warning clickable" id="pending-card" data-action="view-pending">
+            <div class="stat-icon">⏳</div>
+            <div class="stat-info">
+              <h4>Pending Deliveries</h4>
+              <div class="stat-value" id="pending-deliveries">0</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Pending Deliveries Section -->
+        <div class="pending-deliveries-section" id="pending-deliveries-section">
+          <h3 class="section-title">⏳ Pending Deliveries</h3>
+          <div class="card">
+            <div class="card-head">
+              <h3>Shipments Awaiting Delivery</h3>
+              <div class="head-actions">
+                <select id="pending-status-filter" class="status-filter">
+                  <option value="">All Pending</option>
+                  <option value="PENDING">Pending</option>
+                  <option value="DISPATCHED">Dispatched</option>
+                  <option value="IN_TRANSIT">In Transit</option>
+                  <option value="OUT_FOR_DELIVERY">Out for Delivery</option>
+                </select>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="table-wrap">
+                <table class="table" id="pending-table">
+                  <thead>
+                    <tr>
+                      <th>Reference</th>
+                      <th>Product</th>
+                      <th>Customer</th>
+                      <th>AWB/Tracking</th>
+                      <th>Status</th>
+                      <th>Dispatch Date</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="pending-tbody">
+                    <!-- Rows will be injected by JS -->
+                  </tbody>
+                </table>
+              </div>
+              <div class="empty-state hidden" id="pending-empty">
+                <div class="empty-icon">✅</div>
+                <p>No pending deliveries! All shipments have been delivered.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- All Products -->
+    <template id="all-products">
+      <section class="card full" data-role="user">
+        <div class="card-head">
+          <h3>All Products</h3>
+          <div class="head-actions">
+            <input id="product-search" placeholder="Search products..." />
+            <!-- Add Product button removed for user role -->
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="table-wrap">
+            <table class="table" id="product-table">
+              <thead>
+                <tr>
+                  <th>Product Name</th>
+                  <th>Short Name</th>
+                  <th>HSN Code</th>
+                  <th>Total Qty</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <!-- Rows will be injected by user.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card-foot pager">
+          <button class="btn ghost" id="product-prev">Prev</button>
+          <div id="product-page">1</div>
+          <button class="btn ghost" id="product-next">Next</button>
+        </div>
+      </section>
+    </template>
+     <!--add products-->
+     <!-- Add Product -->
+<!-- Add Product template removed for user role: users cannot add products -->
+
+    <!-- Stock OUT Template (Shipping/Buyer Entry) - Same as Manager -->
+    <template id="shipping-management">
+      <section class="card">
+        <div class="card-head">
+          <h3>Stock Buyer Entry (Stock OUT)</h3>
+          <p class="card-subtitle">Record outgoing stock to buyer</p>
+        </div>
+        <form id="stock-buyer-form" class="card-body form-grid">
+          
+          <!-- Product Information -->
+          <div class="form-section-header" style="grid-column: 1/-1;">
+            <h4>📦 Product Details</h4>
+          </div>
+
+          <div class="form-row">
+            <label for="by-productName">Product Name <span class="required">*</span></label>
+            <select id="by-productName" name="productName" required>
+              <option value="">-- Select Product Name --</option>
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-productId">Model / Short Name <span class="required">*</span></label>
+            <select id="by-productId" name="productId" required disabled>
+              <option value="">-- Select Product Name First --</option>
+            </select>
+            <span class="error-message"></span>
+            <small class="field-hint" id="by-stock-info" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+          </div>
+          <div class="form-row">
+            <label for="by-modelVariant">Variant (Optional)</label>
+            <input id="by-modelVariant" name="modelVariant" placeholder="Enter variant if any" />
+          </div>
+          <div class="form-row">
+            <label for="by-quantity">Quantity <span class="required">*</span></label>
+            <input id="by-quantity" name="quantity" type="number" min="1" placeholder="Enter quantity" required />
+            <span class="error-message"></span>
+            <small class="field-hint" id="by-serial-hint" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+          </div>
+          <div class="form-row">
+            <label for="by-condition">Condition</label>
+            <select id="by-condition" name="condition">
+              <option value="">-- Select Condition --</option>
+              <option value="New">New</option>
+              <option value="Repair">Repair</option>
+              <option value="Demo">Demo</option>
+            </select>
+          </div>
+
+          <!-- Serial Numbers Section -->
+          <div class="form-row serial-number-section" id="buyer-serial-section" style="display:none; grid-column:1/-1;">
+            <div class="serial-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <label style="margin: 0; font-weight: 600;">🔢 Serial Numbers <span class="required">*</span></label>
+              <div class="serial-actions">
+                <button type="button" class="btn secondary btn-sm" id="buyer-scan-serials">
+                  📷 Scan Barcode
+                </button>
+                <button type="button" class="btn secondary btn-sm" id="buyer-clear-serials">
+                  🗑️ Clear All
+                </button>
+              </div>
+            </div>
+            <div class="serial-info-bar" style="background: #fff7ed; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+              <span id="buyer-serial-count">Enter <strong>0</strong> serial numbers</span>
+              <span id="buyer-serial-status" class="badge">0 / 0 filled</span>
+            </div>
+            <!-- Text input boxes (one per unit quantity) -->
+            <div id="buyer-serial-inputs" class="serial-inputs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 300px; overflow-y: auto; padding: 4px;">
+              <!-- Dynamic serial number inputs will be inserted here -->
+            </div>
+            <!-- Available serials (click to auto-fill) -->
+            <div class="serial-available-list" id="buyer-available-serials" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e7eb;">
+              <details>
+                <summary style="cursor: pointer; color: #6b7280; font-size: 0.9rem;">📋 Available Serial Numbers (click to select)</summary>
+                <div id="buyer-serials-list" style="margin-top: 10px; max-height: 150px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 8px;">
+                  <!-- Available serials will be loaded here -->
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <!-- Buyer Information -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>🏢 Buyer Details</h4>
+          </div>
+
+          <div class="form-row" style="grid-column: 1/-1;">
+            <label for="by-companySelect">Select Company</label>
+            <select id="by-companySelect" name="companySelect">
+              <option value="">-- Select Existing Company or Enter New --</option>
+            </select>
+            <small class="helper-text">Select a company to auto-fill details, or leave empty to enter manually</small>
+          </div>
+          <div class="form-row">
+            <label for="by-companyName">Company Name <span class="required">*</span></label>
+            <input id="by-companyName" name="companyName" placeholder="Enter company name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-customerName">Contact Person</label>
+            <input id="by-customerName" name="customerName" placeholder="Enter contact person name" />
+          </div>
+          <div class="form-row">
+            <label for="by-customerPhone">Phone <span class="required">*</span></label>
+            <input id="by-customerPhone" name="customerPhone" placeholder="Enter phone number" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-customerEmail">Email</label>
+            <input id="by-customerEmail" name="customerEmail" type="email" placeholder="Enter email" />
+          </div>
+          <div class="form-row">
+            <label for="by-customerAddress">Address</label>
+            <input id="by-customerAddress" name="customerAddress" placeholder="Enter address" />
+          </div>
+          <div class="form-row">
+            <label for="by-city">City</label>
+            <input id="by-city" name="city" placeholder="Enter city" />
+          </div>
+          <div class="form-row">
+            <label for="by-state">State</label>
+            <input id="by-state" name="state" placeholder="Enter state" />
+          </div>
+          <div class="form-row">
+            <label for="by-pincode">Pincode</label>
+            <input id="by-pincode" name="pincode" placeholder="Enter pincode" />
+          </div>
+
+          <!-- Transaction Details -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>💳 Transaction Details</h4>
+          </div>
+
+          <div class="form-row">
+            <label for="by-buyerType">Buyer Type</label>
+            <select id="by-buyerType" name="buyerType">
+              <option value="">-- Select Type --</option>
+               <option value="Retail">END USER</option>
+              <option value="Wholesale">RESELLER</option>
+              <option value="Distributor">SI PARTNER</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="by-paymentMethod">Payment Method</label>
+            <select id="by-paymentMethod" name="paymentMethod">
+              <option value="">-- Select Method --</option>
+              <option value="Cash">Cash</option>
+              <option value="Credit Card">Credit Card</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="UPI">UPI</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="by-transactionId">Transaction ID</label>
+            <input id="by-transactionId" name="transactionId" placeholder="Enter transaction ID" />
+          </div>
+          <div class="form-row">
+            <label for="by-purchaseDate">Sales Date <span class="required">*</span></label>
+            <input id="by-purchaseDate" name="purchaseDate" type="date" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="by-sellerWarrantyPeriod">Seller Warranty <span class="hint-text">(given to customer, optional)</span></label>
+            <input id="by-sellerWarrantyPeriod" name="sellerWarrantyPeriod" placeholder="e.g., 6 months, 1 year" />
+          </div>
+          <div class="form-row">
+            <label for="by-receivedBy">Received By</label>
+            <input id="by-receivedBy" name="receivedBy" placeholder="Enter receiver name" />
+          </div>
+          <div class="form-row">
+            <label for="by-courierPartner">Courier Partner</label>
+            <input id="by-courierPartner" name="courierPartner" placeholder="Enter courier partner name" />
+          </div>
+
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+            <button type="button" class="btn ghost" id="stock-buyer-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="stock-buyer-save">Save Entry</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+    <!-- Stock IN Template (Supply/Supplier Entry) - Same as Manager -->
+    <template id="supply-management">
+      <section class="card">
+        <div class="card-head">
+          <h3>Stock Supplier Entry (Stock IN)</h3>
+          <p class="card-subtitle">Record incoming stock from supplier</p>
+        </div>
+        <form id="stock-supplier-form" class="card-body form-grid">
+          
+          <!-- Product Information -->
+          <div class="form-section-header" style="grid-column: 1/-1;">
+            <h4>📦 Product Details</h4>
+          </div>
+          
+          <div class="form-row">
+            <label for="sp-productName">Product Name <span class="required">*</span></label>
+            <select id="sp-productName" name="productName" required>
+              <option value="">-- Select Product Name --</option>
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-productId">Model / Short Name <span class="required">*</span></label>
+            <select id="sp-productId" name="productId" required disabled>
+              <option value="">-- Select Product Name First --</option>
+            </select>
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-modelVariant">Variant (Optional)</label>
+            <input id="sp-modelVariant" name="modelVariant" placeholder="Enter variant if any" />
+          </div>
+          <div class="form-row">
+            <label for="sp-quantity">Quantity <span class="required">*</span></label>
+            <input id="sp-quantity" name="quantity" type="number" min="1" placeholder="Enter quantity" required />
+            <span class="error-message"></span>
+            <small class="field-hint" id="sp-serial-hint" style="display:none; color: #6b7280; margin-top: 4px;"></small>
+          </div>
+          <div class="form-row">
+            <label for="sp-condition">Condition</label>
+            <select id="sp-condition" name="condition">
+              <option value="">-- Select Condition --</option>
+              <option value="New">New</option>
+              <option value="Repair">Repair</option>
+              <option value="Demo">Demo</option>
+            </select>
+          </div>
+
+          <!-- Serial Numbers Section -->
+          <div class="form-row serial-number-section" id="supplier-serial-section" style="display:none; grid-column:1/-1;">
+            <div class="serial-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <label style="margin: 0; font-weight: 600;">🔢 Serial Numbers <span class="required">*</span></label>
+              <div class="serial-actions">
+                <button type="button" class="btn secondary btn-sm" id="supplier-auto-generate-serials">
+                  ⚡ Auto Generate
+                </button>
+                <button type="button" class="btn secondary btn-sm" id="supplier-clear-serials">
+                  🗑️ Clear All
+                </button>
+              </div>
+            </div>
+            <div class="serial-info-bar" style="background: #f0f9ff; padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+              <span id="supplier-serial-count">Enter <strong>0</strong> serial numbers</span>
+              <span id="supplier-serial-status" class="badge">0 / 0 filled</span>
+            </div>
+            <div id="supplier-serial-inputs" class="serial-inputs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; max-height: 300px; overflow-y: auto; padding: 4px;">
+              <!-- Dynamic serial number inputs will be inserted here -->
+            </div>
+            <div class="serial-bulk-section" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e5e7eb;">
+              <details>
+                <summary style="cursor: pointer; color: #6b7280; font-size: 0.9rem;">📋 Bulk Entry (paste or upload)</summary>
+                <div style="margin-top: 10px;">
+                  <textarea id="supplier-bulk-serials" rows="3" placeholder="Paste serial numbers here (one per line or comma-separated)" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;"></textarea>
+                  <div style="margin-top: 8px; display: flex; gap: 10px;">
+                    <button type="button" class="btn secondary btn-sm" id="supplier-apply-bulk">Apply Bulk Entry</button>
+                    <label for="supplier-serial-file" class="btn secondary btn-sm" style="cursor: pointer;">
+                      📤 Upload CSV
+                    </label>
+                    <input type="file" id="supplier-serial-file" accept=".csv,.txt" style="display:none;" />
+                  </div>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <!-- Supplier Information -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>🏢 Supplier Details</h4>
+          </div>
+
+          <div class="form-row" style="grid-column: 1/-1;">
+            <label for="sp-companySelect">Select Company</label>
+            <select id="sp-companySelect" name="companySelect">
+              <option value="">-- Select Existing Company or Enter New --</option>
+            </select>
+            <small class="helper-text">Select a company to auto-fill details, or leave empty to enter manually</small>
+          </div>
+          <div class="form-row">
+            <label for="sp-companyName">Company Name <span class="required">*</span></label>
+            <input id="sp-companyName" name="companyName" placeholder="Enter company name" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-customerName">Contact Person</label>
+            <input id="sp-customerName" name="customerName" placeholder="Enter contact person name" />
+          </div>
+          <div class="form-row">
+            <label for="sp-customerPhone">Phone <span class="required">*</span></label>
+            <input id="sp-customerPhone" name="customerPhone" placeholder="Enter phone number" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-customerEmail">Email</label>
+            <input id="sp-customerEmail" name="customerEmail" type="email" placeholder="Enter email" />
+          </div>
+          <div class="form-row">
+            <label for="sp-customerAddress">Address</label>
+            <input id="sp-customerAddress" name="customerAddress" placeholder="Enter address" />
+          </div>
+          <div class="form-row">
+            <label for="sp-city">City</label>
+            <input id="sp-city" name="city" placeholder="Enter city" />
+          </div>
+          <div class="form-row">
+            <label for="sp-state">State</label>
+            <input id="sp-state" name="state" placeholder="Enter state" />
+          </div>
+          <div class="form-row">
+            <label for="sp-pincode">Pincode</label>
+            <input id="sp-pincode" name="pincode" placeholder="Enter pincode" />
+          </div>
+
+          <!-- Transaction Details -->
+          <div class="form-section-header" style="grid-column: 1/-1; margin-top: 20px;">
+            <h4>💳 Transaction Details</h4>
+          </div>
+
+          <div class="form-row">
+            <label for="sp-supplierType">Supplier Type</label>
+            <select id="sp-supplierType" name="supplierType">
+              <option value="">-- Select Type --</option>
+              <option value="Retail">END USER</option>
+              <option value="Wholesale">RESELLER</option>
+              <option value="Distributor">SI PARTNER</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="sp-paymentMethod">Payment Method</label>
+            <select id="sp-paymentMethod" name="paymentMethod">
+              <option value="">-- Select Method --</option>
+              <option value="Cash">Cash</option>
+              <option value="Credit Card">Credit Card</option>
+              <option value="Bank Transfer">Bank Transfer</option>
+              <option value="UPI">UPI</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="sp-transactionId">Transaction ID</label>
+            <input id="sp-transactionId" name="transactionId" placeholder="Enter transaction ID" />
+          </div>
+          <div class="form-row">
+            <label for="sp-supplyDate">Purchase Date <span class="required">*</span></label>
+            <input id="sp-supplyDate" name="supplyDate" type="date" required />
+            <span class="error-message"></span>
+          </div>
+          <div class="form-row">
+            <label for="sp-warrantyPeriod">Purchase Warranty <span class="hint-text">(from supplier)</span></label>
+            <input id="sp-warrantyPeriod" name="warrantyPeriod" placeholder="e.g., 12 months, 2 years" />
+          </div>
+          <div class="form-row">
+            <label for="sp-deliveredBy">Delivered By</label>
+            <input id="sp-deliveredBy" name="deliveredBy" placeholder="Enter delivery person name" />
+          </div>
+
+          <div class="card-foot" style="grid-column:1/-1;display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+            <button type="button" class="btn ghost" id="stock-supplier-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="stock-supplier-save">Save Entry</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+
+    <!-- Profile -->
+    <template id="profile">
+      <section class="profile-card card">
+        <div class="card-head">
+          <h3>User Profile</h3>
+        </div>
+        <form id="profile-form" class="profile-form" autocomplete="off" novalidate>
+          <div class="form-section">
+            <h4>Personal Information</h4>
+            <div class="form-row">
+              <label for="profile-name">Full Name <span aria-hidden="true" style="color:#ef4444">*</span></label>
+              <input id="profile-name" name="name" required placeholder="Enter your full name" autocomplete="name" />
+            </div>
+            <div class="form-row">
+              <label for="profile-phone">Phone Number</label>
+              <input id="profile-phone" name="phone" readonly disabled class="readonly-field" autocomplete="tel" />
+              <small class="field-note">🔒 Assigned by Admin/Manager - Cannot be changed</small>
+            </div>
+            <div class="form-row">
+              <label for="profile-email">Email</label>
+              <input id="profile-email" name="email" type="email" readonly disabled class="readonly-field" autocomplete="email" />
+              <small class="field-note">🔒 Assigned by Admin/Manager - Cannot be changed</small>
+            </div>
+          </div>
+          <div class="form-section">
+            <h4>Change Password</h4>
+            <div class="form-row">
+              <label for="profile-current-password">Current Password</label>
+              <input id="profile-current-password" name="currentPassword" type="password" placeholder="Enter current password" />
+            </div>
+            <div class="form-row">
+              <label for="profile-new-password">New Password</label>
+              <input id="profile-new-password" name="newPassword" type="password" placeholder="Enter new password (min 8 characters)" />
+            </div>
+            <div class="form-row">
+              <label for="profile-confirm-password">Confirm New Password</label>
+              <input id="profile-confirm-password" name="confirmPassword" type="password" placeholder="Confirm new password" />
+            </div>
+          </div>
+          <div class="form-section">
+            <h4>Account Settings</h4>
+            <div class="form-row">
+              <label for="profile-role">Role</label>
+              <input id="profile-role" name="role" value="User" readonly tabindex="-1" aria-readonly="true" class="readonly-field" />
+            </div>
+            <div class="form-row">
+              <label for="profile-status">Status</label>
+              <input id="profile-status" name="status" value="Active" readonly tabindex="-1" aria-readonly="true" class="readonly-field" />
+            </div>
+          </div>
+          <div class="card-foot" style="grid-column: 1 / -1;">
+            <button type="button" class="btn ghost" id="profile-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="profile-save">Save Profile</button>
+          </div>
+        </form>
+      </section>
+    </template>
+
+
+
+
+    <!-- Warranty List (Seller only for USER role) -->
+    <template id="warranty-list">
+      <section class="warranty-section">
+        <div class="section-header-row">
+          <h2 class="section-title">🛡️ Warranty Tracker</h2>
+        </div>
+
+        <!-- Stats Grid (Seller only) -->
+        <div class="warranty-stats-grid">
+          <div class="warranty-stat-card sw-card">
+            <div class="ws-icon">✅</div>
+            <div class="ws-value" id="sw-active">—</div>
+            <div class="ws-label">Active Warranties</div>
+          </div>
+          <div class="warranty-stat-card sw-card warning">
+            <div class="ws-icon">⚠️</div>
+            <div class="ws-value" id="sw-expiring">—</div>
+            <div class="ws-label">Expiring Soon</div>
+          </div>
+          <div class="warranty-stat-card sw-card danger">
+            <div class="ws-icon">❌</div>
+            <div class="ws-value" id="sw-expired">—</div>
+            <div class="ws-label">Expired</div>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="warranty-filters">
+          <input type="text" id="warranty-search" class="warranty-search-input" placeholder="🔍 Search by product, serial, or buyer…" />
+          <select id="warranty-status-filter">
+            <option value="">All Statuses</option>
+            <option value="active">Active</option>
+            <option value="expiring">Expiring Soon</option>
+            <option value="expired">Expired</option>
+          </select>
+        </div>
+
+        <!-- Table -->
+        <div class="card" style="margin-top:0;">
+          <div class="table-wrap" style="overflow-x:auto;">
+            <table class="table" id="warranty-table">
+              <thead>
+                <tr>
+                  <th>Serial #</th>
+                  <th>Product</th>
+                  <th>🏷️ Seller Warranty</th>
+                  <th>SW Days Left</th>
+                  <th>Buyer</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="warranty-tbody">
+                <tr><td colspan="6" style="text-align:center;padding:20px;">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card-foot pager">
+            <button class="btn ghost" id="warranty-prev">Prev</button>
+            <span id="warranty-page-info">Page 1 of 1</span>
+            <button class="btn ghost" id="warranty-next">Next</button>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- ============================================ -->
+    <!-- ALL NOTIFICATIONS PAGE                       -->
+    <!-- ============================================ -->
+    <template id="all-notifications">
+      <section class="notif-page">
+        <div class="notif-page-header">
+          <div class="notif-page-title-row">
+            <h2>🔔 All Notifications</h2>
+            <div class="notif-page-actions">
+              <button class="btn ghost sm" id="notif-mark-all-read">✓ Mark all read</button>
+              <button class="btn ghost sm danger" id="notif-delete-read">🗑️ Clear read</button>
+            </div>
+          </div>
+          <div class="notif-tabs" id="notif-category-tabs">
+            <button class="notif-tab active" data-category="ALL">All</button>
+            <button class="notif-tab" data-category="STOCK">📦 Stock</button>
+            <button class="notif-tab" data-category="WARRANTY">🛡️ Warranty</button>
+            <button class="notif-tab" data-category="SHIPMENT">🚚 Shipment</button>
+            <button class="notif-tab" data-category="SYSTEM">⚙️ System</button>
+          </div>
+          <div class="notif-filters">
+            <select id="notif-priority-filter" class="input sm">
+              <option value="">All Priorities</option>
+              <option value="CRITICAL">🔴 Critical</option>
+              <option value="HIGH">🟠 High</option>
+              <option value="MEDIUM">🟡 Medium</option>
+              <option value="LOW">🟢 Low</option>
+            </select>
+            <select id="notif-read-filter" class="input sm">
+              <option value="">All</option>
+              <option value="unread">Unread only</option>
+              <option value="read">Read only</option>
+            </select>
+          </div>
+        </div>
+        <div class="notif-page-body" id="notif-page-list">
+          <div class="loading-spinner">Loading notifications...</div>
+        </div>
+        <div class="notif-pagination" id="notif-pagination"></div>
+      </section>
+    </template>
+
+    <!-- Warranty Detail Modal -->
+    <div id="warranty-detail-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+      <div class="wd-modal-box">
+        <div class="wd-header">
+          <div>
+            <div class="wd-product-name" id="wd-product-name">—</div>
+            <div class="wd-serial" id="wd-serial">Serial: —</div>
+          </div>
+          <button class="modal-close" onclick="closeWarrantyModal()" style="font-size:1.5rem; background:none; border:none; cursor:pointer; color:var(--muted);">&times;</button>
+        </div>
+
+        <div class="wd-tiers" style="grid-template-columns:1fr;">
+          <!-- Seller Warranty -->
+          <div class="wd-tier-card wd-seller">
+            <h4>🏷️ Seller Warranty <span class="badge" id="wd-seller-badge">—</span></h4>
+            <div class="wd-tier-grid">
+              <div class="wd-field"><span class="wd-label">Period</span><span class="wd-value" id="wd-seller-period">—</span></div>
+              <div class="wd-field"><span class="wd-label">Start Date</span><span class="wd-value" id="wd-seller-start">—</span></div>
+              <div class="wd-field"><span class="wd-label">Expiry Date</span><span class="wd-value" id="wd-seller-expiry">—</span></div>
+              <div class="wd-field"><span class="wd-label">Days Left</span><span class="wd-value" id="wd-seller-days">—</span></div>
+              <div class="wd-field"><span class="wd-label">Buyer</span><span class="wd-value" id="wd-seller-buyer">—</span></div>
+              <div class="wd-field"><span class="wd-label">Buyer Phone</span><span class="wd-value" id="wd-seller-phone">—</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Claims -->
+        <div class="wd-claims" id="wd-claims-section" style="display:none;">
+          <h4>📋 Claim History</h4>
+          <div id="wd-claims-list"></div>
+        </div>
+
+        <div style="text-align:right; margin-top:20px;">
+          <button class="btn ghost" onclick="closeWarrantyModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Product Detail Modal -->
+    <div id="product-detail-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2000; align-items:center; justify-content:center;">
+      <div style="background:var(--card); border-radius:16px; padding:28px; width:90%; max-width:520px; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.2);">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border);">
+          <div>
+            <div id="pd-name" style="font-size:1.2rem; font-weight:700; color:var(--text);">—</div>
+            <div id="pd-shortname" style="font-size:0.85rem; color:var(--muted); margin-top:4px;">—</div>
+          </div>
+          <button onclick="closeProductModal()" style="font-size:1.5rem; background:none; border:none; cursor:pointer; color:var(--muted);">&times;</button>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">HSN Code</div>
+            <div id="pd-hsn" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Total Qty</div>
+            <div id="pd-qty" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Sales Price</div>
+            <div id="pd-sales" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">MRP</div>
+            <div id="pd-mrp" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Low Stock Alert</div>
+            <div id="pd-lowstock" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Purchase Warranty</div>
+            <div id="pd-warranty" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Seller Warranty</div>
+            <div id="pd-seller-warranty" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Serial Tracking</div>
+            <div id="pd-serial" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+          <div>
+            <div style="font-size:0.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px;">Status</div>
+            <div id="pd-status" style="font-weight:600; margin-top:4px;">—</div>
+          </div>
+        </div>
+        <div style="text-align:right; margin-top:24px;">
+          <button class="btn ghost" onclick="closeProductModal()">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="user.js?v=5"></script>
+  </body>
+</html>
