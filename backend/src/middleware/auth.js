@@ -210,3 +210,4 @@ module.exports = {
   enforceSerialPolicy,
   validateObjectId,
 };
+// Note: validateObjectId is a simple middleware to check if :id params are valid MongoDB ObjectIds, preventing CastErrors from reaching the client.
