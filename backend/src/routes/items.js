@@ -4,8 +4,12 @@ const csv = require('csv-parser');
 const fs = require('fs');
 const path = require('path');
 const Item = require('../models/Item');
+const Counter = require('../models/Counter');
 const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
+const checkPlanLimits = require('../middleware/checkPlanLimits');
+const { validateCsvBuffer } = require('../services/storage.service');
+const { logBusinessEvent } = require('../utils/auditHelper');
 
 const router = express.Router();
 
@@ -42,8 +46,48 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({ 
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }
+  limits: { fileSize: Number(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024, files: 1 }
 });
+
+function getUploadErrorResponse(error) {
+  if (!error) {
+    return null;
+  }
+
+  const message = error.message || 'Upload failed';
+
+  switch (error.code) {
+    case 'LIMIT_FILE_SIZE':
+      return { statusCode: 413, error: message || 'File too large' };
+    case 'LIMIT_UNEXPECTED_FILE':
+      return { statusCode: 400, error: message || 'Unexpected file field' };
+    case 'LIMIT_FILE_COUNT':
+      return { statusCode: 400, error: message || 'Too many files uploaded' };
+    case 'LIMIT_PART_COUNT':
+      return { statusCode: 400, error: message || 'Too many parts in form' };
+    case 'LIMIT_FIELD_KEY':
+    case 'LIMIT_FIELD_VALUE':
+    case 'LIMIT_FIELD_COUNT':
+      return { statusCode: 400, error: message || 'Invalid upload form' };
+    default:
+      return { statusCode: 400, error: message || 'Invalid upload' };
+  }
+}
+
+const handleCsvUpload = (req, res, next) => {
+  upload.single('csvFile')(req, res, (err) => {
+    if (err) {
+      const uploadError = getUploadErrorResponse(err);
+      return res.status(uploadError.statusCode).json({
+        success: false,
+        error: uploadError.error,
+        details: err.code === 'LIMIT_FILE_SIZE' ? `Maximum allowed size is ${(Number(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024) / (1024 * 1024)} MB` : undefined
+      });
+    }
+
+    next();
+  });
+};
 
 // ============================================================
 // HELPER FUNCTIONS
@@ -187,15 +231,19 @@ router.get('/bulk-upload/template', requireAuth, requireRole(['ADMIN']), (req, r
 });
 
 // POST /api/items/bulk-upload
-router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), upload.single('csvFile'), async (req, res) => {
+router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload, async (req, res) => {
   let filePath = null;
   
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'No CSV file uploaded' });
+      return res.status(400).json({ success: false, error: 'No CSV file uploaded' });
     }
     
     filePath = req.file.path;
+    const fileBuffer = await fs.promises.readFile(filePath);
+    if (!validateCsvBuffer(fileBuffer)) {
+      return res.status(400).json({ success: false, error: 'Uploaded file is not a valid text CSV' });
+    }
     const products = [];
     const errors = [];
     let rowIndex = 1;
@@ -218,14 +266,15 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), upload.single('
     
     if (errors.length > 0 && products.length === 0) {
       return res.status(400).json({
-        message: 'CSV validation failed',
+        success: false,
+        error: 'CSV validation failed',
         errors: errors.slice(0, 20),
         totalErrors: errors.length
       });
     }
     
     if (products.length === 0) {
-      return res.status(400).json({ message: 'No valid products found in CSV' });
+      return res.status(400).json({ success: false, error: 'No valid products found in CSV' });
     }
     
     // Check for duplicates within CSV using name + shortName combination
@@ -238,26 +287,35 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), upload.single('
         return shortName ? `${name} (${shortName})` : name;
       });
       return res.status(400).json({
-        message: 'Duplicate product (name + model) combinations found in CSV',
+        success: false,
+        error: 'Duplicate product (name + model) combinations found in CSV',
         duplicates: duplicateProducts.slice(0, 10)
       });
     }
     
-    // Check for existing products in database using name + shortName combination
-    const existingProducts = await Item.find({
+    // Check for existing products with same name + model within this tenant
+    const duplicateFilter = {
       isActive: true,
       $or: products.map(p => ({
         name: { $regex: new RegExp(`^${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
         shortName: { $regex: new RegExp(`^${(p.shortName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
       }))
-    }).select('name shortName');
+    };
+    if (req.tenantId) duplicateFilter.tenantId = req.tenantId;
+
+    const existingProducts = await Item.find(duplicateFilter).select('name shortName');
     
     if (existingProducts.length > 0) {
       return res.status(400).json({
-        message: 'Some products already exist in the database (same name + model)',
+        success: false,
+        error: 'Some products already exist in the database (same name + model)',
         existingProducts: existingProducts.map(p => p.shortName ? `${p.name} (${p.shortName})` : p.name).slice(0, 10),
         totalExisting: existingProducts.length
       });
+    }
+
+    if (req.tenantId) {
+      products.forEach(p => { p.tenantId = req.tenantId; });
     }
     
     const insertedProducts = await Item.insertMany(products, { ordered: false });
@@ -266,12 +324,27 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), upload.single('
       global.emitRealTimeUpdate('product-update', {
         action: 'bulk-created',
         count: insertedProducts.length,
+        tenantId: req.tenantId,
         user: req.user.name || req.user.email,
         timestamp: new Date()
       });
     }
+
+    logBusinessEvent({
+      req,
+      action: 'ITEM_IMPORTED',
+      entityType: 'Item',
+      changes: {
+        summary: `Bulk imported ${insertedProducts.length} items from CSV`
+      },
+      details: {
+        count: insertedProducts.length,
+        warningsCount: errors.length
+      }
+    }).catch(() => {});
     
     res.status(201).json({
+      success: true,
       message: 'Successfully uploaded ' + insertedProducts.length + ' products',
       count: insertedProducts.length,
       warnings: errors.length > 0 ? errors.slice(0, 10) : undefined,
@@ -281,9 +354,9 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), upload.single('
   } catch (error) {
     console.error('Bulk upload error:', error);
     if (error.code === 11000) {
-      return res.status(400).json({ message: 'Duplicate product found.', error: error.message });
+      return res.status(400).json({ success: false, error: 'Duplicate product found.', details: error.message });
     }
-    res.status(500).json({ message: 'Failed to process CSV file', error: error.message });
+    res.status(500).json({ success: false, error: 'Failed to process CSV file', details: error.message });
   } finally {
     if (filePath && fs.existsSync(filePath)) {
       fs.unlink(filePath, (err) => {
@@ -300,7 +373,10 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), upload.single('
 // GET /api/items
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const items = await Item.find({ isActive: true })
+    const filter = { isActive: true };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const items = await Item.find(filter)
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 });
 
@@ -319,14 +395,71 @@ router.get('/', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/items/barcode/:code - Look up product by barcode
+router.get('/barcode/:code', requireAuth, async (req, res) => {
+  try {
+    const code = String(req.params.code).trim();
+    if (!code) {
+      return res.status(400).json({ message: 'Barcode code is required' });
+    }
+    const filter = { barcode: code, isActive: true };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(filter).populate('createdBy', 'name email');
+    if (!item) {
+      return res.status(404).json({ message: `No product found for barcode: ${code}` });
+    }
+    const stock = await item.getCurrentStock();
+    const itemObj = item.toObject();
+    itemObj.quantity = stock;
+    itemObj.currentStock = stock;
+    res.json(itemObj);
+  } catch (error) {
+    console.error('Error fetching item by barcode:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// GET /api/items/sku/:sku - Look up product by SKU
+router.get('/sku/:sku', requireAuth, async (req, res) => {
+  try {
+    const sku = String(req.params.sku).trim().toUpperCase();
+    if (!sku) {
+      return res.status(400).json({ message: 'SKU is required' });
+    }
+    const filter = { sku: sku, isActive: true };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(filter).populate('createdBy', 'name email');
+    if (!item) {
+      return res.status(404).json({ message: `No product found for SKU: ${sku}` });
+    }
+    const stock = await item.getCurrentStock();
+    const itemObj = item.toObject();
+    itemObj.quantity = stock;
+    itemObj.currentStock = stock;
+    res.json(itemObj);
+  } catch (error) {
+    console.error('Error fetching item by SKU:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // GET /api/items/:id
 router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
-    const item = await Item.findById(req.params.id).populate('createdBy', 'name email');
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(filter).populate('createdBy', 'name email');
     if (!item || !item.isActive) {
       return res.status(404).json({ message: 'Item not found' });
     }
-    res.json(item);
+    const stock = await item.getCurrentStock();
+    const itemObj = item.toObject();
+    itemObj.quantity = stock;
+    itemObj.currentStock = stock;
+    res.json(itemObj);
   } catch (error) {
     console.error('Error fetching item:', error);
     res.status(500).json({ message: 'Server error' });
@@ -334,25 +467,76 @@ router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
 });
 
 // POST /api/items
-router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddProduct'), async (req, res) => {
+router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddProduct'), checkPlanLimits('maxItems'), async (req, res) => {
   try {
-    const { name, shortName, hsn, serialPolicy, salesPrice, purchasePrice, mrp, warranty, lowStockThreshold } = req.body;
+    const {
+      name, shortName, hsn, serialPolicy,
+      salesPrice, purchasePrice, sellingPrice, costPrice,
+      mrp, warranty, lowStockThreshold, reorderLevel,
+      sku, barcode, barcodeFormat, uom, taxRate, taxType,
+      category, brand, description, imageUrl
+    } = req.body;
 
     if (!name || !String(name).trim()) {
       return res.status(400).json({ message: 'Product name is required' });
+    }
+
+    // Resolved pricing and thresholds with fallback compatibility
+    const finalSalesPrice = Number(salesPrice !== undefined ? salesPrice : sellingPrice);
+    const finalPurchasePrice = Number(purchasePrice !== undefined ? purchasePrice : costPrice);
+    const finalThreshold = Number(lowStockThreshold !== undefined ? lowStockThreshold : (reorderLevel !== undefined ? reorderLevel : 10));
+
+    if (isNaN(finalSalesPrice) || finalSalesPrice < 0) {
+      return res.status(400).json({ message: 'Valid sales price is required' });
+    }
+    if (isNaN(finalPurchasePrice) || finalPurchasePrice < 0) {
+      return res.status(400).json({ message: 'Valid purchase price is required' });
+    }
+
+    // SKU Generation / Validation
+    let finalSku = sku ? String(sku).trim().toUpperCase() : null;
+    if (!finalSku) {
+      if (req.tenantId) {
+        try {
+          finalSku = await Counter.getNextSequence(req.tenantId, 'SKU', 'SKU', 5);
+        } catch (counterErr) {
+          finalSku = `SKU-${Date.now().toString().slice(-6)}`;
+        }
+      } else {
+        finalSku = `SKU-${Date.now().toString().slice(-6)}`;
+      }
+    } else {
+      // Check duplicate SKU within tenant
+      const skuCheckFilter = { sku: finalSku, isActive: true };
+      if (req.tenantId) skuCheckFilter.tenantId = req.tenantId;
+      const existingSku = await Item.findOne(skuCheckFilter);
+      if (existingSku) {
+        return res.status(400).json({ message: `SKU '${finalSku}' already exists in your catalog` });
+      }
     }
 
     const item = new Item({
       name:              String(name).trim().slice(0, 100),
       shortName:         shortName  ? String(shortName).trim().slice(0, 50)  : undefined,
       hsn:               hsn        ? String(hsn).trim().slice(0, 20)         : undefined,
+      sku:               finalSku,
+      barcode:           barcode    ? String(barcode).trim().slice(0, 100)    : undefined,
+      barcodeFormat:     barcodeFormat || 'CODE128',
+      uom:               uom || 'PCS',
+      taxRate:           taxRate !== undefined ? Math.min(100, Math.max(0, Number(taxRate))) : 0,
+      taxType:           taxType || 'GST',
+      category:          category   ? String(category).trim().slice(0, 60)    : 'General',
+      brand:             brand      ? String(brand).trim().slice(0, 60)       : undefined,
+      description:       description? String(description).trim().slice(0, 500): undefined,
+      imageUrl:          imageUrl   ? String(imageUrl).trim()                 : undefined,
       warranty:          warranty   ? String(warranty).trim().slice(0, 100)  : undefined,
       serialPolicy,
-      salesPrice,
-      purchasePrice,
-      mrp,
-      lowStockThreshold: lowStockThreshold !== undefined ? Number(lowStockThreshold) : 10,
-      createdBy: req.user._id
+      salesPrice:        finalSalesPrice,
+      purchasePrice:     finalPurchasePrice,
+      mrp:               mrp !== undefined ? Number(mrp) : undefined,
+      lowStockThreshold: Math.max(0, finalThreshold),
+      createdBy:         req.user._id,
+      tenantId:          req.tenantId || undefined
     });
 
     await item.save();
@@ -361,16 +545,36 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddP
       global.emitRealTimeUpdate('product-update', {
         action: 'created',
         product: item,
+        tenantId: req.tenantId,
         user: req.user.name || req.user.email,
         timestamp: new Date()
       });
     }
+
+    logBusinessEvent({
+      req,
+      action: 'ITEM_CREATED',
+      entityType: 'Item',
+      entityId: item._id,
+      changes: {
+        after: {
+          name: item.name,
+          sku: item.sku,
+          salesPrice: item.salesPrice,
+          purchasePrice: item.purchasePrice
+        },
+        summary: `Created item "${item.name}" (SKU: ${item.sku})`
+      }
+    }).catch(() => {});
     
     res.status(201).json(item);
   } catch (error) {
     console.error('Error creating item:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ message: error.message });
+    }
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Duplicate product SKU or details found' });
     }
     res.status(500).json({ message: 'Server error' });
   }
@@ -379,17 +583,56 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddP
 // PUT /api/items/:id
 router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requirePermission('canEditProduct'), async (req, res) => {
   try {
-    const { name, shortName, hsn, serialPolicy, salesPrice, purchasePrice, mrp, warranty, isActive, lowStockThreshold } = req.body;
+    const {
+      name, shortName, hsn, serialPolicy,
+      salesPrice, purchasePrice, sellingPrice, costPrice,
+      mrp, warranty, isActive, lowStockThreshold, reorderLevel,
+      sku, barcode, barcodeFormat, uom, taxRate, taxType,
+      category, brand, description, imageUrl
+    } = req.body;
 
-    const item = await Item.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(filter);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
+
+    const beforeState = {
+      name: item.name,
+      salesPrice: item.salesPrice,
+      purchasePrice: item.purchasePrice,
+      lowStockThreshold: item.lowStockThreshold,
+      isActive: item.isActive
+    };
 
     if (name !== undefined) item.name       = String(name).trim().slice(0, 100);
     if (shortName !== undefined) item.shortName  = String(shortName).trim().slice(0, 50);
     if (hsn !== undefined) item.hsn        = String(hsn).trim().slice(0, 20);
     if (warranty !== undefined) item.warranty    = String(warranty).trim().slice(0, 100);
+
+    if (sku !== undefined) {
+      const normalizedSku = String(sku).trim().toUpperCase();
+      if (normalizedSku !== item.sku) {
+        // Check uniqueness if changing SKU
+        const existing = await Item.findOne({ sku: normalizedSku, _id: { $ne: item._id }, tenantId: item.tenantId, isActive: true });
+        if (existing) {
+          return res.status(400).json({ message: `SKU '${normalizedSku}' is already assigned to another product` });
+        }
+        item.sku = normalizedSku;
+      }
+    }
+
+    if (barcode !== undefined)       item.barcode = String(barcode).trim().slice(0, 100);
+    if (barcodeFormat !== undefined) item.barcodeFormat = barcodeFormat;
+    if (uom !== undefined)           item.uom = uom;
+    if (taxRate !== undefined)       item.taxRate = Math.min(100, Math.max(0, Number(taxRate)));
+    if (taxType !== undefined)       item.taxType = taxType;
+    if (category !== undefined)      item.category = String(category).trim().slice(0, 60);
+    if (brand !== undefined)         item.brand = String(brand).trim().slice(0, 60);
+    if (description !== undefined)   item.description = String(description).trim().slice(0, 500);
+    if (imageUrl !== undefined)      item.imageUrl = String(imageUrl).trim();
 
     if (serialPolicy) {
       item.serialPolicy.enableSerial = serialPolicy.enableSerial !== undefined
@@ -400,11 +643,17 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
         ? serialPolicy.requireSerialOnOUT : item.serialPolicy.requireSerialOnOUT;
     }
 
-    if (salesPrice    !== undefined) item.salesPrice    = Number(salesPrice);
+    if (salesPrice !== undefined)    item.salesPrice = Number(salesPrice);
+    else if (sellingPrice !== undefined) item.salesPrice = Number(sellingPrice);
+
     if (purchasePrice !== undefined) item.purchasePrice = Number(purchasePrice);
-    if (mrp           !== undefined) item.mrp           = Number(mrp);
+    else if (costPrice !== undefined) item.purchasePrice = Number(costPrice);
+
+    if (mrp !== undefined)           item.mrp = Number(mrp);
     if (lowStockThreshold !== undefined) item.lowStockThreshold = Math.max(0, Number(lowStockThreshold));
-    if (isActive      !== undefined) item.isActive      = isActive;
+    else if (reorderLevel !== undefined) item.lowStockThreshold = Math.max(0, Number(reorderLevel));
+
+    if (isActive !== undefined)      item.isActive = isActive;
 
     await item.save();
     
@@ -417,11 +666,32 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
       });
     }
 
+    logBusinessEvent({
+      req,
+      action: 'ITEM_UPDATED',
+      entityType: 'Item',
+      entityId: item._id,
+      changes: {
+        before: beforeState,
+        after: {
+          name: item.name,
+          salesPrice: item.salesPrice,
+          purchasePrice: item.purchasePrice,
+          lowStockThreshold: item.lowStockThreshold,
+          isActive: item.isActive
+        },
+        summary: `Updated item "${item.name}" (SKU: ${item.sku})`
+      }
+    }).catch(() => {});
+
     res.json(item);
   } catch (error) {
     console.error('Error updating item:', error);
     if (error.name === 'ValidationError') {
       return res.status(400).json({ message: error.message });
+    }
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Duplicate product SKU found' });
     }
     res.status(500).json({ message: 'Server error' });
   }
@@ -430,13 +700,27 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
 // DELETE /api/items/:id
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requirePermission('canDeactivateProduct'), async (req, res) => {
   try {
-    const item = await Item.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(filter);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
 
     item.isActive = false;
     await item.save();
+
+    logBusinessEvent({
+      req,
+      action: 'ITEM_DELETED',
+      entityType: 'Item',
+      entityId: item._id,
+      changes: {
+        summary: `Deactivated item "${item.name}" (SKU: ${item.sku})`
+      },
+      severity: 'WARNING'
+    }).catch(() => {});
 
     res.json({ message: 'Item deleted successfully' });
   } catch (error) {
@@ -446,3 +730,4 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), req
 });
 
 module.exports = router;
+module.exports.getUploadErrorResponse = getUploadErrorResponse;

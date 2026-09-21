@@ -12,6 +12,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { search, status, page = 1, limit = 50 } = req.query;
     
     const query = {};
+    if (req.tenantId) query.tenantId = req.tenantId;
     
     // Filter by status
     if (status === 'active') {
@@ -60,7 +61,10 @@ router.get('/', requireAuth, async (req, res) => {
 // ============================================================
 router.get('/active', requireAuth, async (req, res) => {
   try {
-    const units = await Unit.find({ isActive: true })
+    const query = { isActive: true };
+    if (req.tenantId) query.tenantId = req.tenantId;
+
+    const units = await Unit.find(query)
       .select('name shortName')
       .sort({ name: 1 });
     
@@ -76,7 +80,10 @@ router.get('/active', requireAuth, async (req, res) => {
 // ============================================================
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const unit = await Unit.findById(req.params.id)
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const unit = await Unit.findOne(filter)
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name');
     
@@ -107,10 +114,13 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       return res.status(400).json({ message: 'Short name is required' });
     }
     
-    // Check for duplicate name
-    const existingUnit = await Unit.findOne({ 
+    // Check for duplicate name within tenant
+    const dupQuery = { 
       name: { $regex: new RegExp(`^${name.trim()}$`, 'i') }
-    });
+    };
+    if (req.tenantId) dupQuery.tenantId = req.tenantId;
+
+    const existingUnit = await Unit.findOne(dupQuery);
     
     if (existingUnit) {
       return res.status(400).json({ message: 'A unit with this name already exists' });
@@ -121,7 +131,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       shortName: shortName.trim(),
       description: description?.trim(),
       createdBy: req.user._id,
-      updatedBy: req.user._id
+      updatedBy: req.user._id,
+      tenantId: req.tenantId || undefined
     });
     
     await unit.save();
@@ -146,18 +157,24 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
   try {
     const { name, shortName, description } = req.body;
     
-    const unit = await Unit.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const unit = await Unit.findOne(filter);
     
     if (!unit) {
       return res.status(404).json({ message: 'Unit not found' });
     }
     
-    // Check for duplicate name (excluding current unit)
+    // Check for duplicate name (excluding current unit) within tenant
     if (name && name.trim() !== unit.name) {
-      const existingUnit = await Unit.findOne({ 
+      const dupQuery = { 
         _id: { $ne: req.params.id },
         name: { $regex: new RegExp(`^${name.trim()}$`, 'i') }
-      });
+      };
+      if (req.tenantId) dupQuery.tenantId = req.tenantId;
+
+      const existingUnit = await Unit.findOne(dupQuery);
       
       if (existingUnit) {
         return res.status(400).json({ message: 'A unit with this name already exists' });
@@ -190,7 +207,10 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
 // ============================================================
 router.put('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const unit = await Unit.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const unit = await Unit.findOne(filter);
     
     if (!unit) {
       return res.status(404).json({ message: 'Unit not found' });
@@ -216,13 +236,16 @@ router.put('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), async 
 // ============================================================
 router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const unit = await Unit.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const unit = await Unit.findOne(filter);
     
     if (!unit) {
       return res.status(404).json({ message: 'Unit not found' });
     }
     
-    await Unit.findByIdAndDelete(req.params.id);
+    await Unit.findOneAndDelete(filter);
     
     res.json({ message: 'Unit deleted successfully' });
   } catch (error) {

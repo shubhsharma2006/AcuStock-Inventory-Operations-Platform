@@ -1,7 +1,8 @@
 const express = require('express');
 const Company = require('../models/Company');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
+const { logBusinessEvent } = require('../utils/auditHelper');
 const logger = require('../utils/logger');
 
 const router = express.Router();
@@ -9,9 +10,12 @@ const router = express.Router();
 // GET /api/companies - Get all companies (Admin, Manager, and User for dropdowns)
 router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '', industry = '' } = req.query;
+    const { search = '', industry = '' } = req.query;
+    const { page, limit } = normalizePaginationQuery(req.query);
 
     const query = { isActive: true };
+    if (req.tenantId) query.tenantId = req.tenantId;
+
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -44,7 +48,10 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), async (r
 // GET /api/companies/:id - Get single company (Admin, Manager, and User for auto-fill)
 router.get('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER', 'USER']), async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id)
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const company = await Company.findOne(filter)
       .populate('createdBy', 'name email');
 
     if (!company) {
@@ -61,7 +68,30 @@ router.get('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
 // POST /api/companies - Create new company (Admin only)
 router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddCompany'), async (req, res) => {
   try {
-    const { name, email, phone, address, industry, website, taxId } = req.body;
+    let { name, email, phone, address, industry, website, taxId } = req.body;
+
+    // Gracefully handle string address or partial address
+    if (typeof address === 'string') {
+      address = {
+        street: address.trim() || 'N/A',
+        city: 'N/A',
+        state: 'N/A',
+        zipCode: '00000',
+        country: 'India'
+      };
+    } else if (address && typeof address === 'object') {
+      address = {
+        street: address.street?.trim() || 'N/A',
+        city: address.city?.trim() || 'N/A',
+        state: address.state?.trim() || 'N/A',
+        zipCode: address.zipCode?.trim() || '00000',
+        country: address.country?.trim() || 'India'
+      };
+    }
+
+    if (!industry) {
+      industry = 'Technology';
+    }
 
     // Explicitly check for required fields from the Company model
     if (!name || !email || !phone || !industry || !address || !address.street || !address.city || !address.state || !address.zipCode || !address.country) {
@@ -74,8 +104,11 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
       return res.status(400).json({ message: 'Invalid email format' });
     }
 
-    // Check if company with this email already exists
-    const existingCompany = await Company.findOne({ email: email.toLowerCase() });
+    // Check if company with this email already exists in this tenant
+    const existingFilter = { email: email.toLowerCase() };
+    if (req.tenantId) existingFilter.tenantId = req.tenantId;
+
+    const existingCompany = await Company.findOne(existingFilter);
     if (existingCompany) {
       return res.status(400).json({ message: 'Company with this email already exists' });
     }
@@ -88,12 +121,16 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
       industry,
       website,
       taxId,
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      tenantId: req.tenantId || undefined
     });
 
     await company.save();
 
-    const populatedCompany = await Company.findById(company._id)
+    const populatedFilter = { _id: company._id };
+    if (req.tenantId) populatedFilter.tenantId = req.tenantId;
+
+    const populatedCompany = await Company.findOne(populatedFilter)
       .populate('createdBy', 'name email');
     
     // Emit real-time update for new company
@@ -101,10 +138,26 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
       global.emitRealTimeUpdate('company-update', {
         action: 'created',
         company: populatedCompany,
+        tenantId: req.tenantId,
         user: req.user.name || req.user.email,
         timestamp: new Date()
       });
     }
+
+    logBusinessEvent({
+      req,
+      action: 'COMPANY_CREATED',
+      entityType: 'Company',
+      entityId: company._id,
+      changes: {
+        after: {
+          name: company.name,
+          email: company.email,
+          phone: company.phone
+        },
+        summary: `Created company "${company.name}"`
+      }
+    }).catch(() => {});
 
     res.status(201).json({
       message: 'Company created successfully',
@@ -141,12 +194,23 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
       if (!phoneRegex.test(phone)) return res.status(400).json({ message: 'Invalid phone number format' });
     }
 
-    if (address !== undefined) {
-      if (address.street !== undefined && address.street.trim() === '') return res.status(400).json({ message: 'Street cannot be empty' });
-      if (address.city !== undefined && address.city.trim() === '') return res.status(400).json({ message: 'City cannot be empty' });
-      if (address.state !== undefined && address.state.trim() === '') return res.status(400).json({ message: 'State cannot be empty' });
-      if (address.zipCode !== undefined && address.zipCode.trim() === '') return res.status(400).json({ message: 'Zip Code cannot be empty' });
-      if (address.country !== undefined && address.country.trim() === '') return res.status(400).json({ message: 'Country cannot be empty' });
+    let normalizedAddress = address;
+    if (typeof address === 'string') {
+      normalizedAddress = {
+        street: address.trim() || 'N/A',
+        city: 'N/A',
+        state: 'N/A',
+        zipCode: '00000',
+        country: 'India'
+      };
+    } else if (address && typeof address === 'object') {
+      normalizedAddress = {
+        street: address.street?.trim() || 'N/A',
+        city: address.city?.trim() || 'N/A',
+        state: address.state?.trim() || 'N/A',
+        zipCode: address.zipCode?.trim() || '00000',
+        country: address.country?.trim() || 'India'
+      };
     }
 
     if (industry !== undefined && (!allowedIndustries.includes(industry) || industry.trim() === '')) {
@@ -156,24 +220,36 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
     if (website !== undefined && website.trim() === '') return res.status(400).json({ message: 'Website cannot be empty' });
     if (taxId !== undefined && taxId.trim() === '') return res.status(400).json({ message: 'Tax ID cannot be empty' });
 
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
 
-    const company = await Company.findById(req.params.id);
+    const company = await Company.findOne(filter);
     if (!company) {
       return res.status(404).json({ message: 'Company not found' });
     }
 
-    // Check if email is being changed and if it's already taken by another company
+    // Check if email is being changed and if it's already taken by another company in this tenant
     if (email && email.toLowerCase() !== company.email) {
-      const existingCompany = await Company.findOne({ email: email.toLowerCase() });
+      const emailFilter = { email: email.toLowerCase() };
+      if (req.tenantId) emailFilter.tenantId = req.tenantId;
+
+      const existingCompany = await Company.findOne(emailFilter);
       if (existingCompany) {
         return res.status(400).json({ message: 'Company with this email already exists' });
       }
     }
 
+    const beforeState = {
+      name: company.name,
+      email: company.email,
+      phone: company.phone,
+      isActive: company.isActive
+    };
+
     company.name     = name     !== undefined ? name     : company.name;
     company.email    = email    !== undefined ? email.toLowerCase() : company.email;
     company.phone    = phone    !== undefined ? phone    : company.phone;
-    company.address  = address  !== undefined ? address  : company.address;
+    company.address  = normalizedAddress !== undefined ? normalizedAddress : company.address;
     company.industry = industry !== undefined ? industry : company.industry;
     company.website  = website  !== undefined ? website  : company.website;
     company.taxId    = taxId    !== undefined ? taxId    : company.taxId;
@@ -181,8 +257,28 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
 
     await company.save();
 
-    const updatedCompany = await Company.findById(company._id)
+    const updatedFilter = { _id: company._id };
+    if (req.tenantId) updatedFilter.tenantId = req.tenantId;
+
+    const updatedCompany = await Company.findOne(updatedFilter)
       .populate('createdBy', 'name email');
+
+    logBusinessEvent({
+      req,
+      action: 'COMPANY_UPDATED',
+      entityType: 'Company',
+      entityId: company._id,
+      changes: {
+        before: beforeState,
+        after: {
+          name: company.name,
+          email: company.email,
+          phone: company.phone,
+          isActive: company.isActive
+        },
+        summary: `Updated company "${company.name}"`
+      }
+    }).catch(() => {});
 
     res.json({
       message: 'Company updated successfully',
@@ -200,13 +296,27 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
 // DELETE /api/companies/:id - Soft delete company (Admin only)
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const company = await Company.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const company = await Company.findOne(filter);
     if (!company) {
       return res.status(404).json({ message: 'Company not found' });
     }
 
     company.isActive = false;
     await company.save();
+
+    logBusinessEvent({
+      req,
+      action: 'COMPANY_DELETED',
+      entityType: 'Company',
+      entityId: company._id,
+      changes: {
+        summary: `Deactivated company "${company.name}"`
+      },
+      severity: 'WARNING'
+    }).catch(() => {});
 
     res.json({ message: 'Company deleted successfully' });
   } catch (error) {

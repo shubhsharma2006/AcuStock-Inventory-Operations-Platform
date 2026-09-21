@@ -258,6 +258,299 @@ async function sendInviteEmail({ to, invitedBy, role, inviteUrl, expiresHours = 
 }
 
 /**
+ * Send Trial Expiring email reminder (e.g. 7 days, 3 days, or 1 day left).
+ */
+async function sendTrialExpiringEmail({ to, name = 'there', daysRemaining = 7, upgradeUrl = 'https://acustock.com/billing', companyName = 'Your Organization' }) {
+  const subject = `⏰ AcuStock — Your trial expires in ${daysRemaining} day${daysRemaining === 1 ? '' : 's'}`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 0; }
+    .container { max-width: 540px; margin: 40px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #1e3a8a 0%, #d97706 100%); padding: 32px 40px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 22px; letter-spacing: 0.5px; }
+    .header p  { color: rgba(255,255,255,0.9); margin: 8px 0 0; font-size: 14px; }
+    .body { padding: 36px 40px; color: #374151; }
+    .body p { margin: 0 0 16px; line-height: 1.6; font-size: 15px; }
+    .countdown-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px; text-align: center; margin: 20px 0; }
+    .countdown-number { font-size: 28px; font-weight: bold; color: #b45309; }
+    .countdown-label { font-size: 13px; color: #78350f; text-transform: uppercase; font-weight: 600; }
+    .btn { display: inline-block; margin: 20px 0; padding: 14px 36px; background: #4f46e5; color: #ffffff !important; text-decoration: none; border-radius: 8px; font-size: 15px; font-weight: bold; }
+    .footer { padding: 20px 40px; background: #f9fafb; text-align: center; font-size: 12px; color: #9ca3af; }
+    .features-list { list-style: none; padding: 0; margin: 16px 0; }
+    .features-list li { padding: 6px 0; font-size: 14px; color: #4b5563; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⏰ Trial Expiring Soon</h1>
+      <p>${companyName} • AcuStock Inventory Cloud</p>
+    </div>
+    <div class="body">
+      <p>Hi ${name},</p>
+      <p>Your free trial of AcuStock is coming to an end. Keep your inventory sync, multi-warehouse ledger, and orders running seamlessly without interruption.</p>
+      
+      <div class="countdown-box">
+        <div class="countdown-number">${daysRemaining}</div>
+        <div class="countdown-label">Day${daysRemaining === 1 ? '' : 's'} Remaining in Trial</div>
+      </div>
+
+      <p>Upgrade now to ensure zero downtime for your warehouse operations:</p>
+      <ul class="features-list">
+        <li>✓ Unlimited items & transactions</li>
+        <li>✓ Multi-warehouse transfer tracking & serial policies</li>
+        <li>✓ Automated GST / VAT tax invoices</li>
+        <li>✓ Role-based permissions & audit change logs</li>
+      </ul>
+
+      <p style="text-align:center;">
+        <a href="${upgradeUrl}" class="btn">Upgrade Your Plan Now</a>
+      </p>
+    </div>
+    <div class="footer">
+      AcuStock Inventory Platform &nbsp;|&nbsp; Need help? Reply to this email or contact support.
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Hi ${name},\n\nYour AcuStock trial expires in ${daysRemaining} day(s).\n\nUpgrade now to avoid interruption:\n${upgradeUrl}\n\n— The AcuStock Team`;
+  return sendMail({ to, subject, html, text });
+}
+
+/**
+ * Send Payment Receipt email with invoice summary.
+ */
+async function sendPaymentReceiptEmail({
+  to,
+  name = 'Valued Customer',
+  planName = 'Professional Tier',
+  amountFormatted = '₹2,499',
+  currency = 'INR',
+  invoiceDate = new Date().toLocaleDateString(),
+  invoiceId = 'INV-001',
+  invoiceUrl = ''
+}) {
+  const subject = `✅ AcuStock — Payment Receipt (${invoiceId})`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 0; }
+    .container { max-width: 540px; margin: 40px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #065f46 0%, #10b981 100%); padding: 32px 40px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 22px; letter-spacing: 0.5px; }
+    .header p  { color: rgba(255,255,255,0.9); margin: 8px 0 0; font-size: 14px; }
+    .body { padding: 36px 40px; color: #374151; }
+    .receipt-table { width: 100%; border-collapse: collapse; margin: 24px 0; background: #f9fafb; border-radius: 8px; overflow: hidden; }
+    .receipt-table td { padding: 12px 16px; font-size: 14px; border-bottom: 1px solid #e5e7eb; }
+    .receipt-table tr:last-child td { border-bottom: none; font-weight: bold; font-size: 16px; background: #f3f4f6; }
+    .btn { display: inline-block; margin: 20px 0; padding: 12px 30px; background: #059669; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: bold; }
+    .footer { padding: 20px 40px; background: #f9fafb; text-align: center; font-size: 12px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>✅ Payment Confirmed</h1>
+      <p>Thank you for choosing AcuStock</p>
+    </div>
+    <div class="body">
+      <p>Hi ${name},</p>
+      <p>We've received your payment. Your subscription has been renewed and your workspace is fully active.</p>
+
+      <table class="receipt-table">
+        <tr>
+          <td><strong>Plan:</strong></td>
+          <td>${planName}</td>
+        </tr>
+        <tr>
+          <td><strong>Invoice Number:</strong></td>
+          <td>${invoiceId}</td>
+        </tr>
+        <tr>
+          <td><strong>Billing Date:</strong></td>
+          <td>${invoiceDate}</td>
+        </tr>
+        <tr>
+          <td><strong>Amount Paid:</strong></td>
+          <td>${amountFormatted} ${currency}</td>
+        </tr>
+      </table>
+
+      ${invoiceUrl ? `
+      <p style="text-align:center;">
+        <a href="${invoiceUrl}" class="btn">View & Download Tax Invoice (PDF)</a>
+      </p>` : ''}
+    </div>
+    <div class="footer">
+      AcuStock Billing Operations &nbsp;|&nbsp; For tax and GST queries, contact accounts@acustock.com
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Hi ${name},\n\nPayment confirmed for ${planName}.\nAmount: ${amountFormatted} ${currency}\nInvoice ID: ${invoiceId}\nDate: ${invoiceDate}\n\n— AcuStock Billing`;
+  return sendMail({ to, subject, html, text });
+}
+
+/**
+ * Send Low Stock Alert email when items hit reorder threshold.
+ */
+async function sendLowStockAlertEmail({ to, name = 'Operations Manager', items = [], dashboardUrl = 'https://acustock.com/stock' }) {
+  const count = items.length;
+  const subject = `📦 AcuStock Alert — ${count} item${count === 1 ? '' : 's'} below reorder level`;
+
+  const rows = items.map((it) => `
+    <tr>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">${it.name || 'Item'}</td>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-family: monospace;">${it.sku || 'N/A'}</td>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; color: #dc2626; font-weight: bold;">${it.currentStock ?? 0}</td>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb;">${it.threshold ?? 10}</td>
+    </tr>
+  `).join('');
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 0; }
+    .container { max-width: 560px; margin: 40px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #991b1b 0%, #ef4444 100%); padding: 32px 40px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 22px; }
+    .body { padding: 32px 36px; color: #374151; }
+    .items-table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13px; }
+    .items-table th { background: #f3f4f6; text-align: left; padding: 10px 12px; color: #4b5563; }
+    .btn { display: inline-block; margin: 16px 0; padding: 12px 28px; background: #dc2626; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: bold; }
+    .footer { padding: 20px 40px; background: #f9fafb; text-align: center; font-size: 12px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📦 Low Stock Notification</h1>
+    </div>
+    <div class="body">
+      <p>Hi ${name},</p>
+      <p>The following inventory item${count === 1 ? '' : 's have'} dropped below their configured reorder thresholds. Place purchase orders promptly to avoid stockouts.</p>
+
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th>SKU</th>
+            <th>Current</th>
+            <th>Min Level</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+
+      <p style="text-align:center;">
+        <a href="${dashboardUrl}" class="btn">Review Stock & Create PO</a>
+      </p>
+    </div>
+    <div class="footer">
+      AcuStock Automated Inventory Monitor
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Low stock alert for ${count} item(s):\n` +
+    items.map((it) => `- ${it.name} (SKU: ${it.sku}): ${it.currentStock} remaining (min: ${it.threshold})`).join('\n') +
+    `\n\nManage inventory: ${dashboardUrl}`;
+
+  return sendMail({ to, subject, html, text });
+}
+
+/**
+ * Send Warranty Expiry Notification email.
+ */
+async function sendWarrantyExpiryEmail({ to, name = 'Service Administrator', warranties = [], dashboardUrl = 'https://acustock.com/warranty' }) {
+  const count = warranties.length;
+  const subject = `🛡️ AcuStock — ${count} warranty/warranties expiring soon`;
+
+  const rows = warranties.map((w) => `
+    <tr>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-weight: 600;">${w.productName || 'Product'}</td>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; font-family: monospace;">${w.serialNumber || 'N/A'}</td>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb;">${w.customerOrSupplier || 'N/A'}</td>
+      <td style="padding: 10px 12px; border-bottom: 1px solid #e5e7eb; color: #b45309; font-weight: bold;">${w.daysRemaining} days</td>
+    </tr>
+  `).join('');
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 0; }
+    .container { max-width: 560px; margin: 40px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #312e81 0%, #6366f1 100%); padding: 32px 40px; text-align: center; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 22px; }
+    .body { padding: 32px 36px; color: #374151; }
+    .items-table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13px; }
+    .items-table th { background: #f3f4f6; text-align: left; padding: 10px 12px; color: #4b5563; }
+    .btn { display: inline-block; margin: 16px 0; padding: 12px 28px; background: #4f46e5; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: bold; }
+    .footer { padding: 20px 40px; background: #f9fafb; text-align: center; font-size: 12px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🛡️ Warranty Expiry Notice</h1>
+    </div>
+    <div class="body">
+      <p>Hi ${name},</p>
+      <p>${count} tracked serial unit${count === 1 ? '' : 's'} have warranties expiring within the upcoming period:</p>
+
+      <table class="items-table">
+        <thead>
+          <tr>
+            <th>Product</th>
+            <th>Serial #</th>
+            <th>Party</th>
+            <th>Expires In</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+
+      <p style="text-align:center;">
+        <a href="${dashboardUrl}" class="btn">View Warranty Tracker</a>
+      </p>
+    </div>
+    <div class="footer">
+      AcuStock Lifecycle & Warranty Management
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Warranty Expiry Notice for ${count} item(s):\n` +
+    warranties.map((w) => `- ${w.productName} (S/N: ${w.serialNumber}): expires in ${w.daysRemaining} days`).join('\n') +
+    `\n\nView details: ${dashboardUrl}`;
+
+  return sendMail({ to, subject, html, text });
+}
+
+/**
  * Check if email is configured and working.
  * Call this on startup to log a warning if not set up.
  */
@@ -281,5 +574,9 @@ module.exports = {
   sendPasswordResetEmail,
   sendPasswordResetByAdminEmail,
   sendInviteEmail,
+  sendTrialExpiringEmail,
+  sendPaymentReceiptEmail,
+  sendLowStockAlertEmail,
+  sendWarrantyExpiryEmail,
   verifyEmailConfig
 };

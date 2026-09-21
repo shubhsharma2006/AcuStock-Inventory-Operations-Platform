@@ -78,6 +78,12 @@ const TransporterSchema = new mongoose.Schema(
     deletedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
+    },
+    tenantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tenant',
+      required: true,
+      index: true
     }
   },
   { 
@@ -87,9 +93,14 @@ const TransporterSchema = new mongoose.Schema(
   }
 );
 
-// Index for search
+// Indexes
+TransporterSchema.index({ tenantId: 1, name: 1 });
+TransporterSchema.index({ tenantId: 1, isActive: 1 });
 TransporterSchema.index({ name: 'text', contactPerson: 'text', city: 'text' });
 TransporterSchema.index({ createdBy: 1 });
 TransporterSchema.index({ isActive: 1 });
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+TransporterSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Transporter', TransporterSchema);

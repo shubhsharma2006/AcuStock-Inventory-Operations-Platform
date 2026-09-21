@@ -47,6 +47,12 @@ const ProductionPolicySchema = new mongoose.Schema(
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
+    },
+    tenantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tenant',
+      required: true,
+      index: true
     }
   },
   {
@@ -54,7 +60,9 @@ const ProductionPolicySchema = new mongoose.Schema(
   }
 );
 
-// Note: Lock check moved to route handler to avoid mongoose middleware issues
-// The route handler checks policy.locked before allowing updates
+ProductionPolicySchema.index({ tenantId: 1, productId: 1 });
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+ProductionPolicySchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('ProductionPolicy', ProductionPolicySchema);

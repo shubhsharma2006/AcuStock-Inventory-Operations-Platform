@@ -6,11 +6,18 @@ const SerialAudit = require('../models/SerialAudit');
 const Notification = require('../models/Notification');
 const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
+const { validateRequest, schemas } = require('../middleware/validateRequest');
 const logger = require('../utils/logger');
 const { notifyRoles } = require('../services/notificationHelper');
 
 const stockService = require('../services/stock.service');
+const { logBusinessEvent } = require('../utils/auditHelper');
 const router = express.Router();
+
+// Helper: escape regex special characters to prevent ReDoS / injection
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Helper function to create stock notification via centralized helper
 async function createStockNotification(type, item, quantity, user) {
@@ -64,19 +71,24 @@ router.get('/summary', requireAuth, async (req, res) => {
   try {
     const { search } = req.query;
 
+    // Escape regex special characters to prevent injection / ReDoS
+    const escapedSearch = search ? escapeRegex(search) : undefined;
+
     // Build match for search
     let productMatch = {};
-    if (search) {
+    if (escapedSearch) {
       productMatch = {
         $or: [
-          { 'productInfo.name': { $regex: search, $options: 'i' } },
-          { 'productInfo.shortName': { $regex: search, $options: 'i' } }
+          { 'productInfo.name': { $regex: escapedSearch, $options: 'i' } },
+          { 'productInfo.shortName': { $regex: escapedSearch, $options: 'i' } }
         ]
       };
     }
 
     // Aggregate stock ledger to get IN and OUT totals per product
-    const stockSummary = await StockLedger.aggregate([
+    const pipeline = [{ $match: { tenantId: req.tenantId } }];
+
+    pipeline.push(
       // Group by product and type
       {
         $group: {
@@ -100,8 +112,11 @@ router.get('/summary', requireAuth, async (req, res) => {
       {
         $lookup: {
           from: 'items',
-          localField: '_id',
-          foreignField: '_id',
+          let: { productId: '$_id' },
+          pipeline: [{ $match: { $expr: { $and: [
+            { $eq: ['$_id', '$$productId'] },
+            { $eq: ['$tenantId', req.tenantId] }
+          ] } } }],
           as: 'productInfo'
         }
       },
@@ -147,20 +162,23 @@ router.get('/summary', requireAuth, async (req, res) => {
         }
       },
       { $sort: { name: 1 } }
-    ]);
+    );
+
+    const stockSummary = await StockLedger.aggregate(pipeline);
 
     // Also include products with no stock entries (quantity = 0)
     const productsWithStock = stockSummary.map(s => s.productId.toString());
     
-    let allProducts = await Item.find(
-      search ? {
-        isActive: { $ne: false },
-        $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { shortName: { $regex: search, $options: 'i' } }
-        ]
-      } : { isActive: { $ne: false } }
-    ).select('_id name shortName lowStockThreshold');
+    const allProdFilter = { isActive: { $ne: false } };
+    if (req.tenantId) allProdFilter.tenantId = req.tenantId;
+    if (escapedSearch) {
+      allProdFilter.$or = [
+        { name: { $regex: escapedSearch, $options: 'i' } },
+        { shortName: { $regex: escapedSearch, $options: 'i' } }
+      ];
+    }
+
+    let allProducts = await Item.find(allProdFilter).select('_id name shortName lowStockThreshold');
 
     // Add products without ledger entries
     const productsWithoutStock = allProducts
@@ -194,7 +212,10 @@ router.get('/serials/:productId', requireAuth, async (req, res) => {
     const { status = 'available' } = req.query; // available | all
     
     // Verify product exists and get its serial policy
-    const item = await Item.findById(productId);
+    const itemFilter = { _id: productId };
+    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(itemFilter);
     if (!item) {
       return res.status(404).json({ message: 'Product not found' });
     }
@@ -210,8 +231,11 @@ router.get('/serials/:productId', requireAuth, async (req, res) => {
     }
     
     // Get all serials for this product with their current status
+    const matchFilter = { productId: new mongoose.Types.ObjectId(productId) };
+    if (req.tenantId) matchFilter.tenantId = req.tenantId;
+
     const serialsAgg = await SerialAudit.aggregate([
-      { $match: { productId: new mongoose.Types.ObjectId(productId) } },
+      { $match: matchFilter },
       { $sort: { createdAt: 1 } }, // Sort by time to get last action
       { $group: { 
         _id: '$serial',
@@ -266,12 +290,15 @@ router.get('/serial/search', requireAuth, async (req, res) => {
       return res.json({ results: [] });
     }
 
-    const query = q.trim().toUpperCase();
+    const query = escapeRegex(q.trim().toUpperCase());
 
-    // Find all unique serials matching the query (prefix or substring)
+    // Find all unique serials matching the query (prefix or substring) scoped to tenant
+    const searchMatch = { serial: { $regex: query, $options: 'i' } };
+    if (req.tenantId) searchMatch.tenantId = req.tenantId;
+
     const matches = await SerialAudit.aggregate([
-      // Match serial containing the query string
-      { $match: { serial: { $regex: query, $options: 'i' } } },
+      // Match serial containing the query string (escaped to prevent injection)
+      { $match: searchMatch },
       // Sort by time ascending so $last gives the most recent action
       { $sort: { createdAt: 1 } },
       // Get last action per serial
@@ -351,7 +378,10 @@ router.get('/serial-policy/:productId', requireAuth, async (req, res) => {
   try {
     const { productId } = req.params;
     
-    const item = await Item.findById(productId).select('name serialPolicy');
+    const itemFilter = { _id: productId };
+    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(itemFilter).select('name serialPolicy');
     if (!item) {
       return res.status(404).json({ message: 'Product not found' });
     }
@@ -373,7 +403,7 @@ router.get('/serial-policy/:productId', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/stock/validate-serials - Check if serials already exist globally
+// GET /api/stock/validate-serials - Check if serials already exist globally within tenant
 // Used for real-time validation before form submission
 router.post('/validate-serials', requireAuth, async (req, res) => {
   try {
@@ -396,11 +426,14 @@ router.post('/validate-serials', requireAuth, async (req, res) => {
     }
     
     if (action === 'IN') {
-      // For Stock IN: Check if any serial has ever been used globally
-      const existingSerials = await SerialAudit.find({
+      // For Stock IN: Check if any serial has ever been used in this tenant
+      const existingFilter = {
         serial: { $in: normalizedSerials },
         action: 'IN'
-      }).distinct('serial');
+      };
+      if (req.tenantId) existingFilter.tenantId = req.tenantId;
+
+      const existingSerials = await SerialAudit.find(existingFilter).distinct('serial');
       
       return res.json({
         valid: existingSerials.length === 0 && internalDuplicates.length === 0,
@@ -414,11 +447,14 @@ router.post('/validate-serials', requireAuth, async (req, res) => {
       });
     } else {
       // For Stock OUT: Check if serials are currently available (last action = IN)
+      const outMatch = { 
+        serial: { $in: normalizedSerials },
+        productId: new mongoose.Types.ObjectId(productId)
+      };
+      if (req.tenantId) outMatch.tenantId = req.tenantId;
+
       const serialsAgg = await SerialAudit.aggregate([
-        { $match: { 
-          serial: { $in: normalizedSerials },
-          productId: new mongoose.Types.ObjectId(productId)
-        }},
+        { $match: outMatch },
         { $sort: { createdAt: 1 } },
         { $group: { _id: '$serial', lastAction: { $last: '$action' } }}
       ]);
@@ -460,7 +496,10 @@ router.get('/serial-audit/:serial', requireAuth, async (req, res) => {
     const { serial } = req.params;
     const normalizedSerial = serial.trim().toUpperCase();
     
-    const auditHistory = await SerialAudit.find({ serial: normalizedSerial })
+    const auditFilter = { serial: normalizedSerial };
+    if (req.tenantId) auditFilter.tenantId = req.tenantId;
+
+    const auditHistory = await SerialAudit.find(auditFilter)
       .populate('productId', 'name shortName')
       .populate('performedBy', 'name email role')
       .sort({ createdAt: 1 });
@@ -495,15 +534,24 @@ router.get('/serial-audit/:serial', requireAuth, async (req, res) => {
 
 // POST /api/stock/in - Create a new 'IN' entry
 // Allowed: ADMIN, MANAGER, USER (all can perform stock operations)
-router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requirePermission('canStockIn'), async (req, res) => {
+router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requirePermission('canStockIn'), validateRequest(schemas.stockIn), async (req, res) => {
   const { productId, quantity, serialNumbers = [], supplier, condition, transaction, modelVariant } = req.body;
 
-  if (!productId || !quantity) {
+  if (!productId || quantity === undefined || quantity === null) {
     return res.status(400).json({ message: 'Product ID and quantity are required' });
   }
 
   try {
-    const item = await Item.findById(productId);
+    const payload = stockService.validateStockMovementPayload({
+      productId,
+      quantity,
+      serialNumbers
+    });
+
+    const itemFilter = { _id: productId };
+    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(itemFilter);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
@@ -515,7 +563,7 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
     };
 
     await stockService.stockIn(
-      { productId, quantity, serialNumbers, supplier, condition, transaction: transactionData },
+      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, supplier, condition, transaction: transactionData, tenantId: req.tenantId },
       req.user
     );
 
@@ -529,31 +577,60 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
         productId,
         productName: item.name,
         quantity,
+        tenantId: req.tenantId,
         user: req.user.name || req.user.email,
         timestamp: new Date()
       });
     }
+
+    // Emit business audit event
+    logBusinessEvent({
+      req,
+      action: 'STOCK_IN',
+      entityType: 'Item',
+      entityId: item._id,
+      changes: {
+        summary: `Stock IN: ${payload.quantity} units for "${item.name}"`
+      },
+      details: {
+        quantity: payload.quantity,
+        supplier,
+        condition,
+        serialNumbers: payload.serialNumbers
+      }
+    }).catch(() => {});
     
-    res.status(201).json({ success: true });
+    res.status(201).json({ success: true, message: 'Stock entry created successfully' });
   } catch (error) {
     console.error('Stock IN error:', error);
-    // Business-logic errors thrown by stockService (serialdup, inactive item, etc.) → 400
     const isBusinessError = error.message && !error.message.toLowerCase().includes('server');
-    res.status(isBusinessError ? 400 : 500).json({ message: error.message || 'Server error' });
+    res.status(isBusinessError ? 400 : 500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
   }
 });
 
 // POST /api/stock/out - Create a new 'OUT' entry
 // Allowed: ADMIN, MANAGER, USER (all can perform stock operations)
-router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requirePermission('canStockOut'), async (req, res) => {
+router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requirePermission('canStockOut'), validateRequest(schemas.stockOut), async (req, res) => {
   const { productId, quantity, serialNumbers = [], buyer, condition, transaction, modelVariant } = req.body;
 
-  if (!productId || !quantity) {
+  if (!productId || quantity === undefined || quantity === null) {
     return res.status(400).json({ message: 'Product ID and quantity are required' });
   }
 
   try {
-    const item = await Item.findById(productId);
+    const payload = stockService.validateStockMovementPayload({
+      productId,
+      quantity,
+      serialNumbers
+    });
+
+    const itemFilter = { _id: productId };
+    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(itemFilter);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
@@ -565,7 +642,7 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
     };
 
     await stockService.stockOut(
-      { productId, quantity, serialNumbers, buyer, condition, transaction: transactionData },
+      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, buyer, condition, transaction: transactionData, tenantId: req.tenantId },
       req.user
     );
 
@@ -579,10 +656,28 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
         productId,
         productName: item.name,
         quantity,
+        tenantId: req.tenantId,
         user: req.user.name || req.user.email,
         timestamp: new Date()
       });
     }
+
+    // Emit business audit event
+    logBusinessEvent({
+      req,
+      action: 'STOCK_OUT',
+      entityType: 'Item',
+      entityId: item._id,
+      changes: {
+        summary: `Stock OUT: ${payload.quantity} units for "${item.name}"`
+      },
+      details: {
+        quantity: payload.quantity,
+        buyer,
+        condition,
+        serialNumbers: payload.serialNumbers
+      }
+    }).catch(() => {});
     
     // Check for low stock alert using item's configured threshold
     const newStock = await item.getCurrentStock();
@@ -597,39 +692,55 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
           productName: item.name,
           currentStock: newStock,
           threshold,
+          tenantId: req.tenantId,
           timestamp: new Date()
         });
       }
+
+      // Send Low Stock Alert Email
+      if (req.user?.email) {
+        const { sendLowStockAlertEmail } = require('../services/email.service');
+        sendLowStockAlertEmail({
+          to: req.user.email,
+          name: req.user.name || 'Operations Lead',
+          items: [{
+            name: item.name,
+            sku: item.sku,
+            currentStock: newStock,
+            threshold
+          }]
+        }).catch((err) => logger.warn('Low stock alert email error:', err.message));
+      }
     }
     
-    res.status(201).json({ success: true });
+    res.status(201).json({ success: true, message: 'Stock entry created successfully' });
   } catch (error) {
     console.error('Stock OUT error:', error);
-    // Business-logic errors thrown by stockService (insufficient stock, serial not available, etc.) → 400
     const isBusinessError = error.message && !error.message.toLowerCase().includes('server');
-    res.status(isBusinessError ? 400 : 500).json({ message: error.message || 'Server error' });
+    res.status(isBusinessError ? 400 : 500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
   }
 });
 
 // GET /api/stock - Get all stock entries with summary
 // Data isolation: 
-// - Admin sees all activity
+// - Admin sees all activity within tenant
 // - Manager/User see only their own entries (CANNOT see Admin activity)
 router.get('/', requireAuth, async (req, res) => {
   try {
-    // Build query based on role
     let query = {};
+    if (req.tenantId) query.tenantId = req.tenantId;
     
     if (req.userRole === 'ADMIN' || req.userRole === 'SUPER_ADMIN') {
-      // Admin / Super Admin sees all data (no filter)
+      // Admin / Super Admin sees all data in tenant
     } else {
       // Manager and User see only their own data
       query.createdBy = req.userId;
-      // Also exclude any Admin entries from their view
       query.role = { $ne: 'ADMIN' };
     }
     
-    // Get stock ledger entries based on role
     const stockEntries = await StockLedger.find(query)
       .populate('productId', 'name shortName')
       .populate('createdBy', 'name email')
@@ -648,13 +759,11 @@ router.get('/', requireAuth, async (req, res) => {
           quantity: 0
         };
       }
-      // IN = add, OUT = subtract (both stored as positive numbers)
       const delta = entry.type === 'IN' ? entry.quantity : -entry.quantity;
       productSummary[productKey].quantity += delta || 0;
       totalQuantity += delta || 0;
     });
     
-    // Return stock as an array with quantity field for frontend compatibility
     const stockArray = Object.values(productSummary);
     
     res.json(stockArray);
@@ -665,26 +774,18 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 // GET /api/stock/ledger - Get stock ledger with full history
-// Data isolation: 
-// - Admin sees all (can filter by userId to see individual activity)
-// - Manager/User see only their own entries (CANNOT see Admin activity)
 router.get('/ledger', requireAuth, requirePermission('canViewStockLedger'), async (req, res) => {
   try {
     const { productId, type, startDate, endDate, userId, page = 1, limit = 50 } = req.query;
     
-    // Build query based on role (data isolation)
     let query = {};
+    if (req.tenantId) query.tenantId = req.tenantId;
     
     if (req.userRole === 'ADMIN' || req.userRole === 'SUPER_ADMIN') {
-      // Admin / Super Admin can see all activity, optionally filter by userId
-      if (userId) {
-        query.createdBy = userId;
-      }
-      // No other restrictions
+      if (userId) query.createdBy = userId;
     } else {
-      // Manager/User see only their own data AND cannot see Admin activity
       query.createdBy = req.userId;
-      query.role = { $ne: 'ADMIN' }; // Exclude Admin entries from their view
+      query.role = { $ne: 'ADMIN' };
     }
     
     if (productId) query.productId = productId;
@@ -724,20 +825,22 @@ router.get('/ledger', requireAuth, requirePermission('canViewStockLedger'), asyn
 });
 
 // GET /api/stock/activity/:userId - Get stock activity for a specific user (ADMIN ONLY)
-// Admin can view individual Manager or User activity
 router.get('/activity/:userId', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
     const { userId } = req.params;
     const { productId, type, startDate, endDate, page = 1, limit = 50 } = req.query;
     
-    // Verify the user exists
     const User = require('../models/User');
-    const targetUser = await User.findById(userId).select('name email role');
+    const userFilter = { _id: userId };
+    if (req.tenantId) userFilter.tenantId = req.tenantId;
+
+    const targetUser = await User.findOne(userFilter).select('name email role');
     if (!targetUser) {
       return res.status(404).json({ message: 'User not found' });
     }
     
     let query = { createdBy: userId };
+    if (req.tenantId) query.tenantId = req.tenantId;
     
     if (productId) query.productId = productId;
     if (type) query.type = type.toUpperCase();
@@ -750,6 +853,9 @@ router.get('/activity/:userId', requireAuth, requireRole(['ADMIN']), async (req,
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
+    const aggMatch = { createdBy: new mongoose.Types.ObjectId(userId) };
+    if (req.tenantId) aggMatch.tenantId = req.tenantId;
+
     const [entries, total, summary] = await Promise.all([
       StockLedger.find(query)
         .populate('productId', 'name shortName hsn')
@@ -758,7 +864,7 @@ router.get('/activity/:userId', requireAuth, requireRole(['ADMIN']), async (req,
         .limit(parseInt(limit)),
       StockLedger.countDocuments(query),
       StockLedger.aggregate([
-        { $match: { createdBy: new mongoose.Types.ObjectId(userId) } },
+        { $match: aggMatch },
         { $group: {
           _id: '$type',
           count: { $sum: 1 },
@@ -788,20 +894,21 @@ router.get('/activity/:userId', requireAuth, requireRole(['ADMIN']), async (req,
 });
 
 // GET /api/stock/activity-summary - Get activity summary for all users (ADMIN ONLY)
-// Admin can see overview of all Manager and User activity
 router.get('/activity-summary', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
     const User = require('../models/User');
 
-    // Get all managers and users
-    const usersAndManagers = await User.find({
-      role: { $in: ['MANAGER', 'USER'] }
-    }).select('name email role isActive createdAt').lean();
+    const userFilter = { role: { $in: ['MANAGER', 'USER'] } };
+    if (req.tenantId) userFilter.tenantId = req.tenantId;
 
-    // Single aggregation instead of N+1 individual queries.
-    // Groups by (userId × type) so we get IN/OUT counts for every user in one round-trip.
+    const usersAndManagers = await User.find(userFilter)
+      .select('name email role isActive createdAt').lean();
+
+    const aggMatch = { role: { $in: ['MANAGER', 'USER'] } };
+    if (req.tenantId) aggMatch.tenantId = req.tenantId;
+
     const activityAgg = await StockLedger.aggregate([
-      { $match: { role: { $in: ['MANAGER', 'USER'] } } },
+      { $match: aggMatch },
       {
         $group: {
           _id: { userId: '$createdBy', type: '$type' },
@@ -812,7 +919,6 @@ router.get('/activity-summary', requireAuth, requireRole(['ADMIN']), async (req,
       }
     ]);
 
-    // Build a lookup map: userId → { IN: {...}, OUT: {...} }
     const activityMap = {};
     for (const row of activityAgg) {
       const uid = row._id.userId.toString();
@@ -845,7 +951,6 @@ router.get('/activity-summary', requireAuth, requireRole(['ADMIN']), async (req,
       };
     });
 
-    // Sort by last activity (most recent first)
     activitySummary.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
 
     res.json({
@@ -863,8 +968,10 @@ router.get('/activity-summary', requireAuth, requireRole(['ADMIN']), async (req,
 router.get('/ledger/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
     const { id } = req.params;
+    const filter = { _id: id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
 
-    const entry = await StockLedger.findById(id)
+    const entry = await StockLedger.findOne(filter)
       .populate('productId', 'name shortName serialPolicy salesPrice purchasePrice')
       .populate('createdBy', 'name email role');
 
@@ -879,89 +986,122 @@ router.get('/ledger/:id', requireAuth, validateObjectId, async (req, res) => {
   }
 });
 
-// ❌ PUT /api/stock/:id - DISABLED (Ledger is immutable)
-// NOTE: This must come AFTER PUT /ledger/:id to avoid swallowing that route
-router.put('/ledger/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+// ❌ PUT /api/stock/ledger/:id - DISABLED (Ledger is immutable — SAP-style)
+// Corrections must be made via POST /api/stock/ledger/:id/reverse
+router.put('/ledger/:id', requireAuth, (req, res) => {
+  return res.status(403).json({
+    message: 'Stock ledger entries cannot be edited. The ledger is immutable. Use POST /api/stock/ledger/:id/reverse to create a correction entry.',
+    code: 'LEDGER_IMMUTABLE'
+  });
+});
+
+// POST /api/stock/ledger/:id/reverse - Create an offsetting correction entry (ADMIN ONLY)
+// Enterprise pattern: errors are corrected by new entries, never by mutating existing ones.
+// This preserves audit trail integrity and allows the AI layer to reason from reliable data.
+router.post('/ledger/:id/reverse', requireAuth, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { quantity, condition, partyDetails, transactionDetails, notes, serialNumbers } = req.body;
-    
-    // Find the entry first
-    const entry = await StockLedger.findById(id).populate('productId', 'name');
-    
-    if (!entry) {
+    const { reason, quantity: overrideQty } = req.body;
+
+    if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+      return res.status(400).json({ message: 'A reason for the reversal is required (min 5 characters).', code: 'REASON_REQUIRED' });
+    }
+
+    const filter = { _id: id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const original = await StockLedger.findOne(filter).populate('productId', 'name');
+    if (!original) {
       return res.status(404).json({ message: 'Stock entry not found' });
     }
-    
-    // Store original values for audit
-    const originalValues = {
-      quantity: entry.quantity,
-      condition: entry.condition,
-      partyDetails: entry.partyDetails,
-      transactionDetails: entry.transactionDetails,
-      notes: entry.notes
-    };
-    
-    // Track what was changed
-    const changes = [];
-    
-    // Update allowed fields
-    if (quantity !== undefined && quantity !== entry.quantity) {
-      changes.push({ field: 'quantity', from: entry.quantity, to: quantity });
-      entry.quantity = quantity;
+    if (original.isDeleted) {
+      return res.status(409).json({ message: 'This entry has already been reversed/deleted.', code: 'ALREADY_REVERSED' });
     }
-    
-    if (condition !== undefined && condition !== entry.condition) {
-      changes.push({ field: 'condition', from: entry.condition, to: condition });
-      entry.condition = condition;
-    }
-    
-    if (partyDetails !== undefined) {
-      changes.push({ field: 'partyDetails', from: entry.partyDetails, to: partyDetails });
-      entry.partyDetails = { ...entry.partyDetails, ...partyDetails };
-    }
-    
-    if (transactionDetails !== undefined) {
-      changes.push({ field: 'transactionDetails', from: entry.transactionDetails, to: transactionDetails });
-      entry.transactionDetails = { ...entry.transactionDetails, ...transactionDetails };
-    }
-    
-    if (notes !== undefined) {
-      changes.push({ field: 'notes', from: entry.notes, to: notes });
-      entry.notes = notes;
-    }
-    
-    if (serialNumbers !== undefined) {
-      changes.push({ field: 'serialNumbers', from: entry.serialNumbers?.length || 0, to: serialNumbers.length });
-      entry.serialNumbers = serialNumbers;
-    }
-    
-    // Add edit metadata
-    entry.lastEditedBy = req.userId;
-    entry.lastEditedAt = new Date();
-    entry.editHistory = entry.editHistory || [];
-    entry.editHistory.push({
-      editedBy: req.userId,
-      editedAt: new Date(),
-      changes: changes
-    });
-    
-    await entry.save();
 
-    logger.info('[AUDIT] Stock entry edited: %o', { 
-      entryId: id, 
-      editedBy: req.userId, 
-      changes 
+    // Reversal type: flip IN <-> OUT (and TRANSFER variants)
+    const reversalTypeMap = { IN: 'OUT', OUT: 'IN', TRANSFER_IN: 'TRANSFER_OUT', TRANSFER_OUT: 'TRANSFER_IN' };
+    const reversalType = reversalTypeMap[original.type];
+    const reversalQty = overrideQty && overrideQty > 0 ? overrideQty : original.quantity;
+
+    const session = await StockLedger.startSession();
+    let reversalEntry;
+    try {
+      await session.withTransaction(async () => {
+        // 1. Soft-delete the original entry
+        await StockLedger.updateOne(
+          { _id: original._id },
+          {
+            $set: {
+              isDeleted: true,
+              deletedBy: req.userId,
+              deletedAt: new Date()
+            }
+          },
+          { session, skipTenantIsolation: true }
+        );
+
+        // 2. Create the offsetting reversal entry
+        reversalEntry = new StockLedger({
+          tenantId: original.tenantId,
+          companyId: original.companyId,
+          productId: original.productId,
+          warehouseId: original.warehouseId,
+          type: reversalType,
+          quantity: reversalQty,
+          condition: original.condition,
+          serialNumbers: original.serialNumbers,
+          partyDetails: original.partyDetails,
+          transactionDetails: original.transactionDetails,
+          createdBy: req.userId,
+          role: req.userRole,
+          notes: `[REVERSAL of ${original._id}] ${reason.trim()}`
+        });
+        await reversalEntry.save({ session });
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    logger.info('[AUDIT] Stock entry reversed: %o', {
+      originalEntryId: id,
+      reversalEntryId: reversalEntry._id,
+      reversedBy: req.userId,
+      reason: reason.trim(),
+      originalQty: original.quantity,
+      reversalQty
     });
-    
-    res.json({ 
-      message: 'Stock entry updated successfully',
-      entry: entry,
-      changes: changes
+
+    logBusinessEvent({
+      req,
+      action: 'STOCK_ADJUSTED',
+      entityType: 'StockLedger',
+      entityId: original._id,
+      changes: {
+        summary: `Reversed stock entry ${original._id} (${reversalType} ${reversalQty} units). Reason: ${reason}`
+      },
+      details: {
+        originalEntryId: original._id,
+        reversalEntryId: reversalEntry._id,
+        reversalType,
+        quantity: reversalQty,
+        reason
+      },
+      severity: 'WARNING'
+    }).catch(() => {});
+
+    res.status(201).json({
+      message: 'Reversal entry created. Original entry soft-deleted.',
+      originalEntryId: original._id,
+      reversalEntry: {
+        _id: reversalEntry._id,
+        type: reversalEntry.type,
+        quantity: reversalEntry.quantity,
+        notes: reversalEntry.notes
+      }
     });
   } catch (error) {
-    console.error('Edit stock entry error:', error);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Reversal error:', error);
+    res.status(500).json({ message: 'Server error during reversal' });
   }
 });
 
@@ -973,43 +1113,13 @@ router.put('/:id', requireAuth, (req, res) => {
   });
 });
 
-// DELETE /api/stock/ledger/:id - Delete stock ledger entry (ADMIN ONLY)
-// Note: This allows Admin to delete entries, but creates an audit trail
-router.delete('/ledger/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    // Find the entry first
-    const entry = await StockLedger.findById(id).populate('productId', 'name');
-    
-    if (!entry) {
-      return res.status(404).json({ message: 'Stock entry not found' });
-    }
-    
-    // Store entry info for audit log before deletion
-    const entryInfo = {
-      entryId: entry._id,
-      productId: entry.productId?._id,
-      productName: entry.productId?.name,
-      quantity: entry.quantity,
-      type: entry.type,
-      deletedBy: req.userId,
-      deletedAt: new Date()
-    };
-    
-    // Delete the entry
-    await StockLedger.findByIdAndDelete(id);
-
-    logger.info('[AUDIT] Stock entry deleted: %o', entryInfo);
-    
-    res.json({ 
-      message: 'Stock entry deleted successfully',
-      deletedEntry: entryInfo
-    });
-  } catch (error) {
-    console.error('Delete stock entry error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
+// ❌ DELETE /api/stock/ledger/:id - DISABLED (hard delete violates immutability)
+// Use POST /api/stock/ledger/:id/reverse to correct entries instead.
+router.delete('/ledger/:id', requireAuth, (req, res) => {
+  return res.status(403).json({
+    message: 'Stock ledger entries cannot be hard-deleted. The ledger is immutable. Use POST /api/stock/ledger/:id/reverse to create a correction entry.',
+    code: 'LEDGER_IMMUTABLE'
+  });
 });
 
 // ❌ DELETE /api/stock/:id - DISABLED for non-Admin (Ledger is immutable)
@@ -1021,30 +1131,33 @@ router.delete('/:id', requireAuth, (req, res) => {
 });
 
 // GET /api/stock/:productId - Get stock for a product
-// Data isolation: Manager/User cannot see Admin activity
 router.get('/:productId', requireAuth, validateObjectId, async (req, res) => {
   try {
     const { productId } = req.params;
-    const item = await Item.findById(productId);
+    const itemFilter = { _id: productId };
+    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(itemFilter);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
     
-    // Data isolation for history
     let historyQuery = { productId };
+    if (req.tenantId) historyQuery.tenantId = req.tenantId;
+
     if (req.userRole === 'MANAGER' || req.userRole === 'USER') {
-      // See only their own entries, exclude Admin activity
       historyQuery.createdBy = req.userId;
       historyQuery.role = { $ne: 'ADMIN' };
     }
-    // ADMIN and SUPER_ADMIN see all history for this product
 
     const stockEntries = await StockLedger.find(historyQuery)
       .populate('createdBy', 'name role')
       .sort({ createdAt: -1 });
       
-    // Total stock is global (IN - OUT)
-    const allEntries = await StockLedger.find({ productId });
+    const allQuery = { productId };
+    if (req.tenantId) allQuery.tenantId = req.tenantId;
+
+    const allEntries = await StockLedger.find(allQuery);
     const stock = allEntries.reduce((acc, entry) => {
       return acc + (entry.type === 'IN' ? entry.quantity : -entry.quantity);
     }, 0);
@@ -1055,6 +1168,5 @@ router.get('/:productId', requireAuth, validateObjectId, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 module.exports = router;

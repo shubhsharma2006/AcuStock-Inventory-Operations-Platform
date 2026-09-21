@@ -6,11 +6,45 @@ const User = require('../models/User');
 const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
 const { requireAuth, requireRole, checkForcePasswordReset } = require('../middleware/auth');
+const { validateRequest, schemas } = require('../middleware/validateRequest');
 const { sendPasswordResetEmail } = require('../services/email.service');
 const { notify } = require('../services/notificationHelper');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+
+const AUTH_IDENTIFIER_MAX_LENGTH = 254;
+
+function normalizeAuthPayload(payload = {}) {
+  const { identifier, password, role, email, phone, token } = payload;
+
+  const normalized = {
+    identifier: typeof identifier === 'string' ? identifier.trim() : identifier,
+    password: typeof password === 'string' ? password.trim() : password,
+    role: typeof role === 'string' ? role.trim() : role,
+    email: typeof email === 'string' ? email.trim().toLowerCase() : email,
+    phone: typeof phone === 'string' ? phone.trim() : phone,
+    token: typeof token === 'string' ? token.trim() : token
+  };
+
+  if (normalized.identifier !== undefined && typeof normalized.identifier !== 'string') {
+    throw new Error('Identifier must be a string');
+  }
+
+  if (normalized.password !== undefined && typeof normalized.password !== 'string') {
+    throw new Error('Password must be a string');
+  }
+
+  if (normalized.role !== undefined && typeof normalized.role !== 'string') {
+    throw new Error('Role must be a string');
+  }
+
+  if (normalized.identifier && normalized.identifier.length > AUTH_IDENTIFIER_MAX_LENGTH) {
+    throw new Error('Identifier is too long');
+  }
+
+  return normalized;
+}
 
 // ============================================================
 // HELPER FUNCTIONS
@@ -28,6 +62,7 @@ async function notifyUserRegistered(user) {
       link:       'users',
       relatedModel: 'User',
       relatedId:    user._id,
+      tenantId:     user.tenantId || undefined,
       metadata: {
         userId:   user._id,
         userName: user.name,
@@ -67,6 +102,7 @@ async function notifyPasswordChange(targetUser, changedBy, changedByUser) {
       relatedId:    targetUser._id,
       createdBy:     changedByUser?._id || null,
       createdByRole: changedBy === 'SELF' ? targetUser.role : changedBy,
+      tenantId:     targetUser.tenantId || undefined,
       metadata: {
         userId:         targetUser._id,
         userName:       targetUser.name,
@@ -79,23 +115,34 @@ async function notifyPasswordChange(targetUser, changedBy, changedByUser) {
   }
 }
 
-// Function to generate JWT with tokenVersion for session management
-// `remember` controls both cookie maxAge AND the JWT's own expiry so
-// the token does not silently expire mid-session on day 2 of a 7-day cookie.
-const createToken = (_id, tokenVersion = 0, remember = false) => {
-  return jwt.sign({ _id, tokenVersion }, process.env.JWT_SECRET, {
-    expiresIn: remember ? '7d' : '1d'
+// Function to generate Access JWT (short-lived)
+const createAccessToken = (_id, tokenVersion = 0) => {
+  return jwt.sign({ _id, tokenVersion, type: 'access' }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRE || '15m'
   });
 };
 
+// Function to generate Refresh JWT (long-lived)
+const createRefreshToken = (_id, tokenVersion = 0, remember = false) => {
+  const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  return jwt.sign({ _id, tokenVersion, type: 'refresh' }, secret, {
+    expiresIn: remember ? '30d' : '7d'
+  });
+};
+
+// Legacy compatibility
+const createToken = createAccessToken;
+
 // Cookie options for production security
-const getCookieOptions = (remember = false) => {
+const getCookieOptions = (remember = false, isRefresh = false) => {
   const isProduction = process.env.NODE_ENV === 'production';
   return {
     httpOnly: true,                          // Prevents XSS - JS cannot access
     secure: isProduction,                    // HTTPS only in production
     sameSite: isProduction ? 'strict' : 'lax', // CSRF protection
-    maxAge: remember ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000, // 7 days or 1 day
+    maxAge: isRefresh
+      ? (remember ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000)
+      : (15 * 60 * 1000), // 15 minutes for access token
     path: '/'
   };
 };
@@ -115,12 +162,13 @@ const hashResetToken = (token) => {
 // ============================================================
 
 // POST /api/auth/login - User Login
-router.post('/login', async (req, res) => {
-  const { identifier, password, role } = req.body;
+router.post('/login', validateRequest(schemas.login), async (req, res) => {
+  try {
+    const { identifier, password, role } = normalizeAuthPayload(req.body);
 
-  if (!identifier || !password || !role) {
-    return res.status(400).json({ message: 'Identifier, password, and role are required' });
-  }
+    if (!identifier || !password || !role) {
+      return res.status(400).json({ message: 'Identifier, password, and role are required' });
+    }
 
   // Basic email regex for ADMIN/MANAGER, phone regex for USER
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -132,21 +180,26 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid email format' });
     }
   } else if (role === 'USER') {
-    if (!phoneRegex.test(identifier)) {
-      return res.status(400).json({ message: 'Invalid phone number format (10-15 digits)' });
+    const isEmail = emailRegex.test(identifier);
+    const isPhone = phoneRegex.test(identifier);
+    if (!isEmail && !isPhone) {
+      return res.status(400).json({ message: 'Identifier must be a valid email or 10-15 digit phone number' });
     }
   } else {
     return res.status(400).json({ message: 'Invalid role specified' });
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters long' });
-  }
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+    }
 
-  try {
     let user;
     if (role === 'USER') {
-      user = await User.findOne({ phone: identifier, role: 'USER' }).select('+password +failedLoginAttempts +lockUntil');
+      const isEmail = emailRegex.test(identifier);
+      const userQuery = isEmail
+        ? { email: identifier.toLowerCase(), role: 'USER' }
+        : { phone: identifier, role: 'USER' };
+      user = await User.findOne(userQuery).select('+password +failedLoginAttempts +lockUntil');
     } else if (role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER') {
       user = await User.findOne({ email: identifier.toLowerCase(), role }).select('+password +failedLoginAttempts +lockUntil');
     } else {
@@ -262,9 +315,39 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Set HTTP-only cookie for production security
+    // Check if Two-Factor Authentication (2FA) is enabled
+    if (user.twoFactorEnabled) {
+      const tempToken = jwt.sign(
+        {
+          userId:     user._id,
+          tenantId:   user.tenantId,
+          purpose:    'MFA_AUTHENTICATION',
+          mfaPending: true
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: '5m' }
+      );
+
+      return res.status(200).json({
+        success: true,
+        mfaRequired: true,
+        tempToken,
+        message: 'Two-factor authentication code required',
+        user: {
+          id:       user._id,
+          name:     user.name,
+          email:    user.email,
+          phone:    user.phone,
+          role:     user.role,
+          tenantId: user.tenantId
+        }
+      });
+    }
+
+    // Set HTTP-only cookies for production security (Access + Refresh tokens)
     const remember = req.body.remember || false;
-    const token = createToken(user._id, user.tokenVersion || 0, remember);
+    const accessToken = createAccessToken(user._id, user.tokenVersion || 0);
+    const refreshToken = createRefreshToken(user._id, user.tokenVersion || 0, remember);
 
     // Update lastLogin timestamp
     user.lastLogin = Date.now();
@@ -273,10 +356,12 @@ router.post('/login', async (req, res) => {
     // Log successful login
     await AuditLog.logSuccessfulLogin(user, req);
 
-    res.cookie('authToken', token, getCookieOptions(remember));
+    res.cookie('authToken', accessToken, getCookieOptions(remember, false));
+    res.cookie('refreshToken', refreshToken, getCookieOptions(remember, true));
 
     res.json({
       message: 'Login successful',
+      token: accessToken,
       user: {
         id: user._id,
         name: user.name,
@@ -288,7 +373,64 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     logger.error('Login error:', error);
-    res.status(500).json({ message: "Server error" });
+    const message = error.message || 'Server error';
+    const statusCode = message.includes('must be') || message.includes('too long') || message.includes('required') || message.includes('format') ? 400 : 500;
+    res.status(statusCode).json({ message });
+  }
+});
+
+// POST /api/auth/refresh - Refresh access token using refresh token
+router.post('/refresh', async (req, res) => {
+  try {
+    const refreshToken = (req.cookies && req.cookies.refreshToken) || req.body.refreshToken;
+
+    if (!refreshToken) {
+      return res.status(401).json({ message: 'Refresh token missing', code: 'NO_REFRESH_TOKEN' });
+    }
+
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, refreshSecret);
+    } catch (err) {
+      return res.status(401).json({ message: 'Invalid or expired refresh token', code: 'INVALID_REFRESH_TOKEN' });
+    }
+
+    const user = await User.findById(decoded._id || decoded.id).select('_id name email phone role isActive tokenVersion');
+    if (!user) {
+      return res.status(401).json({ message: 'User not found', code: 'USER_NOT_FOUND' });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ message: 'Account is inactive', code: 'ACCOUNT_INACTIVE' });
+    }
+
+    if (decoded.tokenVersion !== undefined && user.tokenVersion !== decoded.tokenVersion) {
+      return res.status(401).json({ message: 'Session invalidated. Please log in again.', code: 'TOKEN_INVALIDATED' });
+    }
+
+    // Issue new access token + rotated refresh token
+    const newAccessToken = createAccessToken(user._id, user.tokenVersion || 0);
+    const newRefreshToken = createRefreshToken(user._id, user.tokenVersion || 0);
+
+    res.cookie('authToken', newAccessToken, getCookieOptions(false, false));
+    res.cookie('refreshToken', newRefreshToken, getCookieOptions(false, true));
+
+    res.json({
+      success: true,
+      message: 'Token refreshed successfully',
+      token: newAccessToken,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    logger.error('Token refresh error:', error);
+    res.status(500).json({ message: 'Server error during token refresh' });
   }
 });
 
@@ -314,14 +456,20 @@ router.get('/me', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/auth/logout - Clear auth cookie
+// POST /api/auth/logout - Clear all auth cookies
 router.post('/logout', (req, res) => {
-  res.clearCookie('authToken', {
+  const cookieOpts = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
     path: '/'
-  });
+  };
+  res.clearCookie('authToken', cookieOpts);
+  res.clearCookie('token', cookieOpts);
+  res.clearCookie('refreshToken', cookieOpts);
+  res.clearCookie('csrfToken', cookieOpts);
+  // Instruct the browser to clear all site data on logout (cache, cookies, storage)
+  res.setHeader('Clear-Site-Data', '"cache", "cookies", "storage"');
   res.json({ message: 'Logged out successfully' });
 });
 
@@ -343,7 +491,10 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
   }
 
   try {
-    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    const existingUser = await User.findOne({ 
+      email: email.toLowerCase(),
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     if (existingUser) {
       return res.status(400).json({ message: 'Manager with this email already exists' });
     }
@@ -359,7 +510,8 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
       createdBy: req.user._id,
       passwordChangedAt: new Date(),
       passwordChangedBy: 'ADMIN',
-      forcePasswordReset: forcePasswordReset // Force password change on first login
+      forcePasswordReset: forcePasswordReset, // Force password change on first login
+      tenantId: req.tenantId || undefined
     });
 
     await manager.save();
@@ -375,6 +527,7 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
       targetUserRole: manager.role,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
+      tenantId: req.tenantId || undefined,
       severity: 'INFO'
     });
     
@@ -423,7 +576,10 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
   }
 
   try {
-    const existingUser = await User.findOne({ phone });
+    const existingUser = await User.findOne({ 
+      phone,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     if (existingUser) {
       return res.status(400).json({ message: 'User with this phone number already exists' });
     }
@@ -440,7 +596,8 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
       createdBy: req.user._id, // Track who created this user
       passwordChangedAt: new Date(),
       passwordChangedBy: req.user.role, // 'ADMIN' or 'MANAGER'
-      forcePasswordReset: forcePasswordReset // Force password change on first login
+      forcePasswordReset: forcePasswordReset, // Force password change on first login
+      tenantId: req.tenantId || undefined
     });
 
     await user.save();
@@ -456,6 +613,7 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
       targetUserRole: user.role,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
+      tenantId: req.tenantId || undefined,
       severity: 'INFO'
     });
     
@@ -469,6 +627,7 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
         userId: user._id,
         userName: user.name,
         userRole: user.role,
+        tenantId: req.tenantId,
         createdBy: req.user.name || req.user.email,
         timestamp: new Date()
       });

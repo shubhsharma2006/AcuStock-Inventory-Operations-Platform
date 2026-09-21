@@ -5,6 +5,8 @@ const Item = require('../models/Item');
 const StockLedger = require('../models/StockLedger');
 const SerialAudit = require('../models/SerialAudit');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { generateShipmentChallanPdf } = require('../services/pdfGenerator');
+const logger = require('../utils/logger');
 
 const router = express.Router();
 
@@ -14,6 +16,8 @@ router.get('/', requireAuth, async (req, res) => {
     const { status, type, page = 1, limit = 20, search } = req.query;
     const query = {};
     
+    if (req.tenantId) query.tenantId = req.tenantId;
+
     // Role-based filtering:
     // USER → only their own shipments
     // MANAGER → only shipments they created
@@ -77,8 +81,8 @@ router.get('/pending', requireAuth, async (req, res) => {
     const userId = (req.user.role === 'USER' || req.user.role === 'MANAGER')
       ? req.user._id
       : null;
-    const shipments = await Shipment.getPendingDeliveries(userId);
-    const count = await Shipment.getPendingCount(userId);
+    const shipments = await Shipment.getPendingDeliveries(userId, 50, req.tenantId);
+    const count = await Shipment.getPendingCount(userId, req.tenantId);
 
     res.json({ shipments, count });
   } catch (error) {
@@ -91,6 +95,8 @@ router.get('/pending', requireAuth, async (req, res) => {
 router.get('/stats', requireAuth, async (req, res) => {
   try {
     const query = {};
+    if (req.tenantId) query.tenantId = req.tenantId;
+
     if (req.user.role === 'USER' || req.user.role === 'MANAGER') {
       query.createdBy = req.user._id;
     }
@@ -126,7 +132,10 @@ router.get('/stats', requireAuth, async (req, res) => {
 // GET /api/shipments/:id - Get single shipment
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const shipment = await Shipment.findById(req.params.id)
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const shipment = await Shipment.findOne(filter)
       .populate('productId', 'name shortName hsnCode')
       .populate('createdBy', 'name email')
       .populate('statusHistory.updatedBy', 'name');
@@ -144,6 +153,37 @@ router.get('/:id', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Get shipment error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ── GET /api/shipments/:id/pdf - Download Delivery Challan PDF ─
+router.get('/:id/pdf', requireAuth, async (req, res) => {
+  try {
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const shipment = await Shipment.findOne(filter)
+      .populate('productId', 'name shortName hsnCode')
+      .populate('createdBy', 'name email');
+
+    if (!shipment) {
+      return res.status(404).json({ success: false, error: 'Shipment not found' });
+    }
+
+    if (req.user.role === 'USER' && shipment.createdBy && !shipment.createdBy._id.equals(req.user._id)) {
+      return res.status(403).json({ success: false, error: 'Access denied' });
+    }
+
+    const filename = `Delivery-Challan-${shipment.reference || 'SHP'}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+    generateShipmentChallanPdf(shipment, req.tenant, res);
+  } catch (err) {
+    logger.error('Shipment PDF error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: 'Failed to generate challan PDF' });
+    }
   }
 });
 
@@ -189,8 +229,11 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       return res.status(400).json({ message: 'Missing required fields' });
     }
     
-    // Get product
-    const item = await Item.findById(productId).session(session);
+    // Get product scoped to tenant
+    const itemFilter = { _id: productId };
+    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+
+    const item = await Item.findOne(itemFilter).session(session);
     if (!item) {
       await session.abortTransaction();
       return res.status(404).json({ message: 'Product not found' });
@@ -218,8 +261,11 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       
       // Validate serials are in stock
       if (serialNumbers.length > 0) {
+        const auditMatch = { serial: { $in: serialNumbers } };
+        if (req.tenantId) auditMatch.tenantId = req.tenantId;
+
         const existingAudits = await SerialAudit.aggregate([
-          { $match: { serial: { $in: serialNumbers } } },
+          { $match: auditMatch },
           { $sort: { createdAt: 1 } },
           { $group: { _id: '$serial', lastAction: { $last: '$action' } } }
         ]).session(session);
@@ -268,7 +314,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       remarks,
       type,
       status: dispatchDate ? 'DISPATCHED' : 'PENDING',
-      createdBy: req.user._id
+      createdBy: req.user._id,
+      tenantId: req.tenantId || undefined
     });
     
     await shipment.save({ session });
@@ -281,7 +328,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
         quantity: quantity,
         serialNumbers,
         createdBy: req.user._id,
-        role: req.user.role
+        role: req.user.role,
+        tenantId: req.tenantId || undefined
       });
       await ledgerEntry.save({ session });
       
@@ -292,7 +340,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
           productId,
           action: 'OUT',
           performedBy: req.user._id,
-          role: req.user.role
+          role: req.user.role,
+          tenantId: req.tenantId || undefined
         }));
         await SerialAudit.insertMany(auditEntries, { session });
       }
@@ -306,7 +355,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
         quantity,
         serialNumbers,
         createdBy: req.user._id,
-        role: req.user.role
+        role: req.user.role,
+        tenantId: req.tenantId || undefined
       });
       await ledgerEntry.save({ session });
       
@@ -317,7 +367,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
           productId,
           action: 'IN',
           performedBy: req.user._id,
-          role: req.user.role
+          role: req.user.role,
+          tenantId: req.tenantId || undefined
         }));
         await SerialAudit.insertMany(auditEntries, { session });
       }
@@ -348,7 +399,10 @@ router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
       return res.status(400).json({ message: 'Invalid status' });
     }
     
-    const shipment = await Shipment.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const shipment = await Shipment.findOne(filter);
     if (!shipment) {
       return res.status(404).json({ message: 'Shipment not found' });
     }
@@ -389,7 +443,10 @@ router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
 // PUT /api/shipments/:id - Update shipment details
 router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const shipment = await Shipment.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const shipment = await Shipment.findOne(filter);
     if (!shipment) {
       return res.status(404).json({ message: 'Shipment not found' });
     }
@@ -430,7 +487,10 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
 // DELETE /api/shipments/:id - Cancel/Delete shipment (Admin only)
 router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const shipment = await Shipment.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const shipment = await Shipment.findOne(filter);
     if (!shipment) {
       return res.status(404).json({ message: 'Shipment not found' });
     }
@@ -440,7 +500,7 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
       return res.status(400).json({ message: 'Only pending shipments can be deleted' });
     }
     
-    await Shipment.findByIdAndDelete(req.params.id);
+    await Shipment.findOneAndDelete(filter);
     
     res.json({ message: 'Shipment deleted successfully' });
   } catch (error) {

@@ -125,6 +125,13 @@ const notificationSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: false,
+    default: null,
+    index: true
   }
 });
 
@@ -132,10 +139,10 @@ const notificationSchema = new mongoose.Schema({
 // TTL: auto-delete expired notifications
 notificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-// Fast list queries: user's notifications sorted by time
+// Fast list queries: user's notifications sorted by time per tenant
+notificationSchema.index({ tenantId: 1, userId: 1, isRead: 1, createdAt: -1 });
+notificationSchema.index({ tenantId: 1, targetRole: 1, isRead: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, isRead: 1, createdAt: -1 });
-
-// Fast list queries: role-broadcast notifications sorted by time
 notificationSchema.index({ targetRole: 1, isRead: 1, createdAt: -1 });
 
 // Category filtering
@@ -147,24 +154,28 @@ notificationSchema.index({ category: 1, createdAt: -1 });
  * Build the $or query for a user's visible notifications.
  * SUPER_ADMIN also sees ADMIN-targeted notifications.
  */
-notificationSchema.statics.buildUserQuery = function(userId, role) {
+notificationSchema.statics.buildUserQuery = function(userId, role, tenantId) {
   const targetRoles = role === 'SUPER_ADMIN'
     ? [role, 'ADMIN', 'ALL']
     : [role, 'ALL'];
 
-  return {
+  const query = {
     $or: [
       { userId: userId },
       { targetRole: { $in: targetRoles } }
     ]
   };
+  if (tenantId) {
+    query.tenantId = tenantId;
+  }
+  return query;
 };
 
 /**
  * Get unread count for a user.
  */
-notificationSchema.statics.getUnreadCount = async function(userId, role) {
-  const query = this.buildUserQuery(userId, role);
+notificationSchema.statics.getUnreadCount = async function(userId, role, tenantId) {
+  const query = this.buildUserQuery(userId, role, tenantId);
   query.isRead = false;
   return this.countDocuments(query);
 };
@@ -177,5 +188,8 @@ notificationSchema.statics.createNotification = async function(data) {
   await notification.save();
   return notification;
 };
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+notificationSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Notification', notificationSchema);

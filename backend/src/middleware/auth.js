@@ -1,5 +1,21 @@
 const mongoose = require('mongoose');
 
+const isValidObjectIdString = (value) => {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && mongoose.Types.ObjectId.isValid(trimmed);
+};
+
+const normalizePaginationQuery = (query = {}) => {
+  const page = Number.parseInt(query.page, 10);
+  const limit = Number.parseInt(query.limit, 10);
+
+  return {
+    page: Number.isInteger(page) && page > 0 ? page : 1,
+    limit: Number.isInteger(limit) && limit > 0 ? Math.min(limit, 200) : 50
+  };
+};
+
 /**
  * validateObjectId
  * Middleware: rejects requests where :id is not a valid MongoDB ObjectId.
@@ -8,14 +24,15 @@ const mongoose = require('mongoose');
  */
 const validateObjectId = (req, res, next) => {
   const id = req.params.id || req.params.productId;
-  if (id && !mongoose.Types.ObjectId.isValid(id)) {
-    return res.status(400).json({ message: 'Invalid ID format' });
+  if (id && !isValidObjectIdString(id)) {
+    return res.status(400).json({ success: false, error: 'Invalid ID format' });
   }
   next();
 };
 
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Tenant = require('../models/Tenant');
 
 /**
  * Extract token from Authorization header or HTTP-only cookie
@@ -29,8 +46,9 @@ const getToken = (req) => {
   
   // Fallback to Authorization header (for API clients/mobile)
   const authorization = req.headers.authorization;
-  if (authorization && authorization.startsWith('Bearer ')) {
-    return authorization.split(' ')[1];
+  if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
+    const token = authorization.split(' ')[1];
+    return token && token.trim() ? token.trim() : null;
   }
   
   return null;
@@ -52,7 +70,15 @@ const requireAuth = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const user = await User.findById(decoded._id).select('_id role isActive tokenVersion');
+    // Reject temporary MFA challenge tokens on standard protected APIs
+    if (decoded.mfaPending === true || decoded.purpose === 'MFA_AUTHENTICATION') {
+      return res.status(401).json({
+        message: 'Two-factor authentication verification required',
+        code: 'MFA_PENDING'
+      });
+    }
+
+    const user = await User.findById(decoded._id || decoded.id || decoded.userId).select('_id role isActive tokenVersion tenantId');
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
@@ -62,6 +88,69 @@ const requireAuth = async (req, res, next) => {
       return res.status(403).json({ 
         message: 'Account inactive. Contact admin.',
         code: 'ACCOUNT_INACTIVE'
+      });
+    }
+
+    if (decoded.tenantId && user.tenantId && String(decoded.tenantId) !== String(user.tenantId)) {
+      return res.status(401).json({
+        message: 'Session tenant does not match account membership',
+        code: 'TENANT_SESSION_MISMATCH'
+      });
+    }
+
+    // Resolve tenant after authentication so trusted identity, not a client
+    // header, controls tenant context for protected requests.
+    const requestedTenantId = req.tenantId;
+    const isSystemRequest = req.path.startsWith('/superadmin') || req.path.startsWith('/setup');
+
+    // Workspace Boundary Guard:
+    // If request arrived via a specific tenant subdomain or workspace header,
+    // verify the authenticated user belongs to that workspace (unless SUPER_ADMIN).
+    if (requestedTenantId && user.tenantId && String(requestedTenantId) !== String(user.tenantId) && !isSystemRequest) {
+      if (user.role !== 'SUPER_ADMIN') {
+        return res.status(403).json({
+          message: 'Access denied: Your account is registered under another workspace organization.',
+          code: 'TENANT_WORKSPACE_MISMATCH'
+        });
+      }
+    }
+
+    if (user.tenantId) {
+      const tenant = await Tenant.findById(user.tenantId);
+      if (!tenant || !tenant.isActive || ['SUSPENDED', 'CANCELED'].includes(tenant.status)) {
+        return res.status(403).json({
+          message: 'Organization account is suspended or inactive. Contact support.',
+          code: 'TENANT_INACTIVE'
+        });
+      }
+      req.tenant = tenant;
+      req.tenantId = user.tenantId;
+
+      const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+      const isBillingOrAuthRecovery = req.path.startsWith('/billing') ||
+        req.path.startsWith('/auth/logout') || req.path.startsWith('/auth/refresh');
+      const subscriptionStatus = tenant.subscriptionStatus || tenant.status;
+      const gracePeriodActive = tenant.gracePeriodEndsAt && tenant.gracePeriodEndsAt > new Date();
+      if (isMutation && !isBillingOrAuthRecovery && ['PAST_DUE', 'UNPAID'].includes(subscriptionStatus) && !gracePeriodActive) {
+        return res.status(402).json({
+          message: 'Subscription payment is past due. Update billing to resume write operations.',
+          code: 'SUBSCRIPTION_PAST_DUE'
+        });
+      }
+    } else if (user.role === 'SUPER_ADMIN' && requestedTenantId && req.tenant) {
+      // Super-admin tenant access must be explicitly selected by a trusted
+      // system operation or tenant-qualified request context.
+      if (!req.tenant.isActive || ['SUSPENDED', 'CANCELED'].includes(req.tenant.status)) {
+        return res.status(403).json({
+          message: 'Organization account is suspended or inactive. Contact support.',
+          code: 'TENANT_INACTIVE'
+        });
+      }
+      req.tenantId = requestedTenantId;
+    } else if (!isSystemRequest && (process.env.NODE_ENV === 'production' || process.env.REQUIRE_TENANT_CONTEXT === 'true')) {
+      return res.status(403).json({
+        message: 'A tenant workspace is required for this account.',
+        code: 'TENANT_REQUIRED'
       });
     }
 
@@ -76,10 +165,13 @@ const requireAuth = async (req, res, next) => {
     req.user = user;
     req.userId = user._id;
     req.userRole = user.role;
+    if (!req.tenantId) req.tenantId = user.tenantId || null;
 
     next();
   } catch (err) {
-    console.error('Auth middleware error:', err.message);
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Auth middleware error:', err.message);
+    }
     return res.status(401).json({ message: 'Invalid or expired token' });
   }
 };
@@ -147,67 +239,19 @@ const checkForcePasswordReset = async (req, res, next) => {
     
     next();
   } catch (err) {
-    console.error('Force password reset check error:', err.message);
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('Force password reset check error:', err.message);
+    }
     next(); // Don't block on error, let main route handle auth
   }
-};
-
-/**
- * Serial policy enforcement (per product)
- * action = 'IN' | 'OUT'
- */
-const enforceSerialPolicy = (action) => {
-  return async (req, res, next) => {
-    try {
-      const { productId, serialNumbers = [] } = req.body;
-
-      if (!productId) {
-        return res.status(400).json({ message: 'Product is required' });
-      }
-
-      const Product = require('../models/Product');
-      const product = await Product.findById(productId).select('serialPolicy');
-
-      if (!product) {
-        return res.status(400).json({ message: 'Invalid product' });
-      }
-
-      const policy = product.serialPolicy || { enabled: false };
-
-      // Serial completely disabled
-      if (!policy.enabled && serialNumbers.length > 0) {
-        return res.status(403).json({
-          message: 'Serial numbers are disabled for this product'
-        });
-      }
-
-      // Stock IN restriction
-      if (action === 'IN' && policy.enabled && policy.inStock === false && serialNumbers.length > 0) {
-        return res.status(403).json({
-          message: 'Serial numbers not allowed for stock IN'
-        });
-      }
-
-      // Stock OUT restriction
-      if (action === 'OUT' && policy.enabled && policy.outStock === false && serialNumbers.length > 0) {
-        return res.status(403).json({
-          message: 'Serial numbers not allowed for stock OUT'
-        });
-      }
-
-      next();
-    } catch (err) {
-      console.error('Serial policy error:', err.message);
-      return res.status(500).json({ message: 'Serial policy enforcement failed' });
-    }
-  };
 };
 
 module.exports = {
   requireAuth,
   requireRole,
   checkForcePasswordReset,
-  enforceSerialPolicy,
   validateObjectId,
+  isValidObjectIdString,
+  normalizePaginationQuery,
 };
 // Note: validateObjectId is a simple middleware to check if :id params are valid MongoDB ObjectIds, preventing CastErrors from reaching the client.

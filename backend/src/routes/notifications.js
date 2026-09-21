@@ -21,7 +21,7 @@ router.get('/', requireAuth, async (req, res) => {
     const parsedLimit = Math.min(100, Math.max(1, parseInt(limit) || 20));
 
     const user  = req.user;
-    const query = Notification.buildUserQuery(user._id, user.role);
+    const query = Notification.buildUserQuery(user._id, user.role, req.tenantId);
 
     if (unreadOnly === 'true') {
       query.isRead = false;
@@ -40,7 +40,7 @@ router.get('/', requireAuth, async (req, res) => {
         .limit(parsedLimit)
         .lean(),
       Notification.countDocuments(query),
-      Notification.countDocuments({ ...Notification.buildUserQuery(user._id, user.role), isRead: false })
+      Notification.countDocuments({ ...Notification.buildUserQuery(user._id, user.role, req.tenantId), isRead: false })
     ]);
 
     res.json({
@@ -62,7 +62,7 @@ router.get('/', requireAuth, async (req, res) => {
 router.get('/unread-count', requireAuth, async (req, res) => {
   try {
     const user = req.user;
-    const unreadCount = await Notification.getUnreadCount(user._id, user.role);
+    const unreadCount = await Notification.getUnreadCount(user._id, user.role, req.tenantId);
     res.json({ unreadCount });
   } catch (error) {
     console.error('Error fetching unread count:', error);
@@ -78,7 +78,7 @@ router.get('/unread-count', requireAuth, async (req, res) => {
 router.patch('/read-all', requireAuth, async (req, res) => {
   try {
     const user  = req.user;
-    const query = Notification.buildUserQuery(user._id, user.role);
+    const query = Notification.buildUserQuery(user._id, user.role, req.tenantId);
     query.isRead = false;
 
     const result = await Notification.updateMany(query, {
@@ -99,7 +99,8 @@ router.patch('/read-all', requireAuth, async (req, res) => {
 // ============================================================
 router.patch('/:id/read', requireAuth, async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const query = { _id: req.params.id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const notification = await Notification.findOne(query);
 
     if (!notification) {
       return res.status(404).json({ message: 'Notification not found' });
@@ -151,7 +152,8 @@ router.post('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
       category:      category || 'SYSTEM',
       priority:      priority || 'MEDIUM',
       createdBy:     req.user._id,
-      createdByRole: req.user.role
+      createdByRole: req.user.role,
+      tenantId:      req.tenantId || undefined
     });
 
     res.status(201).json(notification);
@@ -167,7 +169,7 @@ router.post('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
 router.delete('/read', requireAuth, async (req, res) => {
   try {
     const user  = req.user;
-    const query = Notification.buildUserQuery(user._id, user.role);
+    const query = Notification.buildUserQuery(user._id, user.role, req.tenantId);
     query.isRead = true;
 
     const result = await Notification.deleteMany(query);
@@ -183,7 +185,8 @@ router.delete('/read', requireAuth, async (req, res) => {
 // ============================================================
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const query = { _id: req.params.id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const notification = await Notification.findOne(query);
 
     if (!notification) {
       return res.status(404).json({ message: 'Notification not found' });

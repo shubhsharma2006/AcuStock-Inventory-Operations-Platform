@@ -5,12 +5,48 @@ const SerialAudit = require('../models/SerialAudit');
 const Item        = require('../models/Item');
 const Warranty    = require('../models/Warranty');
 
+const MAX_STOCK_QUANTITY = 100_000;
+
+function normalizeSerialNumbers(serialNumbers = []) {
+  return serialNumbers
+    .filter((serial) => serial !== undefined && serial !== null && String(serial).trim() !== '')
+    .map((serial) => String(serial).trim().toUpperCase());
+}
+
+function validateStockMovementPayload(payload = {}) {
+  const { quantity, serialNumbers = [] } = payload;
+  const qtyNum = Number(quantity);
+
+  if (!Number.isInteger(qtyNum) || qtyNum < 1 || qtyNum > MAX_STOCK_QUANTITY) {
+    throw new Error('Quantity must be an integer between 1 and 100000');
+  }
+
+  const normalizedSerials = normalizeSerialNumbers(serialNumbers);
+
+  if (normalizedSerials.length > 0 && normalizedSerials.length !== qtyNum) {
+    throw new Error('Serial numbers count must match quantity');
+  }
+
+  const uniqueSerials = new Set(normalizedSerials);
+  if (uniqueSerials.size !== normalizedSerials.length) {
+    throw new Error('Duplicate serial numbers in same entry');
+  }
+
+  return {
+    ...payload,
+    quantity: qtyNum,
+    serialNumbers: normalizedSerials
+  };
+}
+
 /**
  * STOCK IN (TRANSACTIONAL)
  * Uses withTransaction() for automatic retry on transient errors (e.g. write conflicts)
  */
 async function stockIn(data, user) {
+  const validated = validateStockMovementPayload(data);
   const session = await mongoose.startSession();
+  const tenantId = user?.tenantId || data?.tenantId || undefined;
 
   try {
     await session.withTransaction(async () => {
@@ -21,13 +57,13 @@ async function stockIn(data, user) {
         supplier,
         condition,
         transaction
-      } = data;
+      } = validated;
 
-      // 1️⃣ Fetch item inside transaction
-      const item = await Item.findOne({
-        _id: productId,
-        isActive: true
-      }).session(session);
+      // 1️⃣ Fetch item inside transaction (scoped to tenant if present)
+      const itemFilter = { _id: productId, isActive: true };
+      if (tenantId) itemFilter.tenantId = tenantId;
+
+      const item = await Item.findOne(itemFilter).session(session);
 
       if (!item) {
         throw new Error('Item not found or inactive');
@@ -51,10 +87,12 @@ async function stockIn(data, user) {
             throw new Error('Duplicate serial numbers in same entry');
           }
 
-          // Global uniqueness check — serial is "in use" only if its lastAction is 'IN'
-          // (allows re-stocking a serial that was previously sold OUT)
+          // Uniqueness check scoped to tenant
+          const auditMatch = { serial: { $in: [...unique] } };
+          if (tenantId) auditMatch.tenantId = tenantId;
+
           const auditCheck = await SerialAudit.aggregate([
-            { $match: { serial: { $in: [...unique] } } },
+            { $match: auditMatch },
             { $sort: { createdAt: 1 } },
             { $group: { _id: '$serial', lastAction: { $last: '$action' } } },
             { $match: { lastAction: 'IN' } }
@@ -70,7 +108,7 @@ async function stockIn(data, user) {
         throw new Error('Serial numbers are disabled for this product');
       }
 
-      // 3️⃣ Ledger entry (APPEND ONLY - this is the source of truth for stock)
+      // 3️⃣ Ledger entry (APPEND ONLY - source of truth for stock)
       await StockLedger.create([{
         productId,
         type: 'IN',
@@ -80,7 +118,8 @@ async function stockIn(data, user) {
         partyDetails: supplier || {},
         transactionDetails: transaction || {},
         createdBy: user._id,
-        role: user.role
+        role: user.role,
+        tenantId
       }], { session });
 
       // 4️⃣ Serial audit
@@ -90,7 +129,8 @@ async function stockIn(data, user) {
           serial: serial.trim().toUpperCase(),
           action: 'IN',
           performedBy: user._id,
-          role: user.role
+          role: user.role,
+          tenantId
         }));
 
         await SerialAudit.insertMany(audits, { session });
@@ -102,18 +142,20 @@ async function stockIn(data, user) {
       const purchaseData   = Warranty.buildPurchaseWarranty(warrantyPeriod, new Date(), supplierName);
 
       if (policy.enableSerial && serialNumbers.length > 0) {
-        // Use upsert per serial so re-stocking a returned unit does NOT create
-        // a second Warranty document — it leaves the existing one intact.
         for (const serial of serialNumbers) {
           const normalizedSerial = serial.trim().toUpperCase();
+          const warrantyQuery = { serialNumber: normalizedSerial, productId };
+          if (tenantId) warrantyQuery.tenantId = tenantId;
+
           await Warranty.findOneAndUpdate(
-            { serialNumber: normalizedSerial, productId },
+            warrantyQuery,
             { $setOnInsert: {
                 productId,
                 serialNumber:     normalizedSerial,
                 purchaseWarranty: purchaseData,
                 sellerWarranty:   { status: 'not-sold' },
-                createdBy:        user._id
+                createdBy:        user._id,
+                tenantId
               }
             },
             { upsert: true, new: false, session }
@@ -125,7 +167,8 @@ async function stockIn(data, user) {
           serialNumber:     null,
           purchaseWarranty: purchaseData,
           sellerWarranty:   { status: 'not-sold' },
-          createdBy:        user._id
+          createdBy:        user._id,
+          tenantId
         }], { session });
       }
     });
@@ -142,7 +185,9 @@ async function stockIn(data, user) {
  * Uses withTransaction() for automatic retry on transient errors (e.g. write conflicts)
  */
 async function stockOut(data, user) {
+  const validated = validateStockMovementPayload(data);
   const session = await mongoose.startSession();
+  const tenantId = user?.tenantId || data?.tenantId || undefined;
 
   try {
     await session.withTransaction(async () => {
@@ -153,13 +198,13 @@ async function stockOut(data, user) {
         buyer,
         condition,
         transaction
-      } = data;
+      } = validated;
 
-      // 1️⃣ Fetch item inside transaction
-      const item = await Item.findOne({
-        _id: productId,
-        isActive: true
-      }).session(session);
+      // 1️⃣ Fetch item inside transaction (scoped to tenant)
+      const itemFilter = { _id: productId, isActive: true };
+      if (tenantId) itemFilter.tenantId = tenantId;
+
+      const item = await Item.findOne(itemFilter).session(session);
 
       if (!item) {
         throw new Error('Item not found or inactive');
@@ -183,9 +228,11 @@ async function stockOut(data, user) {
         }
 
         if (normalized.length > 0) {
-          // Check availability (last action must be IN)
+          const auditMatch = { serial: { $in: normalized }, productId: item._id };
+          if (tenantId) auditMatch.tenantId = tenantId;
+
           const audits = await SerialAudit.aggregate([
-            { $match: { serial: { $in: normalized }, productId: item._id } },
+            { $match: auditMatch },
             { $sort: { createdAt: 1 } },
             { $group: { _id: '$serial', lastAction: { $last: '$action' } } }
           ]).session(session);
@@ -202,8 +249,11 @@ async function stockOut(data, user) {
       }
 
       // 3️⃣ Check current stock from ledger INSIDE transaction (prevents negative stock on concurrent writes)
+      const stockMatch = { productId: item._id, isDeleted: { $ne: true } };
+      if (tenantId) stockMatch.tenantId = tenantId;
+
       const stockResult = await StockLedger.aggregate([
-        { $match: { productId: item._id, isDeleted: { $ne: true } } },
+        { $match: stockMatch },
         {
           $group: {
             _id: null,
@@ -222,7 +272,7 @@ async function stockOut(data, user) {
         throw new Error(`Insufficient stock. Available: ${currentStock}, Requested: ${quantity}`);
       }
 
-      // 4️⃣ Ledger entry (store as positive; type indicates direction)
+      // 4️⃣ Ledger entry
       await StockLedger.create([{
         productId,
         type: 'OUT',
@@ -232,8 +282,29 @@ async function stockOut(data, user) {
         partyDetails: buyer || {},
         transactionDetails: transaction || {},
         createdBy: user._id,
-        role: user.role
+        role: user.role,
+        tenantId
       }], { session });
+
+      // 4b️⃣ Post-write verification: re-aggregate to catch race-condition negative stock
+      const verifyResult = await StockLedger.aggregate([
+        { $match: stockMatch },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: {
+                $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', { $multiply: ['$quantity', -1] }]
+              }
+            }
+          }
+        }
+      ]).session(session);
+
+      const finalStock = verifyResult.length > 0 ? verifyResult[0].total : 0;
+      if (finalStock < 0) {
+        throw new Error('Insufficient stock. Another transaction updated inventory concurrently. Please retry.');
+      }
 
       // 5️⃣ Serial audit
       if (policy.enableSerial && serialNumbers.length > 0) {
@@ -242,7 +313,8 @@ async function stockOut(data, user) {
           serial: serial.trim().toUpperCase(),
           action: 'OUT',
           performedBy: user._id,
-          role: user.role
+          role: user.role,
+          tenantId
         }));
 
         await SerialAudit.insertMany(audits, { session });
@@ -253,8 +325,15 @@ async function stockOut(data, user) {
       if (sellerWarrantyPeriod && policy.enableSerial && serialNumbers.length > 0) {
         const sellerData   = Warranty.buildSellerWarranty(sellerWarrantyPeriod, new Date(), buyer || {});
         const normalized   = serialNumbers.map(s => s.trim().toUpperCase());
+        const warrantyFilter = {
+          serialNumber: { $in: normalized },
+          productId,
+          'sellerWarranty.status': 'not-sold'
+        };
+        if (tenantId) warrantyFilter.tenantId = tenantId;
+
         await Warranty.updateMany(
-          { serialNumber: { $in: normalized }, productId, 'sellerWarranty.status': 'not-sold' },
+          warrantyFilter,
           { $set: { sellerWarranty: sellerData } },
           { session }
         );
@@ -269,6 +348,9 @@ async function stockOut(data, user) {
 }
 
 module.exports = {
+  MAX_STOCK_QUANTITY,
+  normalizeSerialNumbers,
+  validateStockMovementPayload,
   stockIn,
   stockOut
 };

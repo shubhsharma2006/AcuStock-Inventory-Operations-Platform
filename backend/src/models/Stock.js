@@ -42,6 +42,11 @@ const stockEntrySchema = new mongoose.Schema({
 }, { _id: false });
 
 const stockSchema = new mongoose.Schema({
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    index: true
+  },
   type: {
     type: String,
     required: true,
@@ -123,6 +128,7 @@ stockSchema.index({ type: 1, status: 1 });
 stockSchema.index({ company: 1 });
 stockSchema.index({ manager: 1 });
 stockSchema.index({ transactionDate: -1 });
+stockSchema.index({ tenantId: 1, reference: 1 }, { unique: true });
 // Note: reference index is created by unique: true
 
 // Pre-save middleware to calculate totals
@@ -154,8 +160,11 @@ stockSchema.methods.getAllSerialNumbers = function() {
 };
 
 // Static method to find stock by reference
-stockSchema.statics.findByReference = function(reference) {
-  return this.findOne({ reference: reference.toUpperCase() });
+stockSchema.statics.findByReference = function(reference, tenantId) {
+  return this.findOne({
+    reference: reference.toUpperCase(),
+    ...(tenantId ? { tenantId } : {})
+  });
 };
 
 module.exports = mongoose.model('Stock', stockSchema);

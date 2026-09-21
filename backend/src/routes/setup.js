@@ -55,6 +55,17 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'Email already in use' });
     }
 
+    const Tenant = require('../models/Tenant');
+    let rootTenant = await Tenant.findOne({ slug: 'root-tenant' });
+    if (!rootTenant) {
+      rootTenant = await Tenant.create({
+        name: 'Root Organization',
+        slug: 'root-tenant',
+        status: 'ACTIVE',
+        plan: 'ENTERPRISE'
+      });
+    }
+
     const salt         = await bcrypt.genSalt(10);
     const hashedPw     = await bcrypt.hash(password, salt);
 
@@ -65,10 +76,14 @@ router.post('/', async (req, res) => {
       role:         'SUPER_ADMIN',
       isSuperAdmin: true,
       isActive:     true,
+      tenantId:     rootTenant._id,
       passwordChangedBy: 'SYSTEM'
     });
 
-    console.log(`✅ Super Admin created: ${superAdmin.email}`);
+    rootTenant.ownerId = superAdmin._id;
+    await rootTenant.save();
+
+    console.log(`✅ Super Admin created: ${superAdmin.email} with Tenant: ${rootTenant._id}`);
 
     res.status(201).json({
       message: 'Super Admin created successfully. You can now log in.',

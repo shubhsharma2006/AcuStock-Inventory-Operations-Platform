@@ -19,7 +19,11 @@ const PermissionSchema = new mongoose.Schema(
       type: String,
       enum: ['ADMIN', 'MANAGER', 'USER'],
       required: true,
-      unique: true
+    },
+    tenantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Tenant',
+      index: true
     },
 
     // ===== USER MANAGEMENT =====
@@ -187,5 +191,7 @@ PermissionSchema.pre('save', function (next) {
 
   next();
 });
+
+PermissionSchema.index({ tenantId: 1, role: 1 }, { unique: true });
 
 module.exports = mongoose.model('Permission', PermissionSchema);

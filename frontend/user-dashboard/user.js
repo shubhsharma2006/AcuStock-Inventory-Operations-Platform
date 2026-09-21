@@ -175,11 +175,12 @@ async function loadModelsForProduct(productName, modelSelectId) {
     select.innerHTML = '<option value="">-- Select Model --</option>' +
       models.map(m => `<option value="${m._id}" 
         data-serial-policy='${JSON.stringify(m.serialPolicy || { enableSerial: false, requireSerialOnIN: false, requireSerialOnOUT: false })}'
+        data-stock="${m.quantity || 0}"
         data-product-name="${escapeHtml(m.name)}"
         data-short-name="${escapeHtml(m.shortName || '')}"
         data-warranty="${escapeHtml(m.warranty || '')}"
         data-seller-warranty="${escapeHtml(m.defaultSellerWarranty || '')}"
-      >${escapeHtml(m.shortName || m.name)}${m.shortName ? ` (${escapeHtml(m.name)})` : ''}</option>`).join('');
+      >${escapeHtml(m.shortName || m.name)}${m.shortName ? ` (${escapeHtml(m.name)})` : ''} - Stock: ${m.quantity || 0}</option>`).join('');
     
     select.disabled = false;
     _initTomSelect(select, 'Select model / short name…');
@@ -1038,6 +1039,663 @@ function initSupplyCompanyDropdown(form) {
     if (stateInput) stateInput.value = company.address?.state || '';
     if (pincodeInput) pincodeInput.value = company.address?.zipCode || '';
   });
+}
+
+// ============================================================
+// SERIAL NUMBER HELPERS
+// ============================================================
+
+function generateSerialInputs(container, qty, prefix = 'SN') {
+  if (!container) return;
+  container.innerHTML = '';
+  
+  for (let i = 0; i < qty; i++) {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'serial-input';
+    input.placeholder = `${prefix}-${String(i + 1).padStart(4, '0')}`;
+    input.dataset.index = i;
+    input.addEventListener('input', () => validateSerialInputs(container));
+    input.addEventListener('blur', (e) => {
+      e.target.value = e.target.value.trim().toUpperCase();
+    });
+    container.appendChild(input);
+  }
+}
+
+function validateSerialInputs(container) {
+  if (!container) return { valid: false };
+  
+  const inputs = container.querySelectorAll('.serial-input');
+  const values = [];
+  let allFilled = true;
+  let hasDuplicates = false;
+  
+  inputs.forEach(input => {
+    const val = input.value.trim().toUpperCase();
+    if (!val) {
+      allFilled = false;
+      input.classList.remove('filled', 'duplicate');
+    } else {
+      input.classList.add('filled');
+      if (values.includes(val)) {
+        hasDuplicates = true;
+        input.classList.add('duplicate');
+      } else {
+        input.classList.remove('duplicate');
+      }
+      values.push(val);
+    }
+  });
+
+  const statusEl = container.closest('.serial-number-section')?.querySelector('[id$="-serial-status"]');
+  if (statusEl) {
+    statusEl.textContent = `${values.length} / ${inputs.length} filled`;
+    statusEl.className = allFilled && !hasDuplicates ? 'badge complete' : 'badge incomplete';
+  }
+
+  return { valid: allFilled && !hasDuplicates, hasDuplicates };
+}
+
+function getSerialNumbers(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll('.serial-input'))
+    .map(input => input.value.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function autoGenerateSerials(container, prefix = 'SN', startNum = 1) {
+  if (!container) return;
+  
+  const inputs = container.querySelectorAll('.serial-input');
+  const timestamp = Date.now().toString(36).toUpperCase();
+  
+  inputs.forEach((input, index) => {
+    if (!input.value.trim()) {
+      input.value = `${prefix}-${timestamp}-${String(startNum + index).padStart(4, '0')}`;
+    }
+  });
+  
+  validateSerialInputs(container);
+}
+
+function applyBulkSerials(container, bulkText) {
+  if (!container || !bulkText) return;
+  
+  const serials = bulkText
+    .split(/[,;\n\r]+/)
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean);
+  
+  const inputs = container.querySelectorAll('.serial-input');
+  
+  serials.forEach((serial, index) => {
+    if (inputs[index]) {
+      inputs[index].value = serial;
+    }
+  });
+  
+  validateSerialInputs(container);
+}
+
+// ============================================================
+// STOCK MANAGEMENT (USER DASHBOARD)
+// ============================================================
+
+async function initSupplyManagement() {
+  const form = document.getElementById('stock-supplier-form');
+  if (!form) return;
+
+  initSupplyCompanyDropdown(form);
+
+  const productNameSelect = form.querySelector('#sp-productName');
+  const productSelect = form.querySelector('#sp-productId');
+  const serialSection = document.getElementById('supplier-serial-section');
+  const serialInputsContainer = document.getElementById('supplier-serial-inputs');
+  const quantityInput = form.querySelector('#sp-quantity');
+  const serialCountEl = document.getElementById('supplier-serial-count');
+  const serialHintEl = document.querySelector('#sp-serial-hint');
+  const serialStatusEl = document.getElementById('supplier-serial-status');
+
+  let currentPolicy = null;
+
+  await loadProductNamesDropdown('sp-productName');
+  
+  if (productNameSelect) {
+    productNameSelect.addEventListener('change', async () => {
+      const selectedName = productNameSelect.value;
+      await loadModelsForProduct(selectedName, 'sp-productId');
+      if (quantityInput) quantityInput.value = '';
+      updateSerialFields();
+    });
+  }
+
+  const supplyDateInput = form.querySelector('#sp-supplyDate');
+  if (supplyDateInput && !supplyDateInput.value) {
+    supplyDateInput.value = new Date().toISOString().split('T')[0];
+  }
+
+  function updateSerialHint(policy) {
+    if (!serialHintEl) return;
+    
+    if (!policy || !policy.enableSerial) {
+      serialHintEl.style.display = 'none';
+      return;
+    }
+    
+    serialHintEl.style.display = 'block';
+    if (policy.requireSerialOnIN) {
+      serialHintEl.innerHTML = '⚠️ <strong>Serial numbers required</strong> for this product on Stock IN';
+      serialHintEl.style.color = '#dc2626';
+    } else {
+      serialHintEl.innerHTML = 'ℹ️ Serial numbers enabled (optional for Stock IN)';
+      serialHintEl.style.color = '#6b7280';
+    }
+  }
+
+  function updateSerialFields() {
+    if (!serialSection || !productSelect || !quantityInput) return;
+
+    const selectedOption = productSelect.selectedOptions[0];
+    currentPolicy = selectedOption?.dataset?.serialPolicy 
+      ? JSON.parse(selectedOption.dataset.serialPolicy) 
+      : { enableSerial: false, requireSerialOnIN: false, requireSerialOnOUT: false };
+    
+    const qty = parseInt(quantityInput.value) || 0;
+
+    updateSerialHint(currentPolicy);
+
+    if (serialCountEl) {
+      serialCountEl.innerHTML = `Enter <strong>${qty}</strong> serial number${qty !== 1 ? 's' : ''}`;
+    }
+
+    if (!currentPolicy.enableSerial) {
+      serialSection.style.display = 'none';
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      return;
+    }
+
+    if (qty <= 0 || !Number.isInteger(qty)) {
+      serialSection.style.display = 'none';
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      return;
+    }
+
+    serialSection.style.display = 'block';
+
+    const productName = selectedOption?.dataset?.productName || 'SN';
+    const prefix = productName.substring(0, 3).toUpperCase();
+    generateSerialInputs(serialInputsContainer, qty, prefix);
+    
+    if (serialStatusEl) {
+      serialStatusEl.textContent = `0 / ${qty} filled`;
+      serialStatusEl.className = 'badge incomplete';
+    }
+  }
+
+  if (productSelect) {
+    productSelect.addEventListener('change', () => {
+      if (quantityInput) quantityInput.value = '';
+      const opt = productSelect.selectedOptions[0];
+      const warrantyEl = form.querySelector('#sp-warrantyPeriod');
+      if (warrantyEl && opt) warrantyEl.value = opt.dataset.warranty || '';
+      updateSerialFields();
+    });
+  }
+  
+  if (quantityInput) {
+    quantityInput.addEventListener('input', updateSerialFields);
+    quantityInput.addEventListener('change', () => {
+      const val = parseInt(quantityInput.value);
+      if (val <= 0 || isNaN(val)) {
+        quantityInput.value = '';
+      } else {
+        quantityInput.value = Math.floor(val);
+      }
+      updateSerialFields();
+    });
+  }
+
+  // Clear serials button
+  const clearBtn = document.getElementById('supplier-clear-serials');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      serialInputsContainer?.querySelectorAll('.serial-input').forEach(input => {
+        input.value = '';
+        input.classList.remove('filled', 'duplicate');
+      });
+      validateSerialInputs(serialInputsContainer);
+    });
+  }
+
+  // Auto-generate serials button
+  const autoGenBtn = document.getElementById('supplier-auto-generate-serials');
+  if (autoGenBtn) {
+    autoGenBtn.addEventListener('click', () => {
+      const selectedOption = productSelect?.selectedOptions[0];
+      const productName = selectedOption?.dataset?.productName || 'SN';
+      const prefix = productName.substring(0, 3).toUpperCase();
+      autoGenerateSerials(serialInputsContainer, prefix);
+      showToast('Serial numbers auto-generated!', 'success');
+    });
+  }
+
+  // Form submission
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData(form);
+    const productId = productSelect?.value;
+    const quantity = parseInt(quantityInput?.value);
+    const serialNumbers = getSerialNumbers(serialInputsContainer);
+
+    if (!productId) {
+      showToast('Please select a product', 'error');
+      return;
+    }
+
+    if (!quantity || quantity <= 0 || !Number.isInteger(quantity)) {
+      showToast('Quantity must be a positive whole number', 'error');
+      return;
+    }
+
+    const selectedOption = productSelect?.querySelector(`option[value="${productId}"]`);
+    const policy = selectedOption?.dataset?.serialPolicy 
+      ? JSON.parse(selectedOption.dataset.serialPolicy) 
+      : { enableSerial: false, requireSerialOnIN: false, requireSerialOnOUT: false };
+
+    if (policy.enableSerial && policy.requireSerialOnIN) {
+      if (serialNumbers.length !== quantity) {
+        showToast(`You must enter exactly ${quantity} serial number${quantity !== 1 ? 's' : ''}`, 'error');
+        return;
+      }
+
+      const validation = validateSerialInputs(serialInputsContainer);
+      if (!validation.valid) {
+        if (validation.hasDuplicates) {
+          showToast('Duplicate serial numbers found! Each serial must be unique.', 'error');
+        } else {
+          showToast(`Please fill all ${quantity} serial number fields`, 'error');
+        }
+        return;
+      }
+    }
+
+    const supplierData = {
+      companyName: formData.get('companyName'),
+      customerName: formData.get('customerName'),
+      customerPhone: formData.get('customerPhone'),
+      customerEmail: formData.get('customerEmail'),
+      customerAddress: formData.get('customerAddress'),
+      city: formData.get('city'),
+      state: formData.get('state'),
+      pincode: formData.get('pincode')
+    };
+
+    try {
+      const submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+      }
+
+      const selectedModelOption = productSelect?.selectedOptions[0];
+      const shortName = selectedModelOption?.dataset?.shortName || '';
+      
+      await fetchAPI('/stock/in', {
+        method: 'POST',
+        body: JSON.stringify({ 
+          productId, 
+          quantity, 
+          serialNumbers: policy.enableSerial ? serialNumbers : [],
+          supplier: supplierData,
+          transaction: {
+            supplierType:  formData.get('supplierType'),
+            paymentMethod: formData.get('paymentMethod'),
+            transactionId: formData.get('transactionId'),
+            transactionDate: formData.get('supplyDate'),
+            warrantyPeriod: formData.get('warrantyPeriod') || undefined,
+            deliveredBy:   formData.get('deliveredBy')
+          },
+          condition: formData.get('condition'),
+          modelVariant: shortName || formData.get('modelVariant')
+        })
+      });
+      
+      showToast('Stock IN recorded successfully!', 'success');
+      form.reset();
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      if (serialSection) serialSection.style.display = 'none';
+      if (serialHintEl) serialHintEl.style.display = 'none';
+      loadSection('dashboard');
+    } catch (err) {
+      showToast(err.message || 'Failed to record stock', 'error');
+    } finally {
+      const submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save Entry';
+      }
+    }
+  });
+
+  const cancelBtn = document.getElementById('stock-supplier-cancel');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => loadSection('dashboard'));
+  }
+}
+
+async function initShippingManagement() {
+  const form = document.getElementById('stock-buyer-form');
+  if (!form) return;
+
+  initShippingCompanyDropdown(form);
+
+  const productNameSelect = form.querySelector('#by-productName');
+  const productSelect = form.querySelector('#by-productId');
+  const serialSection = document.getElementById('buyer-serial-section');
+  const serialInputsContainer = document.getElementById('buyer-serial-inputs');
+  const availableSerialsContainer = document.getElementById('buyer-serials-list');
+  const quantityInput = form.querySelector('#by-quantity');
+  const serialCountEl = document.getElementById('buyer-serial-count');
+  const serialHintEl = form.querySelector('#by-serial-hint');
+  const stockInfoEl = form.querySelector('#by-stock-info');
+  const serialStatusEl = document.getElementById('buyer-serial-status');
+
+  let currentPolicy = null;
+  let currentStock = 0;
+  let availableSerials = [];
+
+  await loadProductNamesDropdown('by-productName');
+  
+  if (productNameSelect) {
+    productNameSelect.addEventListener('change', async () => {
+      const selectedName = productNameSelect.value;
+      await loadModelsForProduct(selectedName, 'by-productId');
+      if (quantityInput) quantityInput.value = '';
+      if (serialSection) serialSection.style.display = 'none';
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      if (availableSerialsContainer) availableSerialsContainer.innerHTML = '';
+      if (stockInfoEl) stockInfoEl.style.display = 'none';
+    });
+  }
+
+  const purchaseDateInput = form.querySelector('#by-purchaseDate');
+  if (purchaseDateInput && !purchaseDateInput.value) {
+    purchaseDateInput.value = new Date().toISOString().split('T')[0];
+  }
+
+  function updateStockInfo() {
+    if (!stockInfoEl) return;
+    if (productSelect && productSelect.value) {
+      const selectedOption = productSelect.selectedOptions[0];
+      currentStock = parseInt(selectedOption?.dataset?.stock) || 0;
+      stockInfoEl.style.display = 'block';
+      stockInfoEl.textContent = `Available Stock: ${currentStock} units`;
+      stockInfoEl.style.color = currentStock > 0 ? '#10b981' : '#ef4444';
+    } else {
+      stockInfoEl.style.display = 'none';
+    }
+  }
+
+  function updateSerialHint(policy) {
+    if (!serialHintEl) return;
+    
+    if (!policy || !policy.enableSerial) {
+      serialHintEl.style.display = 'none';
+      return;
+    }
+    
+    serialHintEl.style.display = 'block';
+    if (policy.requireSerialOnOUT) {
+      serialHintEl.innerHTML = '⚠️ <strong>Serial numbers required</strong> for this product on Stock OUT';
+      serialHintEl.style.color = '#dc2626';
+    } else {
+      serialHintEl.innerHTML = 'ℹ️ Serial numbers enabled (optional for Stock OUT)';
+      serialHintEl.style.color = '#6b7280';
+    }
+  }
+
+  async function loadAvailableSerials(productId) {
+    if (!availableSerialsContainer) return;
+    try {
+      const res = await fetchAPI(`/stock/serials/${productId}?status=available`);
+      availableSerials = res.serials || [];
+      
+      if (availableSerials.length === 0) {
+        availableSerialsContainer.innerHTML = '<p style="padding: 10px; color: #6b7280;">No serial numbers available for this product.</p>';
+      } else {
+        availableSerialsContainer.innerHTML = availableSerials.map(serial => `
+          <button type="button" class="serial-pill" data-serial="${serial}" style="margin: 2px; padding: 4px 8px; border-radius: 4px; border: 1px solid #d1d5db; background: #fff; cursor: pointer;">${escapeHtml(serial)}</button>
+        `).join('');
+        
+        availableSerialsContainer.querySelectorAll('.serial-pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const serial = btn.dataset.serial;
+            const inputs = serialInputsContainer?.querySelectorAll('.serial-input');
+            if (!inputs) return;
+
+            let found = false;
+            inputs.forEach(input => {
+              if (input.value.trim().toUpperCase() === serial) {
+                input.value = '';
+                input.classList.remove('filled');
+                btn.style.background = '#fff';
+                btn.style.borderColor = '#d1d5db';
+                found = true;
+              }
+            });
+            if (found) {
+              validateSerialInputs(serialInputsContainer);
+              return;
+            }
+
+            for (const input of inputs) {
+              if (!input.value.trim()) {
+                input.value = serial;
+                input.classList.add('filled');
+                btn.style.background = '#dbeafe';
+                btn.style.borderColor = '#3b82f6';
+                break;
+              }
+            }
+            validateSerialInputs(serialInputsContainer);
+          });
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load available serials:', err);
+    }
+  }
+
+  async function updateSerialFields() {
+    if (!serialSection || !productSelect || !quantityInput) return;
+
+    const selectedOption = productSelect.selectedOptions[0];
+    currentPolicy = selectedOption?.dataset?.serialPolicy 
+      ? JSON.parse(selectedOption.dataset.serialPolicy) 
+      : { enableSerial: false, requireSerialOnIN: false, requireSerialOnOUT: false };
+    
+    currentStock = parseInt(selectedOption?.dataset?.stock) || 0;
+    const productId = productSelect.value;
+    const qty = parseInt(quantityInput.value) || 0;
+
+    updateStockInfo();
+    updateSerialHint(currentPolicy);
+
+    if (serialCountEl) {
+      serialCountEl.innerHTML = `Enter <strong>${qty}</strong> serial number${qty !== 1 ? 's' : ''}`;
+    }
+
+    if (!currentPolicy.enableSerial || !productId) {
+      serialSection.style.display = 'none';
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      return;
+    }
+
+    if (qty <= 0 || !Number.isInteger(qty)) {
+      serialSection.style.display = 'none';
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      return;
+    }
+
+    serialSection.style.display = 'block';
+
+    generateSerialInputs(serialInputsContainer, qty, 'SN');
+    await loadAvailableSerials(productId);
+  }
+
+  if (productSelect) {
+    productSelect.addEventListener('change', async () => {
+      if (quantityInput) quantityInput.value = '';
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      const opt = productSelect.selectedOptions[0];
+      const sellerWarrantyEl = document.getElementById('by-sellerWarrantyPeriod');
+      if (sellerWarrantyEl && opt) sellerWarrantyEl.value = opt.dataset.sellerWarranty || '';
+      await updateSerialFields();
+    });
+  }
+  
+  if (quantityInput) {
+    quantityInput.addEventListener('input', updateSerialFields);
+    quantityInput.addEventListener('change', async () => {
+      const val = parseInt(quantityInput.value);
+      if (val <= 0 || isNaN(val)) {
+        quantityInput.value = '';
+      } else if (val > currentStock && currentStock > 0) {
+        showToast(`Only ${currentStock} units available`, 'warning');
+        quantityInput.value = currentStock;
+      } else {
+        quantityInput.value = Math.floor(val);
+      }
+      await updateSerialFields();
+    });
+  }
+
+  const clearBtn = document.getElementById('buyer-clear-serials');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      serialInputsContainer?.querySelectorAll('.serial-input').forEach(input => {
+        input.value = '';
+        input.classList.remove('filled', 'duplicate');
+      });
+      availableSerialsContainer?.querySelectorAll('.serial-pill').forEach(btn => {
+        btn.style.background = '#fff';
+        btn.style.borderColor = '#d1d5db';
+      });
+      validateSerialInputs(serialInputsContainer);
+    });
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData(form);
+    const productId = productSelect?.value;
+    const quantity = parseInt(quantityInput?.value);
+
+    if (!productId) {
+      showToast('Please select a product', 'error');
+      return;
+    }
+
+    if (!quantity || quantity <= 0 || !Number.isInteger(quantity)) {
+      showToast('Quantity must be a positive whole number', 'error');
+      return;
+    }
+
+    if (quantity > currentStock && currentStock > 0) {
+      showToast(`Insufficient stock. Only ${currentStock} units available.`, 'error');
+      return;
+    }
+
+    const selectedOption = productSelect?.querySelector(`option[value="${productId}"]`);
+    const policy = selectedOption?.dataset?.serialPolicy 
+      ? JSON.parse(selectedOption.dataset.serialPolicy) 
+      : { enableSerial: false, requireSerialOnIN: false, requireSerialOnOUT: false };
+
+    const serialNumbers = getSerialNumbers(serialInputsContainer);
+
+    if (policy.enableSerial && policy.requireSerialOnOUT) {
+      if (serialNumbers.length !== quantity) {
+        showToast(`You must enter exactly ${quantity} serial number${quantity !== 1 ? 's' : ''}`, 'error');
+        return;
+      }
+      const validation = validateSerialInputs(serialInputsContainer);
+      if (!validation.valid) {
+        if (validation.hasDuplicates) {
+          showToast('Duplicate serial numbers found! Each serial must be unique.', 'error');
+        } else {
+          showToast(`Please fill all ${quantity} serial number fields`, 'error');
+        }
+        return;
+      }
+    }
+
+    const buyerData = {
+      companyName: formData.get('companyName'),
+      customerName: formData.get('customerName'),
+      customerPhone: formData.get('customerPhone'),
+      customerEmail: formData.get('customerEmail'),
+      customerAddress: formData.get('customerAddress'),
+      city: formData.get('city'),
+      state: formData.get('state'),
+      pincode: formData.get('pincode')
+    };
+
+    try {
+      const submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+      }
+
+      const selectedModelOption = productSelect?.selectedOptions[0];
+      const shortName = selectedModelOption?.dataset?.shortName || '';
+
+      await fetchAPI('/stock/out', {
+        method: 'POST',
+        body: JSON.stringify({ 
+          productId, 
+          quantity, 
+          serialNumbers: policy.enableSerial ? serialNumbers : [],
+          buyer: buyerData,
+          transaction: {
+            buyerType: formData.get('buyerType'),
+            paymentMethod: formData.get('paymentMethod'),
+            transactionId: formData.get('transactionId'),
+            transactionDate: formData.get('purchaseDate'),
+            sellerWarrantyPeriod: formData.get('sellerWarrantyPeriod') || undefined,
+            receivedBy: formData.get('receivedBy'),
+            courierPartner: formData.get('courierPartner')
+          },
+          condition: formData.get('condition'),
+          modelVariant: shortName || formData.get('modelVariant')
+        })
+      });
+      
+      showToast('Stock OUT recorded successfully!', 'success');
+      form.reset();
+      if (serialInputsContainer) serialInputsContainer.innerHTML = '';
+      if (serialSection) serialSection.style.display = 'none';
+      if (serialHintEl) serialHintEl.style.display = 'none';
+      if (stockInfoEl) stockInfoEl.style.display = 'none';
+      loadSection('dashboard');
+    } catch (err) {
+      showToast(err.message || 'Failed to record stock out', 'error');
+    } finally {
+      const submitBtn = form.querySelector('[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save Entry';
+      }
+    }
+  });
+
+  const cancelBtn = document.getElementById('stock-buyer-cancel');
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', () => loadSection('dashboard'));
+  }
 }
 
 // ============================================================

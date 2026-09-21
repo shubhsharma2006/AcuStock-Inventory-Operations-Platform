@@ -38,7 +38,43 @@ const auditLogSchema = new mongoose.Schema({
       
       // Session Events
       'SESSION_INVALIDATED',
-      'ALL_SESSIONS_INVALIDATED'
+      'ALL_SESSIONS_INVALIDATED',
+
+      // 2FA Security Events
+      '2FA_SETUP_STARTED',
+      '2FA_ENABLE_FAILED',
+      '2FA_ENABLED',
+      '2FA_DISABLED',
+      '2FA_LOGIN_FAILED',
+      '2FA_LOGIN_SUCCESS',
+
+      // Business & Inventory Events
+      'ITEM_CREATED',
+      'ITEM_UPDATED',
+      'ITEM_DELETED',
+      'ITEM_IMPORTED',
+      'STOCK_IN',
+      'STOCK_OUT',
+      'STOCK_ADJUSTED',
+      'STOCK_TRANSFER',
+      'PO_CREATED',
+      'PO_RECEIVED',
+      'PO_STATUS_CHANGED',
+      'SO_CREATED',
+      'SO_DISPATCHED',
+      'SO_STATUS_CHANGED',
+      'COMPANY_CREATED',
+      'COMPANY_UPDATED',
+      'COMPANY_DELETED',
+      'SHIPMENT_CREATED',
+      'SHIPMENT_STATUS_CHANGED',
+      'SETTING_CHANGED',
+      'PERMISSION_UPDATED',
+      'PERMISSION_UPDATE',
+      'USER_INVITED',
+      'PLAN_UPGRADED',
+      'PLAN_DOWNGRADED',
+      'WARRANTY_CLAIMED'
     ],
     required: true,
     index: true
@@ -70,6 +106,42 @@ const auditLogSchema = new mongoose.Schema({
   targetUserRole: {
     type: String
   },
+  targetRole: {
+    type: String
+  },
+
+  // Polymorphic entity reference — links the log to its business source record
+  entityType: {
+    type: String,
+    enum: [
+      'Item',
+      'StockLedger',
+      'PurchaseOrder',
+      'SalesOrder',
+      'Company',
+      'Shipment',
+      'StockTransfer',
+      'Warranty',
+      'Tenant',
+      'Permission',
+      'User',
+      null
+    ],
+    default: null,
+    index: true
+  },
+  entityId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null,
+    index: true
+  },
+
+  // Change snapshot — stores before/after diff and summary
+  changes: {
+    before: { type: mongoose.Schema.Types.Mixed, default: null },
+    after:  { type: mongoose.Schema.Types.Mixed, default: null },
+    summary: { type: String, maxlength: 500 }
+  },
   
   // Additional details
   details: {
@@ -95,12 +167,22 @@ const auditLogSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: false,
+    default: null,
+    index: true
   }
 }, {
   timestamps: false // We manage createdAt manually
 });
 
 // Compound indexes for efficient queries
+auditLogSchema.index({ tenantId: 1, createdAt: -1 });
+auditLogSchema.index({ tenantId: 1, action: 1, createdAt: -1 });
+auditLogSchema.index({ tenantId: 1, entityType: 1, entityId: 1, createdAt: -1 });
 auditLogSchema.index({ action: 1, createdAt: -1 });
 auditLogSchema.index({ targetUser: 1, action: 1, createdAt: -1 });
 auditLogSchema.index({ performedBy: 1, createdAt: -1 });
@@ -113,7 +195,11 @@ auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 60 * 60 
  */
 auditLogSchema.statics.logEvent = async function(data) {
   try {
-    const log = new this(data);
+    const payload = {
+      ...data,
+      tenantId: data.tenantId || null
+    };
+    const log = new this(payload);
     await log.save();
     
     // Also log to console for development
@@ -177,9 +263,9 @@ auditLogSchema.statics.logPasswordReset = async function(targetUser, performedBy
 };
 
 /**
- * Static method to log failed login
+ * Static method to log failed login attempt
  */
-auditLogSchema.statics.logFailedLogin = async function(identifier, role, reason, req) {
+auditLogSchema.statics.logFailedLogin = async function(identifier, role, reason, req, tenantId = null) {
   return this.logEvent({
     action: 'LOGIN_FAILED',
     performedByRole: 'SYSTEM',
@@ -191,6 +277,7 @@ auditLogSchema.statics.logFailedLogin = async function(identifier, role, reason,
     },
     ipAddress: req?.ip || req?.connection?.remoteAddress,
     userAgent: req?.get?.('User-Agent'),
+    tenantId: tenantId || null,
     severity: 'WARNING'
   });
 };
@@ -209,8 +296,12 @@ auditLogSchema.statics.logSuccessfulLogin = async function(user, req) {
     targetUserRole: user.role,
     ipAddress: req?.ip || req?.connection?.remoteAddress,
     userAgent: req?.get?.('User-Agent'),
+    tenantId: user.tenantId || null,
     severity: 'INFO'
   });
 };
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+auditLogSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);

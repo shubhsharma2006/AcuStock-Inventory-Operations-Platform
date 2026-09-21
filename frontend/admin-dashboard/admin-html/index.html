@@ -1464,6 +1464,12 @@
           <h3>User List</h3>
           <div class="head-actions">
             <input id="user-search" placeholder="🔍 Search users..." />
+            <select id="user-role-filter" title="Filter by role" style="min-width: 160px;">
+              <option value="ALL">All roles</option>
+              <option value="ADMIN">Admins</option>
+              <option value="MANAGER">Managers</option>
+              <option value="USER">Users</option>
+            </select>
             <button class="btn secondary btn-sm" onclick="openInviteModal('USER')" data-roles="admin,manager">📬 Invite</button>
             <button class="btn primary btn-sm" onclick="loadSection('user-add')" data-roles="admin,manager">➕ Add New</button>
           </div>
@@ -1476,6 +1482,8 @@
                   <th>Name</th>
                   <th>Phone</th>
                   <th>Email</th>
+                  <th>Role</th>
+                  <th>Created By</th>
                   <th>Status</th>
                   <th>Last Login</th>
                   <th>Actions</th>
@@ -1487,6 +1495,20 @@
         </div>
       </section>
     </template>
+
+    <!-- User Detail Modal (shared) -->
+    <div class="modal" id="user-detail-modal" style="display:none;">
+      <div class="modal-content" style="max-width:720px;">
+        <div class="modal-header">
+          <h3 style="margin:0;">User Details</h3>
+          <button class="modal-close" type="button" onclick="closeUserDetailModal()">×</button>
+        </div>
+        <div class="modal-body" id="user-detail-content"></div>
+        <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:10px;">
+          <button class="btn ghost" type="button" onclick="closeUserDetailModal()">Close</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Manager Templates -->
     <template id="manager-add">
@@ -2368,7 +2390,7 @@
                   <th>Supplier Type</th>
                   <th>Date</th>
                   <th class="serial-column">Serials</th>
-                  <th>Actions</th>
+                  <th style="text-align:center;">Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -2400,7 +2422,7 @@
                   <th>Buyer Type</th>
                   <th>Date</th>
                   <th class="serial-column">Serials</th>
-                  <th>Actions</th>
+                  <th style="text-align:center;">Actions</th>
                 </tr>
               </thead>
               <tbody></tbody>

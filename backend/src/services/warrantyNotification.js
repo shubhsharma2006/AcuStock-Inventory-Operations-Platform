@@ -8,6 +8,8 @@
 const mongoose     = require('mongoose');
 const Warranty     = require('../models/Warranty');
 const Notification = require('../models/Notification');
+const Tenant       = require('../models/Tenant');
+const { sendWarrantyExpiryEmail } = require('./email.service');
 
 const THRESHOLDS = [90, 60, 30, 14, 7, 3, 1];
 
@@ -19,15 +21,16 @@ function todayBounds() {
   return { start, end };
 }
 
-async function alreadyNotifiedToday(type, warrantyId, threshold, targetRole) {
+async function alreadyNotifiedToday(type, warrantyId, threshold, targetRole, tenantId) {
   const { start, end } = todayBounds();
   const existing = await Notification.findOne({
     type,
     targetRole,
     'metadata.warrantyId':    String(warrantyId),
     'metadata.daysThreshold': threshold,
-    createdAt: { $gte: start, $lt: end }
-  }).lean();
+    createdAt: { $gte: start, $lt: end },
+    ...(tenantId ? { tenantId } : {})
+  }, null, { skipTenantIsolation: true }).lean();
   return !!existing;
 }
 
@@ -40,6 +43,7 @@ function buildPurchaseNotif(warranty, productName, daysLeft, threshold, targetRo
     category: 'WARRANTY',
     priority: expired ? 'HIGH' : (threshold <= 7 ? 'HIGH' : 'MEDIUM'),
     createdByRole: 'SYSTEM',
+    tenantId: warranty.tenantId || null,
     type:  expired ? 'warranty-purchase-expired' : 'warranty-purchase-expiring',
     icon:  expired ? '⚠️' : '🔔',
     title: expired
@@ -73,6 +77,7 @@ function buildSellerNotif(warranty, productName, daysLeft, threshold, targetRole
     category: 'WARRANTY',
     priority: expired ? 'HIGH' : (threshold <= 7 ? 'HIGH' : 'MEDIUM'),
     createdByRole: 'SYSTEM',
+    tenantId: warranty.tenantId || null,
     type:  expired ? 'warranty-seller-expired' : 'warranty-seller-expiring',
     icon:  expired ? '⚠️' : '🔔',
     title: expired
@@ -129,7 +134,7 @@ async function generateWarrantyNotifications() {
 
         if (daysLeft <= 0) {
           for (const role of ['ADMIN', 'MANAGER']) {
-            if (!(await alreadyNotifiedToday('warranty-purchase-expired', w._id, 0, role))) {
+            if (!(await alreadyNotifiedToday('warranty-purchase-expired', w._id, 0, role, w.tenantId))) {
               toCreate.push(buildPurchaseNotif(w, productName, 0, 0, role));
             }
           }
@@ -137,7 +142,7 @@ async function generateWarrantyNotifications() {
           for (const t of THRESHOLDS) {
             if (daysLeft <= t) {
               for (const role of ['ADMIN', 'MANAGER']) {
-                if (!(await alreadyNotifiedToday('warranty-purchase-expiring', w._id, t, role))) {
+                if (!(await alreadyNotifiedToday('warranty-purchase-expiring', w._id, t, role, w.tenantId))) {
                   toCreate.push(buildPurchaseNotif(w, productName, daysLeft, t, role));
                 }
               }
@@ -154,7 +159,7 @@ async function generateWarrantyNotifications() {
 
         if (daysLeft <= 0) {
           for (const role of ['ADMIN', 'MANAGER', 'USER']) {
-            if (!(await alreadyNotifiedToday('warranty-seller-expired', w._id, 0, role))) {
+            if (!(await alreadyNotifiedToday('warranty-seller-expired', w._id, 0, role, w.tenantId))) {
               toCreate.push(buildSellerNotif(w, productName, 0, 0, role));
             }
           }
@@ -162,7 +167,7 @@ async function generateWarrantyNotifications() {
           for (const t of THRESHOLDS) {
             if (daysLeft <= t) {
               for (const role of ['ADMIN', 'MANAGER', 'USER']) {
-                if (!(await alreadyNotifiedToday('warranty-seller-expiring', w._id, t, role))) {
+                if (!(await alreadyNotifiedToday('warranty-seller-expiring', w._id, t, role, w.tenantId))) {
                   toCreate.push(buildSellerNotif(w, productName, daysLeft, t, role));
                 }
               }
@@ -188,7 +193,8 @@ async function generateWarrantyNotifications() {
             title:     n.title,
             message:   n.message,
             link:      n.link,
-            createdAt: n.createdAt
+            createdAt: n.createdAt,
+            tenantId:  n.tenantId
           };
           if (n.targetRole === 'ALL') {
             global.emitRealTimeUpdate('notification', payload, 'all');
@@ -198,6 +204,35 @@ async function generateWarrantyNotifications() {
         }
       }
       console.log(`✅ Warranty notifications: ${toCreate.length} created`);
+
+      // Group expiring warranties by tenant to send email digest to tenant owner
+      try {
+        const tenantMap = new Map();
+        for (const n of toCreate) {
+          if (!n.tenantId) continue;
+          const tid = n.tenantId.toString();
+          if (!tenantMap.has(tid)) tenantMap.set(tid, []);
+          tenantMap.get(tid).push({
+            productName: n.metadata?.productName,
+            serialNumber: n.metadata?.serialNumber,
+            customerOrSupplier: n.metadata?.supplierName || n.metadata?.buyerName || 'N/A',
+            daysRemaining: n.metadata?.daysThreshold ?? 0
+          });
+        }
+
+        for (const [tid, wList] of tenantMap.entries()) {
+          const tenant = await Tenant.findById(tid).populate('ownerId', 'name email');
+          if (tenant?.ownerId?.email) {
+            sendWarrantyExpiryEmail({
+              to: tenant.ownerId.email,
+              name: tenant.ownerId.name || 'Admin',
+              warranties: wList.slice(0, 10)
+            }).catch((e) => console.warn('[Warranty] Email digest failed:', e.message));
+          }
+        }
+      } catch (emailErr) {
+        console.warn('[Warranty] Email digest grouping error:', emailErr.message);
+      }
     } else {
       console.log('✅ Warranty notifications: none needed');
     }

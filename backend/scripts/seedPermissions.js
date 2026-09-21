@@ -16,6 +16,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 const Permission = require('../src/models/permission');
+const Tenant = require('../src/models/Tenant');
 
 const defaultPermissions = [
     {
@@ -144,13 +145,16 @@ const seedPermissions = async () => {
         await mongoose.connect(process.env.MONGODB_URI);
         console.log('Connected to MongoDB');
 
-        for (const perm of defaultPermissions) {
-            await Permission.findOneAndUpdate(
-                { role: perm.role },
-                perm,
-                { upsert: true, new: true }
-            );
-            console.log(`✅ Seeded/Updated permissions for role: ${perm.role}`);
+        const tenants = await Tenant.find({ isActive: true }).select('_id');
+        for (const tenant of tenants) {
+            for (const perm of defaultPermissions) {
+                await Permission.findOneAndUpdate(
+                    { role: perm.role, tenantId: tenant._id },
+                    { ...perm, tenantId: tenant._id },
+                    { upsert: true, new: true }
+                );
+                console.log(`✅ Seeded/Updated ${perm.role} permissions for tenant: ${tenant._id}`);
+            }
         }
 
         console.log('\n🎉 Permission seeding complete!');

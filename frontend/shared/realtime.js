@@ -66,6 +66,12 @@
       isConnected = true;
       reconnectAttempts = 0;
 
+      // The server authenticates the cookie before allowing any room join.
+      socket.emit('authenticate');
+    });
+
+    socket.on('authenticated', () => {
+
       // Join role-based room
       if (userRole) {
         socket.emit('join-role', userRole);

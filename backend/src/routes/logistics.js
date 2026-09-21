@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
 const Transporter = require('../models/Transporter');
 
 /**
@@ -9,10 +9,12 @@ const Transporter = require('../models/Transporter');
  */
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const { search, page = 1, limit = 20, active } = req.query;
+    const { search, active } = req.query;
+    const { page, limit } = normalizePaginationQuery(req.query);
     
     // Build query - Admin and Manager can see all transporters
     const query = { isDeleted: { $ne: true } };
+    if (req.tenantId) query.tenantId = req.tenantId;
     
     // For regular users, show only their own transporters
     if (req.userRole === 'USER') {
@@ -42,17 +44,17 @@ router.get('/', requireAuth, async (req, res) => {
         .populate('createdBy', 'name')
         .sort({ name: 1 })
         .skip(skip)
-        .limit(parseInt(limit)),
+        .limit(limit),
       Transporter.countDocuments(query)
     ]);
     
     res.json({
       transporters,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (err) {
@@ -67,10 +69,13 @@ router.get('/', requireAuth, async (req, res) => {
  */
 router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
-    const transporter = await Transporter.findOne({
+    const filter = {
       _id: req.params.id,
       isDeleted: { $ne: true }
-    })
+    };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const transporter = await Transporter.findOne(filter)
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name');
     
@@ -124,13 +129,14 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       vehicleTypes,
       serviceAreas,
       notes,
-      createdBy: req.userId
+      createdBy: req.userId,
+      tenantId: req.tenantId || undefined
     });
     
     await transporter.save();
     
     // Populate and return
-    const populated = await Transporter.findById(transporter._id)
+    const populated = await Transporter.findOne({ _id: transporter._id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) })
       .populate('createdBy', 'name');
     
     res.status(201).json({
@@ -149,7 +155,10 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
  */
 router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const transporter = await Transporter.findById(req.params.id);
+    const filter = { _id: req.params.id, isDeleted: { $ne: true } };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const transporter = await Transporter.findOne(filter);
     
     if (!transporter) {
       return res.status(404).json({ message: 'Transporter not found' });
@@ -174,7 +183,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
     transporter.updatedBy = req.userId;
     await transporter.save();
     
-    const populated = await Transporter.findById(transporter._id)
+    const populated = await Transporter.findOne(filter)
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name');
     
@@ -194,14 +203,16 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
  */
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const transporter = await Transporter.findById(req.params.id);
+    const filter = { _id: req.params.id, isDeleted: { $ne: true } };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const transporter = await Transporter.findOne(filter);
     
     if (!transporter) {
       return res.status(404).json({ message: 'Transporter not found' });
     }
 
     // Soft delete — preserves audit trail and referential integrity
-    // (any Shipment referencing this transporter by name remains intact)
     transporter.isDeleted  = true;
     transporter.isActive   = false;
     transporter.deletedAt  = new Date();
@@ -223,8 +234,10 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
 router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
     const { isActive } = req.body;
-    
-    const transporter = await Transporter.findById(req.params.id);
+    const filter = { _id: req.params.id, isDeleted: { $ne: true } };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const transporter = await Transporter.findOne(filter);
     
     if (!transporter) {
       return res.status(404).json({ message: 'Transporter not found' });

@@ -1,0 +1,61 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/acustock
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    volumes:
+      - backend-uploads:/app/uploads
+      - backend-logs:/app/logs
+      - backend-backups:/app/backups
+
+  frontend:
+    build: ./frontend/web
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:5001
+      NEXT_PUBLIC_ACUSTOCK_API_URL: /api
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  mongo-data:
+  redis-data:
+  backend-uploads:
+  backend-logs:
+  backend-backups:

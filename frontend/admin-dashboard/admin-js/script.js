@@ -2373,19 +2373,44 @@ window.deleteItem = async function(id) {
 async function initUserList() {
   const tbody = document.querySelector('#user-table tbody');
   const searchInput = document.getElementById('user-search');
+  const roleFilter = document.getElementById('user-role-filter');
+
+  const loggedInUser = auth.getUser();
+  const roleRank = (r) => {
+    switch ((r || '').toUpperCase()) {
+      case 'SUPER_ADMIN': return 4;
+      case 'ADMIN': return 3;
+      case 'MANAGER': return 2;
+      case 'USER': return 1;
+      default: return 0;
+    }
+  };
+  const canManageTarget = (targetUser) => {
+    if (!loggedInUser || !targetUser) return false;
+    if (String(targetUser._id) === String(loggedInUser._id)) return false; // never self-manage
+    // only allow if your role outranks the target
+    return roleRank(loggedInUser.role) > roleRank(targetUser.role);
+  };
   
-  async function loadUsers(search = '') {
+  async function loadUsers(search = '', role = 'ALL') {
     try {
       const users = await fetchAPI('/users');
-      // Filter only USER role (not MANAGER or ADMIN)
-      const filtered = users.filter(u => u.role === 'USER' && 
-        (!search || u.name?.toLowerCase().includes(search.toLowerCase()) || 
-                   u.phone?.includes(search)));
+      const searchLower = (search || '').toLowerCase();
+      const filtered = users
+        .filter(u => u.role !== 'SUPER_ADMIN')
+        .filter(u => role === 'ALL' ? true : u.role === role)
+        .filter(u => {
+          if (!searchLower) return true;
+          const name = (u.name || '').toLowerCase();
+          const email = (u.email || '').toLowerCase();
+          const phone = (u.phone || '');
+          return name.includes(searchLower) || email.includes(searchLower) || phone.includes(searchLower);
+        });
       
       if (!tbody) return;
       
       if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No users found. <a href="#" onclick="loadSection(\'user-add\')">Add your first user</a></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No users found.</td></tr>';
         return;
       }
       
@@ -2394,17 +2419,24 @@ async function initUserList() {
           <td>${escapeHtml(user.name || '')}</td>
           <td>${escapeHtml(user.phone || '')}</td>
           <td>${escapeHtml(user.email || '-')}</td>
+          <td><span class="role-badge ${(user.role || '').toLowerCase()}">${escapeHtml(user.role || '')}</span></td>
+          <td class="created-by-cell">${user.createdBy ? `${escapeHtml(user.createdBy.role || '')}<br><span class="muted">${escapeHtml(user.createdBy.name || user.createdBy.email || '')}</span>` : 'System'}</td>
           <td><span class="status-badge ${user.isActive ? 'active' : 'inactive'}">${user.isActive ? 'Active' : 'Inactive'}</span></td>
           <td>${user.lastLogin ? new Date(user.lastLogin).toLocaleDateString() : 'Never'}</td>
           <td class="actions">
-            <button class="btn ghost btn-sm" onclick="editUser('${user._id}')" title="Edit">✏️</button>
-            <button class="btn ghost btn-sm" onclick="toggleUserStatus('${user._id}', ${!user.isActive})" title="${user.isActive ? 'Deactivate' : 'Activate'}">${user.isActive ? '🔒' : '🔓'}</button>
+            ${canManageTarget(user)
+              ? `<button class="btn ghost btn-sm" onclick="viewUser('${user._id}')" title="View">👁️</button>
+                 <button class="btn ghost btn-sm" onclick="editUser('${user._id}')" title="Edit">✏️</button>
+                 <button class="btn ghost btn-sm" onclick="toggleUserStatus('${user._id}', ${!user.isActive})" title="${user.isActive ? 'Deactivate' : 'Activate'}">${user.isActive ? '🔒' : '🔓'}</button>`
+              : `<button class="btn ghost btn-sm" onclick="viewUser('${user._id}')" title="View">👁️</button>
+                 <button class="btn ghost btn-sm" disabled title="Not allowed">✏️</button>
+                 <button class="btn ghost btn-sm" disabled title="Not allowed">${user.isActive ? '🔒' : '🔓'}</button>`}
           </td>
         </tr>
       `).join('');
     } catch (error) {
       console.error('Error fetching users:', error);
-      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="error-state">Failed to load users</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8" class="error-state">Failed to load users</td></tr>';
     }
   }
   
@@ -2414,7 +2446,13 @@ async function initUserList() {
     let searchTimeout;
     searchInput.addEventListener('input', () => {
       clearTimeout(searchTimeout);
-      searchTimeout = setTimeout(() => loadUsers(searchInput.value), 300);
+      searchTimeout = setTimeout(() => loadUsers(searchInput.value, roleFilter?.value || 'ALL'), 300);
+    });
+  }
+
+  if (roleFilter) {
+    roleFilter.addEventListener('change', () => {
+      loadUsers(searchInput?.value || '', roleFilter.value || 'ALL');
     });
   }
 }
@@ -2433,7 +2471,8 @@ window.editUser = function(id) {
 
 window.toggleUserStatus = async function(id, isActive) {
   try {
-    await fetchAPI(`/settings/users/${id}/status`, {
+    // Use the dedicated users route so it invalidates sessions via tokenVersion bump
+    await fetchAPI(`/users/${id}/status`, {
       method: 'PUT',
       body: JSON.stringify({ isActive })
     });
@@ -2442,6 +2481,46 @@ window.toggleUserStatus = async function(id, isActive) {
   } catch (err) {
     showToast(err.message || 'Failed to update user status', 'error');
   }
+};
+
+// User details modal
+window.viewUser = async function(id) {
+  const modal = document.getElementById('user-detail-modal');
+  const content = document.getElementById('user-detail-content');
+  if (!modal || !content) return;
+
+  modal.style.display = 'flex';
+  content.innerHTML = '<p class="muted" style="padding:8px 0;">Loading…</p>';
+
+  try {
+    const u = await fetchAPI(`/users/${id}`);
+    const createdBy = u.createdBy
+      ? `${escapeHtml(u.createdBy.role || '')} • ${escapeHtml(u.createdBy.name || u.createdBy.email || '')}`
+      : 'System';
+
+    content.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div><div class="muted" style="font-size:.8rem;">Name</div><div style="font-weight:700;">${escapeHtml(u.name || '—')}</div></div>
+        <div><div class="muted" style="font-size:.8rem;">Role</div><div><span class="role-badge ${(u.role || '').toLowerCase()}">${escapeHtml(u.role || '—')}</span></div></div>
+
+        <div><div class="muted" style="font-size:.8rem;">Email</div><div>${escapeHtml(u.email || '—')}</div></div>
+        <div><div class="muted" style="font-size:.8rem;">Phone</div><div>${escapeHtml(u.phone || '—')}</div></div>
+
+        <div><div class="muted" style="font-size:.8rem;">Status</div><div><span class="status-badge ${u.isActive ? 'active' : 'inactive'}">${u.isActive ? 'Active' : 'Inactive'}</span></div></div>
+        <div><div class="muted" style="font-size:.8rem;">Last Login</div><div>${u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Never'}</div></div>
+
+        <div style="grid-column:1/-1;"><div class="muted" style="font-size:.8rem;">Created By</div><div>${createdBy}</div></div>
+        ${u.createdAt ? `<div style="grid-column:1/-1;"><div class="muted" style="font-size:.8rem;">Created At</div><div>${new Date(u.createdAt).toLocaleString()}</div></div>` : ''}
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `<p style="color:#ef4444;">Failed to load user: ${escapeHtml(err.message || 'Unknown error')}</p>`;
+  }
+};
+
+window.closeUserDetailModal = function() {
+  const modal = document.getElementById('user-detail-modal');
+  if (modal) modal.style.display = 'none';
 };
 
 // ============================================================
@@ -3089,7 +3168,7 @@ async function loadBuyerStock(search = '') {
         <tr class="sd-clickable-row" onclick="viewStockDetails('${entry._id}')" title="Click to view details">
           <td><strong>${escapeHtml(entry.productId?.name || 'Unknown')}</strong></td>
           <td>${escapeHtml(entry.transactionDetails?.modelVariant || entry.productId?.shortName || '-')}</td>
-          <td><span class="text-error text-lg">${entry.quantity}</span></td>
+          <td><span class="text-error text-lg">-${Math.abs(entry.quantity)}</span></td>
           <td>${escapeHtml(entry.partyDetails?.companyName || '-')}</td>
           <td>${escapeHtml(entry.transactionDetails?.buyerType || '-')}</td>
           <td>${formatDate(entry.createdAt)}</td>
@@ -3139,7 +3218,8 @@ async function showStockDetailsModal(entryId) {
   modal.style.display = 'flex';
 
   try {
-    const res = await fetchAPI(`/stock/ledger/${entryId}`);
+    // Backend route: GET /api/stock/ledger/:id
+    const res = await fetchAPI(`/stock/ledger/${encodeURIComponent(entryId)}`);
     const entry = res.entry;
     if (!entry) throw new Error('Entry not found');
 
@@ -3272,7 +3352,7 @@ window.editStockEntry = async function(entryId) {
   
   try {
     // Fetch entry directly by ID (fast single lookup)
-    const res = await fetchAPI(`/stock/ledger/${entryId}`);
+    const res = await fetchAPI(`/stock/ledger/${encodeURIComponent(entryId)}`);
     const entry = res.entry;
 
     if (!entry) {
@@ -3572,7 +3652,7 @@ window.saveStockEntry = async function() {
   };
 
   try {
-    await fetchAPI(`/stock/ledger/${entryId}`, {
+    await fetchAPI(`/stock/ledger/${encodeURIComponent(entryId)}`, {
       method: 'PUT',
       body: JSON.stringify(body),
     });
@@ -3598,7 +3678,7 @@ window.deleteStockEntry = async function(entryId) {
   }
   
   try {
-    await fetchAPI(`/stock/ledger/${entryId}`, {
+    await fetchAPI(`/stock/ledger/${encodeURIComponent(entryId)}`, {
       method: 'DELETE'
     });
     showToast('Stock entry deleted successfully', 'success');
@@ -5971,8 +6051,8 @@ async function initManagerModify() {
   
   // Load managers into dropdown
   try {
-    const users = await fetchAPI('/users');
-    const managers = users.filter(u => u.role === 'MANAGER');
+  const users = await fetchAPI('/users');
+  const managers = users.filter(u => u.role === 'MANAGER');
     select.innerHTML = '<option value="">-- Select a manager --</option>' +
       managers.map(m => `<option value="${m._id}">${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`).join('');
   } catch (err) {
@@ -6089,8 +6169,8 @@ async function initUserModify() {
   
   // Load users into dropdown
   try {
-    const users = await fetchAPI('/users');
-    const userList = users.filter(u => u.role === 'USER');
+  const users = await fetchAPI('/users');
+  const userList = users.filter(u => u.role === 'USER');
     select.innerHTML = '<option value="">-- Select a user --</option>' +
       userList.map(u => `<option value="${u._id}">${escapeHtml(u.name)} (${escapeHtml(u.phone || u.email)})</option>`).join('');
   } catch (err) {
@@ -6182,7 +6262,9 @@ async function initUserAssign() {
     const users = await fetchAPI('/users');
     // Filter out the current admin (can't change your own role)
     const currentUser = JSON.parse(sessionStorage.getItem('user') || '{}');
-    const filteredUsers = users.filter(u => u._id !== currentUser._id);
+    const filteredUsers = users
+      .filter(u => u.role !== 'SUPER_ADMIN')
+      .filter(u => u._id !== currentUser._id);
     
     select.innerHTML = '<option value="">-- Select a user --</option>';
     
@@ -6491,7 +6573,7 @@ async function initReportUserActivity() {
   
   // Load users and managers
   try {
-    const users = await fetchAPI('/users');
+    const users = (await fetchAPI('/users')).filter(u => u.role !== 'SUPER_ADMIN');
     userSelect.innerHTML = '<option value="">-- Select a user or manager --</option>';
     
     // Add managers

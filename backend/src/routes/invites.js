@@ -16,14 +16,18 @@ const bcrypt  = require('bcryptjs');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { sendInviteEmail }          = require('../services/email.service');
 const logger  = require('../utils/logger');
+const checkPlanLimits = require('../middleware/checkPlanLimits');
 
 // ─────────────────────────────────────────────────────────────
 // Helper: build the full invite URL from the request
 // ─────────────────────────────────────────────────────────────
 function buildInviteUrl(req, rawToken) {
-  const base = process.env.FRONTEND_URL
-    ? process.env.FRONTEND_URL.split(',')[0].trim()
-    : `${req.protocol}://${req.get('host')}`;
+  // NOTE:
+  // - FRONTEND_URL is used for CORS allow-list and can be comma-separated.
+  // - For email links we need a single canonical public base URL.
+  // Prefer FRONTEND_BASE_URL, otherwise fall back to the current request host.
+  const envBase = (process.env.FRONTEND_BASE_URL || '').trim();
+  const base = (envBase || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   return `${base}/admin-html/accept-invite.html?token=${rawToken}`;
 }
 
@@ -32,7 +36,7 @@ function buildInviteUrl(req, rawToken) {
 // Only SUPER_ADMIN or ADMIN can send invites.
 // ADMIN cannot invite another ADMIN (only SUPER_ADMIN can).
 // ─────────────────────────────────────────────────────────────
-router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLimits('maxUsers'), async (req, res) => {
   try {
     const { email, role } = req.body;
     const senderRole = req.userRole;
@@ -57,14 +61,22 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req,
       return res.status(403).json({ message: 'Admins cannot invite other Admins. Only the Super Admin can do that.' });
     }
 
-    // Check if a user with this email already exists
-    const existingUser = await User.findOne({ email: email.toLowerCase(), isDeleted: { $ne: true } });
+    // Check if a user with this email already exists in this tenant
+    const existingUser = await User.findOne({ 
+      email: email.toLowerCase(), 
+      isDeleted: { $ne: true },
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     if (existingUser) {
       return res.status(409).json({ message: 'A user with this email already exists in the system.' });
     }
 
-    // Check if there's already a pending invite for this email
-    const existingInvite = await Invite.findOne({ email: email.toLowerCase(), status: 'pending' });
+    // Check if there's already a pending invite for this email in this tenant
+    const existingInvite = await Invite.findOne({ 
+      email: email.toLowerCase(), 
+      status: 'pending',
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     if (existingInvite) {
       return res.status(409).json({ message: 'A pending invite already exists for this email. Revoke it first to resend.' });
     }
@@ -77,12 +89,13 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req,
       email:     email.toLowerCase(),
       role,
       tokenHash,
-      invitedBy: req.userId
+      invitedBy: req.userId,
+      tenantId:  req.tenantId || undefined
     });
 
     // Build invite URL and send email
     const inviteUrl = buildInviteUrl(req, rawToken);
-    const sender    = await User.findById(req.userId).select('name');
+    const sender    = await User.findOne({ _id: req.userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) }).select('name');
     const senderName = sender ? sender.name : 'AcuStock Admin';
 
     const emailResult = await sendInviteEmail({
@@ -115,7 +128,10 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req,
 // ─────────────────────────────────────────────────────────────
 router.get('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const invites = await Invite.find({ status: 'pending' })
+    const invites = await Invite.find({ 
+      status: 'pending',
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    })
       .populate('invitedBy', 'name email role')
       .sort({ createdAt: -1 });
 
@@ -199,7 +215,11 @@ router.post('/accept', async (req, res) => {
     }
 
     // Double-check no user with that email was created in the meantime
-    const existing = await User.findOne({ email: invite.email, isDeleted: { $ne: true } });
+    const existing = await User.findOne({ 
+      email: invite.email, 
+      isDeleted: { $ne: true },
+      ...(invite.tenantId ? { tenantId: invite.tenantId } : {})
+    });
     if (existing) {
       await Invite.findByIdAndUpdate(invite._id, { status: 'accepted' });
       return res.status(409).json({ message: 'An account with this email already exists. Please log in.' });
@@ -208,7 +228,7 @@ router.post('/accept', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Create the user
+    // Create the user inheriting invite.tenantId
     const user = await User.create({
       name:       name.trim(),
       email:      invite.email,
@@ -217,6 +237,7 @@ router.post('/accept', async (req, res) => {
       isSuperAdmin: false,
       isActive:   true,
       createdBy:  invite.invitedBy,
+      tenantId:   invite.tenantId || undefined,
       forcePasswordReset: false
     });
 
@@ -248,7 +269,10 @@ router.post('/accept', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.delete('/:id', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const invite = await Invite.findById(req.params.id);
+    const invite = await Invite.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
 
     if (!invite) {
       return res.status(404).json({ message: 'Invite not found.' });
@@ -259,7 +283,7 @@ router.delete('/:id', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async 
     }
 
     // ADMIN can only revoke invites they sent
-    if (req.userRole === 'ADMIN' && invite.invitedBy.toString() !== req.userId.toString()) {
+    if (req.userRole === 'ADMIN' && invite.invitedBy?.toString() !== req.userId?.toString()) {
       return res.status(403).json({ message: 'You can only revoke invites you sent.' });
     }
 
@@ -279,7 +303,10 @@ router.delete('/:id', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async 
 // ─────────────────────────────────────────────────────────────
 router.post('/:id/resend', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
-    const invite = await Invite.findById(req.params.id).populate('invitedBy', 'name');
+    const invite = await Invite.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    }).populate('invitedBy', 'name');
 
     if (!invite) {
       return res.status(404).json({ message: 'Invite not found.' });

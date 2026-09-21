@@ -30,13 +30,23 @@ const serialAuditSchema = new mongoose.Schema({
     type: String,
     enum: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'USER'],
     required: true
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: true,
+    index: true
   }
 }, {
   timestamps: { createdAt: true, updatedAt: false } // Immutable - no updatedAt
 });
 
-// Compound index: covers lookup by product, product+serial, and time-ordered history
-// in a single efficient index scan instead of two separate single-field indexes.
+// Compound index: covers lookup by tenant, product, product+serial, and time-ordered history
+serialAuditSchema.index({ tenantId: 1, productId: 1, serial: 1, createdAt: -1 });
+serialAuditSchema.index({ tenantId: 1, serial: 1 });
 serialAuditSchema.index({ productId: 1, serial: 1, createdAt: -1 });
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+serialAuditSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('SerialAudit', serialAuditSchema);

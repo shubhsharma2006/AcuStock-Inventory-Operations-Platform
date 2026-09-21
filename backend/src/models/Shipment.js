@@ -5,7 +5,7 @@ const shipmentSchema = new mongoose.Schema({
   reference: {
     type: String,
     required: true,
-    unique: true,
+    // Uniqueness enforced per-tenant via compound index { tenantId: 1, reference: 1 }
     uppercase: true
   },
   
@@ -182,16 +182,24 @@ const shipmentSchema = new mongoose.Schema({
     type: String,
     enum: ['OUT', 'IN'], // OUT = Shipping to customer, IN = Supply received
     default: 'OUT'
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: true,
+    index: true
   }
 }, {
   timestamps: true
 });
 
 // Indexes
+shipmentSchema.index({ tenantId: 1, reference: 1 });
+shipmentSchema.index({ tenantId: 1, status: 1, dispatchDate: -1 });
+shipmentSchema.index({ tenantId: 1, awb: 1 });
 shipmentSchema.index({ status: 1 });
 shipmentSchema.index({ createdBy: 1 });
 shipmentSchema.index({ dispatchDate: -1 });
-// Note: reference index is created by unique: true
 shipmentSchema.index({ customerName: 'text', companyName: 'text', awb: 'text' });
 
 // Auto-generate reference number
@@ -200,7 +208,8 @@ shipmentSchema.pre('save', async function(next) {
     const prefix = this.type === 'OUT' ? 'SHP' : 'SUP';
     const date = new Date();
     const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-    const count = await mongoose.model('Shipment').countDocuments();
+    const countFilter = this.tenantId ? { tenantId: this.tenantId } : {};
+    const count = await mongoose.model('Shipment').countDocuments(countFilter);
     this.reference = `${prefix}-${dateStr}-${String(count + 1).padStart(5, '0')}`;
   }
   
@@ -234,11 +243,14 @@ shipmentSchema.methods.updateStatus = async function(newStatus, userId, notes = 
 };
 
 // Static: Get pending deliveries count
-shipmentSchema.statics.getPendingCount = async function(userId) {
+shipmentSchema.statics.getPendingCount = async function(userId, tenantId) {
   const query = {
     status: { $in: ['PENDING', 'DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY'] },
     type: 'OUT'
   };
+  if (tenantId) {
+    query.tenantId = tenantId;
+  }
   if (userId) {
     query.createdBy = userId;
   }
@@ -246,11 +258,14 @@ shipmentSchema.statics.getPendingCount = async function(userId) {
 };
 
 // Static: Get pending deliveries
-shipmentSchema.statics.getPendingDeliveries = async function(userId, limit = 50) {
+shipmentSchema.statics.getPendingDeliveries = async function(userId, limit = 50, tenantId) {
   const query = {
     status: { $in: ['PENDING', 'DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY'] },
     type: 'OUT'
   };
+  if (tenantId) {
+    query.tenantId = tenantId;
+  }
   if (userId) {
     query.createdBy = userId;
   }
@@ -260,5 +275,8 @@ shipmentSchema.statics.getPendingDeliveries = async function(userId, limit = 50)
     .sort({ createdAt: -1 })
     .limit(limit);
 };
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+shipmentSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Shipment', shipmentSchema);

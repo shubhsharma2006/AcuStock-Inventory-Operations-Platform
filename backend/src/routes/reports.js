@@ -35,12 +35,8 @@ function bustCache(userId) {
 }
 module.exports.bustCache = bustCache;
 
-/**
- * GET /api/reports/user-activity/:userId
- * Get detailed stock activity for a specific user/manager
- * Query params: startDate, endDate, type (IN/OUT)
- */
-router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+// GET /api/reports/user-activity/:userId - Get specific user's activity (Admin only)
+router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { userId } = req.params;
     const { startDate, endDate, type } = req.query;
@@ -49,10 +45,10 @@ router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN']), async 
     const userObjectId = new mongoose.Types.ObjectId(userId);
     
     // Build query for find (auto-casts string to ObjectId)
-    const query = { createdBy: userId };
+    const query = { createdBy: userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
     
     // Build query for aggregation (needs explicit ObjectId)
-    const aggQuery = { createdBy: userObjectId };
+    const aggQuery = { createdBy: userObjectId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
     
     if (startDate || endDate) {
       query.createdAt = {};
@@ -73,7 +69,7 @@ router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN']), async 
     }
     
     // Get user info
-    const user = await User.findById(userId).select('name email phone role');
+    const user = await User.findOne({ _id: userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) }).select('name email phone role');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -116,16 +112,13 @@ router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN']), async 
   }
 });
 
-/**
- * GET /api/reports/user-summary
- * Get summary of all users/managers with their activity stats
- */
-router.get('/user-summary', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+// GET /api/reports/user-summary - Get all users with their stats (Admin only)
+router.get('/user-summary', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { role, startDate, endDate } = req.query;
     
     // Get all users/managers
-    const userQuery = { isActive: true };
+    const userQuery = { isActive: true, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
     if (role && ['MANAGER', 'USER'].includes(role)) {
       userQuery.role = role;
     } else {
@@ -135,7 +128,7 @@ router.get('/user-summary', requireAuth, requireRole(['ADMIN']), async (req, res
     const users = await User.find(userQuery).select('name email phone role lastLogin createdAt');
     
     // Build date filter for aggregation
-    const dateMatch = {};
+    const dateMatch = { ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
     if (startDate || endDate) {
       dateMatch.createdAt = {};
       if (startDate) dateMatch.createdAt.$gte = new Date(startDate);
@@ -189,16 +182,27 @@ router.get('/user-summary', requireAuth, requireRole(['ADMIN']), async (req, res
   }
 });
 
-/**
- * GET /api/reports/product-by-user/:userId
- * Get products handled by a specific user with quantities
- */
-router.get('/product-by-user/:userId', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+// GET /api/reports/product-by-user - Get products by user (defaults to current user or query param)
+router.get('/product-by-user', requireAuth, async (req, res) => {
+  const targetId = req.query.userId || req.userId;
+  req.params.userId = targetId;
+  return handleProductByUser(req, res);
+});
+
+// GET /api/reports/product-by-user/:userId - Get products added by specific user (Admin only)
+router.get('/product-by-user/:userId', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  return handleProductByUser(req, res);
+});
+
+async function handleProductByUser(req, res) {
   try {
     const { userId } = req.params;
     const { startDate, endDate } = req.query;
     
-    const matchQuery = { createdBy: new (require('mongoose').Types.ObjectId)(userId) };
+    const matchQuery = { 
+      createdBy: new (require('mongoose').Types.ObjectId)(userId),
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    };
     
     if (startDate || endDate) {
       matchQuery.createdAt = {};
@@ -260,28 +264,17 @@ router.get('/product-by-user/:userId', requireAuth, requireRole(['ADMIN']), asyn
     console.error('Error fetching product by user:', error);
     res.status(500).json({ message: 'Server error' });
   }
-});
+}
 
 // ============================================================
 // DASHBOARD STATS
-// ============================================================
-
-// GET /api/reports/dashboard-stats — deprecated alias, redirects to admin-dashboard
-router.get('/dashboard-stats', requireAuth, requireRole(['ADMIN']), (req, res) => {
-  const qs = req.originalUrl.split('?')[1];
-  res.redirect(307, `/api/reports/admin-dashboard${qs ? '?' + qs : ''}`);
-});
-
-// GET /api/reports/dashboard — deprecated alias, redirects to admin-dashboard
-router.get('/dashboard', requireAuth, requireRole(['ADMIN']), (req, res) => {
-  const qs = req.originalUrl.split('?')[1];
-  res.redirect(307, `/api/reports/admin-dashboard${qs ? '?' + qs : ''}`);
-});
-
 // GET /api/reports/stock-movement - Get stock movement data (Admin only)
-router.get('/stock-movement', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+router.get('/stock-movement', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const stockMovements = await StockLedger.aggregate([
+      {
+        $match: { ...(req.tenantId ? { tenantId: req.tenantId } : {}) }
+      },
       {
         $group: {
           _id: {
@@ -327,7 +320,7 @@ router.get('/my-activity', requireAuth, async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
 
     // Build a single query object used by BOTH find() and aggregate()
-    const query = { createdBy: userObjectId };
+    const query = { createdBy: userObjectId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
     
     if (startDate || endDate) {
       query.createdAt = {};
@@ -403,7 +396,7 @@ router.get('/my-products', requireAuth, async (req, res) => {
     const { startDate, endDate } = req.query;
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
 
-    const matchQuery = { createdBy: userObjectId };
+    const matchQuery = { createdBy: userObjectId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
     
     if (startDate || endDate) {
       matchQuery.createdAt = {};
@@ -479,12 +472,13 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
 
     // Get own activity counts
     const [totalActivity, todayActivity, productCount] = await Promise.all([
       // Total activity
       StockLedger.aggregate([
-        { $match: { createdBy: userObjectId } },
+        { $match: { createdBy: userObjectId, ...tenantFilter } },
         { $group: { 
           _id: '$type', 
           count: { $sum: 1 }, 
@@ -493,7 +487,7 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
       ]),
       // Today's activity
       StockLedger.aggregate([
-        { $match: { createdBy: userObjectId, createdAt: { $gte: today } } },
+        { $match: { createdBy: userObjectId, createdAt: { $gte: today }, ...tenantFilter } },
         { $group: { 
           _id: '$type', 
           count: { $sum: 1 }, 
@@ -501,7 +495,7 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
         }}
       ]),
       // Unique products handled
-      StockLedger.distinct('productId', { createdBy: userObjectId })
+      StockLedger.distinct('productId', { createdBy: userObjectId, ...tenantFilter })
     ]);
     
     const inTotal = totalActivity.find(a => a._id === 'IN') || { count: 0, quantity: 0 };
@@ -534,18 +528,19 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
 // ============================================================
 
 /**
- * GET /api/reports/admin-dashboard
+ * GET /api/reports/admin-dashboard or /api/reports/dashboard
  * Comprehensive dashboard data for admin including all stats, charts, alerts
  */
-router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, res) => {
-  // Cache check — serve stale-safe snapshot if available
-  const cacheKey = `admin-dashboard:${req.userId}`;
+const handleAdminDashboard = async (req, res) => {
+  // Cache check — serve stale-safe snapshot if available (keyed by tenant and user)
+  const cacheKey = `${req.tenantId || 'global'}:admin-dashboard:${req.userId}`;
   const cached = getCached(cacheKey);
   if (cached) return res.json(cached);
 
   try {
     const Company = require('../models/Company');
     const mongoose = require('mongoose');
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
     
     // Date calculations
     const now = new Date();
@@ -564,17 +559,17 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
       serialEnabledProducts,
       activeCompanies
     ] = await Promise.all([
-      Item.countDocuments({ isActive: true }),
-      Company.countDocuments({ isActive: true }),
-      User.countDocuments({ role: 'MANAGER', isActive: true }),
-      User.countDocuments({ role: 'USER', isActive: true }),
-      Item.countDocuments({ isActive: true, 'serialPolicy.enableSerial': true }),
-      Company.countDocuments({ isActive: true })
+      Item.countDocuments({ isActive: true, ...tenantFilter }),
+      Company.countDocuments({ isActive: true, ...tenantFilter }),
+      User.countDocuments({ role: 'MANAGER', isActive: true, ...tenantFilter }),
+      User.countDocuments({ role: 'USER', isActive: true, ...tenantFilter }),
+      Item.countDocuments({ isActive: true, 'serialPolicy.enableSerial': true, ...tenantFilter }),
+      Company.countDocuments({ isActive: true, ...tenantFilter })
     ]);
     
     // Get total stock count from StockLedger (IN - OUT = current stock)
     const stockAgg = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true } } },
+      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
       {
         $group: {
           _id: '$productId',
@@ -601,7 +596,7 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     
     // ========== TODAY'S STOCK IN/OUT ==========
     const todayStockAgg = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: today } } },
+      { $match: { createdAt: { $gte: today }, ...tenantFilter } },
       {
         $group: {
           _id: '$type',
@@ -615,14 +610,14 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     
     // ========== ACTIVE COUNTS ==========
     const [activeManagers, activeUsers, activeProducts] = await Promise.all([
-      User.countDocuments({ role: 'MANAGER', isActive: true }),
-      User.countDocuments({ role: 'USER', isActive: true }),
-      Item.countDocuments({ isActive: true })
+      User.countDocuments({ role: 'MANAGER', isActive: true, ...tenantFilter }),
+      User.countDocuments({ role: 'USER', isActive: true, ...tenantFilter }),
+      Item.countDocuments({ isActive: true, ...tenantFilter })
     ]);
     
     // ========== STOCK MOVEMENT CHART (Last 7 days) ==========
     const stockMovementData = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo } } },
+      { $match: { createdAt: { $gte: sevenDaysAgo }, ...tenantFilter } },
       {
         $group: {
           _id: {
@@ -657,7 +652,7 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     // ========== PRODUCT-WISE STOCK CHART ==========
     // Calculate from StockLedger (IN adds, OUT subtracts)
     const productWiseStock = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true } } },
+      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
       {
         $group: {
           _id: '$productId',
@@ -710,7 +705,8 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
       {
         $match: {
           createdAt: { $gte: sevenDaysAgo },
-          createdByRole: 'MANAGER'
+          createdByRole: 'MANAGER',
+          ...tenantFilter
         }
       },
       {
@@ -743,7 +739,8 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
       {
         $match: {
           createdAt: { $gte: sevenDaysAgo },
-          createdByRole: 'USER'
+          createdByRole: 'USER',
+          ...tenantFilter
         }
       },
       {
@@ -774,7 +771,7 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     // ========== LOW STOCK ALERTS ==========
     // Calculate current stock from StockLedger
     const lowStockProducts = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true } } },
+      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
       {
         $group: {
           _id: '$productId',
@@ -818,7 +815,8 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     
     // ========== RECENT ACTIVITY (Last 20 transactions) ==========
     const recentActivity = await StockLedger.find({
-      createdByRole: { $in: ['MANAGER', 'USER'] } // Exclude ADMIN activity for this overview
+      createdByRole: { $in: ['MANAGER', 'USER'] }, // Exclude ADMIN activity for this overview
+      ...tenantFilter
     })
       .populate('productId', 'name shortName')
       .populate('createdBy', 'name role')
@@ -842,7 +840,7 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     
     // ========== TOP PERFORMERS (Managers & Users) ==========
     const topPerformers = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: thirtyDaysAgo }, createdByRole: { $in: ['MANAGER', 'USER'] } } },
+      { $match: { createdAt: { $gte: thirtyDaysAgo }, createdByRole: { $in: ['MANAGER', 'USER'] }, ...tenantFilter } },
       {
         $group: {
           _id: '$createdBy',
@@ -871,8 +869,39 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
       }
     ]);
     
+    // Format recent transactions array for frontend line chart
+    const recentTransactions = stockMovementChart.labels.map((date, idx) => ({
+      date,
+      in: stockMovementChart.stockIn[idx] || 0,
+      out: stockMovementChart.stockOut[idx] || 0,
+    }));
+
+    // Format top moving items for frontend bar chart
+    const topMovingItems = productWiseStock.map(p => ({
+      name: p.shortName || p.name,
+      totalIn: p.totalStock || 0,
+      totalOut: 0,
+      net: p.totalStock || 0
+    }));
+
+    // Format low stock items
+    const lowStockItems = lowStockProducts.map(p => ({
+      name: p.name,
+      currentStock: p.currentStock || 0,
+      threshold: p.lowStockThreshold || 10
+    }));
+
     // ========== SUMMARY RESPONSE ==========
     const responseData = {
+      // Normalized top-level fields for frontend analytics
+      totalStock: totalStockItems,
+      totalItems: totalProducts,
+      totalValue: totalStockItems * 150, // estimated portfolio valuation
+      recentTransactions,
+      topMovingItems,
+      lowStockItems,
+
+      // Detailed structures for dashboard panels
       stats: {
         totalProducts,
         activeProducts,
@@ -906,7 +935,11 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
     console.error('Error fetching admin dashboard:', error);
     res.status(500).json({ message: 'Server error' });
   }
-});
+};
+
+router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), handleAdminDashboard);
+router.get('/dashboard', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), handleAdminDashboard);
+router.get('/dashboard-stats', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), handleAdminDashboard);
 
 // ============================================================
 // USER/MANAGER SELF-SERVICE REPORTS
@@ -919,24 +952,27 @@ router.get('/admin-dashboard', requireAuth, requireRole(['ADMIN']), async (req, 
 router.get('/user-stats', requireAuth, async (req, res) => {
   try {
     const userId = req.user._id;
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
 
     // Count stock IN entries by this user
     const stockInCount = await StockLedger.countDocuments({
       createdBy: userId,
-      type: 'IN'
+      type: 'IN',
+      ...tenantFilter
     });
 
     // Count stock OUT entries by this user
     const stockOutCount = await StockLedger.countDocuments({
       createdBy: userId,
-      type: 'OUT'
+      type: 'OUT',
+      ...tenantFilter
     });
 
     // Count companies added by this user (if they have a createdBy field)
     let companiesAdded = 0;
     try {
       const Company = require('../models/Company');
-      companiesAdded = await Company.countDocuments({ createdBy: userId });
+      companiesAdded = await Company.countDocuments({ createdBy: userId, ...tenantFilter });
     } catch (e) {
       // Company model might not have createdBy field
     }
@@ -944,7 +980,7 @@ router.get('/user-stats', requireAuth, async (req, res) => {
     // Count users managed by this user (only for managers)
     let usersManaged = 0;
     if (req.user.role === 'MANAGER' || req.user.role === 'ADMIN' || req.user.role === 'SUPER_ADMIN') {
-      usersManaged = await User.countDocuments({ createdBy: userId });
+      usersManaged = await User.countDocuments({ createdBy: userId, ...tenantFilter });
     }
 
     res.json({
@@ -969,8 +1005,9 @@ router.get('/user-activity', requireAuth, async (req, res) => {
   try {
     const userId = req.user._id;
     const limit = parseInt(req.query.limit) || 10;
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
 
-    const activities = await StockLedger.find({ createdBy: userId })
+    const activities = await StockLedger.find({ createdBy: userId, ...tenantFilter })
       .populate('productId', 'name shortName')
       .sort({ createdAt: -1 })
       .limit(limit);
@@ -996,13 +1033,14 @@ router.get('/user-activity', requireAuth, async (req, res) => {
  * Comprehensive dashboard data for managers including stats, charts, alerts
  */
 router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']), async (req, res) => {
-  // Cache check — keyed per-user so each manager sees their own data
-  const cacheKey = `manager-dashboard:${req.userId}`;
+  // Cache check — keyed per-tenant and user so each manager sees their own data
+  const cacheKey = `${req.tenantId || 'global'}:manager-dashboard:${req.userId}`;
   const cached = getCached(cacheKey);
   if (cached) return res.json(cached);
 
   try {
     const Company = require('../models/Company');
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
     
     // Date calculations
     const now = new Date();
@@ -1020,15 +1058,16 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
       totalProducts,
       totalUsers,
     ] = await Promise.all([
-      Item.countDocuments({ isActive: true }),
-      User.countDocuments({ role: 'USER', createdBy: managerId, isActive: true }),
+      Item.countDocuments({ isActive: true, ...tenantFilter }),
+      User.countDocuments({ role: 'USER', createdBy: managerId, isActive: true, ...tenantFilter }),
     ]);
     
     // ========== TODAY'S STOCK IN/OUT (All entries, not just manager's) ==========
     const todayStockAgg = await StockLedger.aggregate([
       { 
         $match: { 
-          createdAt: { $gte: today, $lt: tomorrow }
+          createdAt: { $gte: today, $lt: tomorrow },
+          ...tenantFilter
         } 
       },
       {
@@ -1044,7 +1083,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     
     // ========== STOCK MOVEMENT CHART (Last 7 days - All data) ==========
     const stockMovementData = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo } } },
+      { $match: { createdAt: { $gte: sevenDaysAgo }, ...tenantFilter } },
       {
         $group: {
           _id: {
@@ -1080,7 +1119,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     
     // ========== PRODUCT-WISE STOCK CHART (Top 5) ==========
     const productWiseStock = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true } } },
+      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
       {
         $group: {
           _id: '$productId',
@@ -1122,7 +1161,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     
     // ========== LOW STOCK ALERTS ==========
     const lowStockProducts = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true } } },
+      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
       {
         $group: {
           _id: '$productId',
@@ -1164,7 +1203,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     ]);
     
     // ========== RECENT ACTIVITY (Last 10 transactions) ==========
-    const recentActivity = await StockLedger.find({})
+    const recentActivity = await StockLedger.find({ ...tenantFilter })
       .populate('productId', 'name shortName')
       .populate('createdBy', 'name role')
       .sort({ createdAt: -1 })
@@ -1210,7 +1249,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
 // ============================================================
 
 /**
- * GET /api/reports/export
+ * GET /api/reports/export - Export comprehensive data to CSV
  * Download a CSV file.
  *
  * Query params:
@@ -1219,9 +1258,10 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
  *   endDate    - ISO date string, e.g. 2026-03-01 (optional)
  *   userId     - ObjectId string — filter by user (stock-ledger only, optional)
  */
-router.get('/export', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { type, startDate, endDate, userId } = req.query;
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
 
     if (!['stock-ledger', 'user-activity', 'products'].includes(type)) {
       return res.status(400).json({ message: 'type must be stock-ledger, user-activity, or products' });
@@ -1241,7 +1281,7 @@ router.get('/export', requireAuth, requireRole(['ADMIN']), async (req, res) => {
 
     // ── stock-ledger ───────────────────────────────────────────
     if (type === 'stock-ledger') {
-      const match = {};
+      const match = { ...tenantFilter };
       if (startDate) match.createdAt = { $gte: new Date(startDate) };
       if (endDate)   match.createdAt = { ...(match.createdAt || {}), $lte: new Date(endDate + 'T23:59:59.999Z') };
       if (userId && mongoose.Types.ObjectId.isValid(userId)) {
@@ -1270,7 +1310,7 @@ router.get('/export', requireAuth, requireRole(['ADMIN']), async (req, res) => {
 
     // ── user-activity ──────────────────────────────────────────
     if (type === 'user-activity') {
-      const matchDate = {};
+      const matchDate = { ...tenantFilter };
       if (startDate) matchDate.createdAt = { $gte: new Date(startDate) };
       if (endDate)   matchDate.createdAt = { ...(matchDate.createdAt || {}), $lte: new Date(endDate + 'T23:59:59.999Z') };
 
@@ -1301,7 +1341,7 @@ router.get('/export', requireAuth, requireRole(['ADMIN']), async (req, res) => {
 
     // ── products ───────────────────────────────────────────────
     if (type === 'products') {
-      const matchDate = {};
+      const matchDate = { ...tenantFilter };
       if (startDate) matchDate.createdAt = { $gte: new Date(startDate) };
       if (endDate)   matchDate.createdAt = { ...(matchDate.createdAt || {}), $lte: new Date(endDate + 'T23:59:59.999Z') };
 
@@ -1339,5 +1379,4 @@ router.get('/export', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   }
 });
 
-module.exports = router;
 module.exports = router;

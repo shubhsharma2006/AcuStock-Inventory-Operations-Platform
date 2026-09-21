@@ -10,13 +10,23 @@ router.use(requireAuth);
 // ── GET /api/warranty/stats ────────────────────────────────────
 router.get('/stats', async (req, res) => {
   try {
+    const pMatch = { isActive: true, 'purchaseWarranty.months': { $gt: 0 } };
+    const sMatch = { isActive: true, 'sellerWarranty.months': { $gt: 0 }, 'sellerWarranty.status': { $nin: ['not-sold', 'none'] } };
+    const notSoldFilter = { isActive: true, 'sellerWarranty.status': 'not-sold' };
+
+    if (req.tenantId) {
+      pMatch.tenantId = req.tenantId;
+      sMatch.tenantId = req.tenantId;
+      notSoldFilter.tenantId = req.tenantId;
+    }
+
     const [purchase, seller] = await Promise.all([
       Warranty.aggregate([
-        { $match: { isActive: true, 'purchaseWarranty.months': { $gt: 0 } } },
+        { $match: pMatch },
         { $group: { _id: '$purchaseWarranty.status', count: { $sum: 1 } } }
       ]),
       Warranty.aggregate([
-        { $match: { isActive: true, 'sellerWarranty.months': { $gt: 0 }, 'sellerWarranty.status': { $nin: ['not-sold', 'none'] } } },
+        { $match: sMatch },
         { $group: { _id: '$sellerWarranty.status', count: { $sum: 1 } } }
       ])
     ]);
@@ -28,7 +38,7 @@ router.get('/stats', async (req, res) => {
     res.json({
       purchase: { active: pMap['active'] || 0, expiringSoon: pMap['expiring-soon'] || 0, expired: pMap['expired'] || 0 },
       seller:   { active: sMap['active'] || 0, expiringSoon: sMap['expiring-soon'] || 0, expired: sMap['expired'] || 0 },
-      notSold:  await Warranty.countDocuments({ isActive: true, 'sellerWarranty.status': 'not-sold' })
+      notSold:  await Warranty.countDocuments(notSoldFilter)
     });
   } catch (err) {
     console.error('warranty stats error:', err);
@@ -39,10 +49,13 @@ router.get('/stats', async (req, res) => {
 // ── GET /api/warranty/serial/:serial ──────────────────────────
 router.get('/serial/:serial', async (req, res) => {
   try {
-    const warranty = await Warranty.findOne({
+    const filter = {
       serialNumber: req.params.serial.trim().toUpperCase(),
       isActive: true
-    })
+    };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const warranty = await Warranty.findOne(filter)
       .populate('productId', 'name sku unit category')
       .populate('stockLedgerId', 'type createdAt transactionDetails')
       .populate('createdBy', 'username name')
@@ -62,7 +75,9 @@ router.get('/', async (req, res) => {
     const { type, status, productId, search, page = 1, limit = 20 } = req.query;
     const filter = { isActive: true };
 
-    // Data isolation: non-SUPER_ADMIN users see only their own company's records
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    // Data isolation: non-SUPER_ADMIN users see only their own company's records if companyId is set
     if (req.user.role !== 'SUPER_ADMIN' && req.user.companyId) {
       filter.companyId = req.user.companyId;
     }
@@ -118,7 +133,10 @@ router.get('/:id', async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'Invalid ID' });
 
-    const warranty = await Warranty.findById(req.params.id)
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const warranty = await Warranty.findOne(filter)
       .populate('productId', 'name sku unit category')
       .populate('stockLedgerId', 'type createdAt transactionDetails partyDetails')
       .populate('createdBy', 'username name')
@@ -145,7 +163,10 @@ router.post('/:id/claim', async (req, res) => {
     if (!description || description.trim().length < 5)
       return res.status(400).json({ message: 'Description is required (min 5 chars)' });
 
-    const warranty = await Warranty.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const warranty = await Warranty.findOne(filter);
     if (!warranty) return res.status(404).json({ message: 'Warranty not found' });
 
     warranty.claims.push({ claimType, description: description.trim(), raisedBy: req.user._id, status: 'open' });
@@ -159,6 +180,7 @@ router.post('/:id/claim', async (req, res) => {
         title: 'Warranty Claim Raised',
         message: `A ${claimType} warranty claim was raised for serial ${warranty.serialNumber || 'N/A'}.`,
         link: 'warranty-list',
+        tenantId: req.tenantId || undefined,
         metadata: {
           warrantyId:  String(warranty._id),
           serialNumber: warranty.serialNumber,
@@ -166,7 +188,12 @@ router.post('/:id/claim', async (req, res) => {
           claimId: String(warranty.claims[warranty.claims.length - 1]._id)
         }
       });
-      if (global.emitRealTimeUpdate) global.emitRealTimeUpdate('notification', { message: 'New warranty claim' }, 'admin');
+      if (global.emitRealTimeUpdate) {
+        global.emitRealTimeUpdate('notification', {
+          message: 'New warranty claim',
+          tenantId: req.tenantId
+        }, 'admin');
+      }
     } catch (_) { /* non-critical */ }
 
     res.json({ message: 'Claim raised successfully', warranty });
@@ -187,7 +214,10 @@ router.put('/:id/claim/:claimId', requireRole(['ADMIN', 'MANAGER']), async (req,
     if (!status || !validStatuses.includes(status))
       return res.status(400).json({ message: `status must be one of: ${validStatuses.join(', ')}` });
 
-    const warranty = await Warranty.findById(req.params.id);
+    const filter = { _id: req.params.id };
+    if (req.tenantId) filter.tenantId = req.tenantId;
+
+    const warranty = await Warranty.findOne(filter);
     if (!warranty) return res.status(404).json({ message: 'Warranty not found' });
 
     const claim = warranty.claims.id(req.params.claimId);

@@ -1757,6 +1757,107 @@ body.resizing #sidebar-resizer {
   background: rgba(31, 60, 136, 0.03);
 }
 
+/* ===============================================
+   STOCK LIST — TABLE ALIGNMENT FIXES
+   (Prevents header wrapping like "COMPAN Y" and keeps columns aligned)
+   =============================================== */
+
+#supplier-stock-table,
+#buyer-stock-table {
+  table-layout: fixed;
+}
+
+#supplier-stock-table thead th,
+#supplier-stock-table tbody td,
+#buyer-stock-table thead th,
+#buyer-stock-table tbody td {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+/* Make action buttons stay on one line and centered */
+/* Make action buttons stay on one line and centered */
+#supplier-stock-table th:last-child,
+#supplier-stock-table td:last-child,
+#buyer-stock-table th:last-child,
+#buyer-stock-table td:last-child {
+  width: 150px;
+  min-width: 150px;
+  text-align: center;
+}
+
+/* Keep quantity/date reasonably compact and aligned */
+#supplier-stock-table th:nth-child(3),
+#supplier-stock-table td:nth-child(3),
+#buyer-stock-table th:nth-child(3),
+#buyer-stock-table td:nth-child(3) {
+  width: 110px;
+  text-align: right;
+}
+
+#supplier-stock-table th:nth-child(6),
+#supplier-stock-table td:nth-child(6),
+#buyer-stock-table th:nth-child(6),
+#buyer-stock-table td:nth-child(6) {
+  width: 140px;
+}
+
+/* Serials can be wide but should not break the table layout */
+#supplier-stock-table th.serial-column,
+#supplier-stock-table td.serial-column,
+#buyer-stock-table th.serial-column,
+#buyer-stock-table td.serial-column {
+  width: 220px;
+}
+
+/* Give Product / Model a comfortable default width so they don't crumble */
+#supplier-stock-table th:nth-child(1),
+#supplier-stock-table td:nth-child(1),
+#buyer-stock-table th:nth-child(1),
+#buyer-stock-table td:nth-child(1) {
+  width: 200px;
+}
+
+#supplier-stock-table th:nth-child(2),
+#supplier-stock-table td:nth-child(2),
+#buyer-stock-table th:nth-child(2),
+#buyer-stock-table td:nth-child(2) {
+  width: 170px;
+}
+
+/* Company and buyer/supplier type often cause wrapping; reserve space */
+#supplier-stock-table th:nth-child(4),
+#supplier-stock-table td:nth-child(4),
+#buyer-stock-table th:nth-child(4),
+#buyer-stock-table td:nth-child(4) {
+  width: 160px;
+}
+
+#supplier-stock-table th:nth-child(5),
+#supplier-stock-table td:nth-child(5),
+#buyer-stock-table th:nth-child(5),
+#buyer-stock-table td:nth-child(5) {
+  width: 150px;
+}
+
+/* Action buttons: don't wrap */
+#supplier-stock-table td:last-child,
+#buyer-stock-table td:last-child {
+  white-space: nowrap;
+}
+
+/* Ensure the action buttons are visible and laid out nicely */
+#supplier-stock-table td:last-child .action-buttons,
+#buyer-stock-table td:last-child .action-buttons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+
 /* Action Buttons in Tables */
 .table .action-btn {
   padding: 6px 12px;
@@ -4464,21 +4565,22 @@ input[type="date"].se-input {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 .role-badge.admin {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--error) 16%, transparent);
+  color: var(--error);
 }
 
 .role-badge.manager {
-  background: rgba(59, 130, 246, 0.15);
-  color: #3b82f6;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 
 .role-badge.user {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
 
 /* Status Badge */
@@ -4492,9 +4594,123 @@ input[type="date"].se-input {
   font-weight: 500;
 }
 
+/* Users table tweaks */
+#user-table td.created-by-cell {
+  max-width: 240px;
+  white-space: normal;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+/* Users table layout fixes */
+#user-table {
+  table-layout: fixed;
+}
+
+#user-table th, #user-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+#user-table td:nth-child(2),
+#user-table td:nth-child(3) {
+  word-break: break-word;
+}
+
+#user-table td.actions {
+  white-space: nowrap;
+}
+
+#user-table td.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+#user-table td.actions .btn {
+  min-width: 34px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#user-table td.actions .btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Modal (used by user details, matches existing dashboard aesthetic) */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  z-index: 999;
+}
+
+.modal-content {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(17, 24, 39, 0.18);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 16px;
+  color: var(--text);
+}
+
+.modal-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+
+.modal-close {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.modal-close:hover {
+  opacity: 1;
+}
+
+/* Ensure muted helper text is readable on dark modal backgrounds */
+#user-detail-modal .muted {
+  color: var(--muted) !important;
+}
+
+#user-detail-modal .role-badge {
+  box-shadow: none;
+}
+
 .status-badge.active {
-  background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--success);
 }
 
 .status-badge.active::before {
@@ -4502,12 +4718,12 @@ input[type="date"].se-input {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #10b981;
+  background: var(--success);
 }
 
 .status-badge.inactive {
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  color: var(--error);
 }
 
 .status-badge.inactive::before {
@@ -4515,7 +4731,19 @@ input[type="date"].se-input {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ef4444;
+  background: var(--error);
+}
+
+/* Make table icon buttons match theme */
+#user-table td.actions .btn.ghost {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--accent);
+}
+
+#user-table td.actions .btn.ghost:hover:not([disabled]) {
+  background: var(--accent-light);
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
 }
 
 .stock-details-grid {

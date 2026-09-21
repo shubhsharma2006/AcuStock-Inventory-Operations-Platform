@@ -53,6 +53,12 @@ const inviteSchema = new mongoose.Schema({
   expiresAt: {
     type: Date,
     default: () => new Date(Date.now() + 48 * 60 * 60 * 1000) // 48 hours
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: true,
+    index: true
   }
 }, {
   timestamps: true
@@ -64,7 +70,9 @@ inviteSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 // Index for fast token lookup
 inviteSchema.index({ tokenHash: 1 });
 
-// Index for checking duplicate pending invites per email
+// Index for checking duplicate pending invites per email per tenant
+inviteSchema.index({ tenantId: 1, email: 1, status: 1 });
+inviteSchema.index({ tenantId: 1, status: 1 });
 inviteSchema.index({ email: 1, status: 1 });
 
 /**
@@ -84,5 +92,8 @@ inviteSchema.statics.generateToken = function () {
 inviteSchema.statics.hashToken = function (rawToken) {
   return crypto.createHash('sha256').update(rawToken).digest('hex');
 };
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+inviteSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Invite', inviteSchema);

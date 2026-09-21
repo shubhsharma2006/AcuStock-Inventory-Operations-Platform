@@ -10,6 +10,23 @@ const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
 const { createAdapter, setupPrimary } = require('@socket.io/cluster-adapter');
+const { authenticateSocketConnection, canJoinRoleRoom, canJoinUserRoom } = require('./src/utils/socketAuth');
+const { createCsrfMiddleware } = require('./src/middleware/csrf');
+
+// ============================================================
+// SENTRY — Initialize before any other code (env-gated)
+// ============================================================
+let Sentry = null;
+if (process.env.SENTRY_DSN) {
+  Sentry = require('@sentry/node');
+  Sentry.init({
+    dsn:              process.env.SENTRY_DSN,
+    environment:      process.env.NODE_ENV || 'development',
+    tracesSampleRate: parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE || '0.1'),
+    release:          process.env.npm_package_version
+  });
+  console.log('🔍 Sentry error tracking enabled');
+}
 
 // ============================================================
 // ENVIRONMENT VALIDATION
@@ -31,30 +48,58 @@ if (process.env.NODE_ENV === 'production' &&
 }
 
 // Import routes
-const authRoutes = require('./src/routes/auth');
-const userRoutes = require('./src/routes/users');
-const managerRoutes = require('./src/routes/managers');
-const companyRoutes = require('./src/routes/companies');
-const itemRoutes = require('./src/routes/items');
-const stockRoutes = require('./src/routes/stock');
-const reportRoutes = require('./src/routes/reports');
-const unitRoutes = require('./src/routes/units');
-const logisticsRoutes = require('./src/routes/logistics');
-const shipmentRoutes = require('./src/routes/shipments');
-const settingsRoutes = require('./src/routes/settings');
-const notificationRoutes = require('./src/routes/notifications');
-const warrantyRoutes     = require('./src/routes/warranty');
-const setupRoutes        = require('./src/routes/setup');
-const ownershipRoutes    = require('./src/routes/ownership');
-const inviteRoutes       = require('./src/routes/invites');
+const authRoutes           = require('./src/routes/auth');
+const userRoutes           = require('./src/routes/users');
+const managerRoutes        = require('./src/routes/managers');
+const companyRoutes        = require('./src/routes/companies');
+const itemRoutes           = require('./src/routes/items');
+const stockRoutes          = require('./src/routes/stock');
+const reportRoutes         = require('./src/routes/reports');
+const reportScheduledRoutes = require('./src/routes/reports-scheduled');
+const unitRoutes           = require('./src/routes/units');
+const logisticsRoutes      = require('./src/routes/logistics');
+const shipmentRoutes       = require('./src/routes/shipments');
+const settingsRoutes       = require('./src/routes/settings');
+const notificationRoutes   = require('./src/routes/notifications');
+const warrantyRoutes       = require('./src/routes/warranty');
+const setupRoutes          = require('./src/routes/setup');
+const ownershipRoutes      = require('./src/routes/ownership');
+const inviteRoutes         = require('./src/routes/invites');
+const permissionRoutes     = require('./src/routes/permissions');
+const gdprRoutes           = require('./src/routes/gdpr');
+const onboardingRoutes     = require('./src/routes/onboarding');
+const purchaseOrderRoutes  = require('./src/routes/purchase-orders');
+const salesOrderRoutes     = require('./src/routes/sales-orders');
+const csvExportRoutes      = require('./src/routes/csv-export');
+const billingRoutes        = require('./src/routes/billing');
+const googleAuthRoutes     = require('./src/routes/google-auth');
+const superadminRoutes     = require('./src/routes/superadmin');
+const registerTenantRoutes = require('./src/routes/register-tenant');
+const twoFactorRoutes      = require('./src/routes/two-factor');
+const warehouseRoutes      = require('./src/routes/warehouses');
+const stockTransferRoutes  = require('./src/routes/stock-transfers');
+const forecastRoutes       = require('./src/routes/forecasts');
+const tenantRoutes         = require('./src/routes/tenants');
+const activityRoutes       = require('./src/routes/activity');
+const { resolveTenant }    = require('./src/middleware/tenancy');
+const { retryFailedBillingEvents } = require('./src/routes/billing');
 
 // Services
 const { generateWarrantyNotifications } = require('./src/services/warrantyNotification');
-const { verifyEmailConfig } = require('./src/services/email.service');
+const { startReportScheduler }          = require('./src/services/reportScheduler');
+const { verifyEmailConfig }             = require('./src/services/email.service');
 
 const app = express();
 const PORT = process.env.PORT || 5001;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// In production, invite emails must contain a public URL (not localhost / internal hostnames).
+// FRONTEND_BASE_URL is the canonical base used to generate email links.
+if (IS_PRODUCTION && !process.env.FRONTEND_BASE_URL) {
+  console.error('❌ Missing required environment variable in production: FRONTEND_BASE_URL');
+  console.error('Set it to your public site URL, e.g. https://acustock.example.com');
+  process.exit(1);
+}
 
 // Trust the first proxy (nginx) so req.ip returns the real client IP.
 // Without this, express-rate-limit sees 127.0.0.1 for every request
@@ -85,6 +130,12 @@ app.use(helmet({
   } : false,
   crossOriginEmbedderPolicy: false
 }));
+
+// Permissions-Policy: restrict browser features not used by the app
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
 
 // ── HTTPS Enforcement (Production Only) ──────────────────────
 // In production behind Nginx/reverse proxy:
@@ -148,15 +199,68 @@ global.io = io;
 io.on('connection', (socket) => {
   if (!IS_PRODUCTION) console.log(`🔌 Client connected: ${socket.id}`);
 
+  let authenticatedUser = null;
+
+  socket.on('authenticate', async () => {
+    authenticatedUser = await authenticateSocketConnection(socket);
+
+    if (!authenticatedUser) {
+      socket.emit('auth-error', { message: 'Authentication required' });
+      socket.disconnect(true);
+      return;
+    }
+
+    socket.emit('authenticated', {
+      ok: true,
+      role: authenticatedUser.role,
+      tenantId: authenticatedUser.tenantId
+    });
+  });
+
   // Join room based on role (admin, manager, user)
   socket.on('join-role', (role) => {
-    socket.join(role.toLowerCase());
-    if (!IS_PRODUCTION) console.log(`📢 Socket ${socket.id} joined room: ${role}`);
+    if (!authenticatedUser) {
+      socket.emit('auth-error', { message: 'Authentication required' });
+      return;
+    }
+
+    const normalizedRole = String(role || '').toUpperCase();
+    const allowedRoles = ['ADMIN', 'MANAGER', 'USER'];
+
+    if (!allowedRoles.includes(normalizedRole)) {
+      socket.emit('auth-error', { message: 'Invalid role room' });
+      return;
+    }
+
+    if (!canJoinRoleRoom(authenticatedUser, normalizedRole)) {
+      socket.emit('auth-error', { message: 'Insufficient permissions' });
+      return;
+    }
+
+    const tenantPrefix = authenticatedUser.tenantId ? `tenant-${authenticatedUser.tenantId}:` : '';
+    socket.join(`${tenantPrefix}${normalizedRole.toLowerCase()}`);
+    if (!IS_PRODUCTION) console.log(`📢 Socket ${socket.id} joined room: ${normalizedRole}`);
   });
 
   // Join room for specific user
   socket.on('join-user', (userId) => {
-    socket.join(`user-${userId}`);
+    if (!authenticatedUser) {
+      socket.emit('auth-error', { message: 'Authentication required' });
+      return;
+    }
+
+    if (!userId || String(userId).trim() === '') {
+      socket.emit('auth-error', { message: 'Invalid user room' });
+      return;
+    }
+
+    if (!canJoinUserRoom(authenticatedUser, userId)) {
+      socket.emit('auth-error', { message: 'Insufficient permissions' });
+      return;
+    }
+
+    const tenantPrefix = authenticatedUser.tenantId ? `tenant-${authenticatedUser.tenantId}:` : '';
+    socket.join(`${tenantPrefix}user-${userId}`);
     if (!IS_PRODUCTION) console.log(`👤 Socket ${socket.id} joined user room: user-${userId}`);
   });
 
@@ -168,13 +272,14 @@ io.on('connection', (socket) => {
 // Helper function to emit real-time events
 global.emitRealTimeUpdate = (event, data, target = 'all') => {
   if (!IS_PRODUCTION) console.log(`📡 Emitting ${event} to ${target}:`, JSON.stringify(data).substring(0, 100));
+  const tenantPrefix = data?.tenantId ? `tenant-${data.tenantId}:` : '';
   if (target === 'all') {
-    io.emit(event, data);
+    if (tenantPrefix) io.to(`${tenantPrefix}admin`).to(`${tenantPrefix}manager`).to(`${tenantPrefix}user`).emit(event, data);
+    else io.emit(event, data);
   } else if (target.startsWith('user-')) {
-    io.to(target).emit(event, data);
+    io.to(`${tenantPrefix}${target}`).emit(event, data);
   } else {
-    // Emit to role rooms (admin, manager, user)
-    io.to(target).emit(event, data);
+    io.to(`${tenantPrefix}${target}`).emit(event, data);
   }
 };
 
@@ -194,8 +299,29 @@ app.use(cors({
 app.use(cookieParser());
 
 // ============================================================
+// CSRF PROTECTION (Double-submit cookie pattern)
+// ============================================================
+app.use(createCsrfMiddleware({ isProduction: IS_PRODUCTION }));
+
+// ============================================================
 // RATE LIMITING
 // ============================================================
+let rateLimitStore;
+if (process.env.REDIS_URL) {
+  const Redis = require('ioredis');
+  const { RedisStore } = require('rate-limit-redis');
+  const rateLimitRedis = new Redis(process.env.REDIS_URL, {
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false
+  });
+  rateLimitStore = new RedisStore({
+    sendCommand: (...args) => rateLimitRedis.call(...args)
+  });
+} else if (IS_PRODUCTION) {
+  console.error('REDIS_URL is required in production for distributed rate limiting');
+  process.exit(1);
+}
+
 // General API rate limit - more permissive for dashboard usage
 const generalLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute window
@@ -203,6 +329,7 @@ const generalLimiter = rateLimit({
   message: { message: 'Too many requests from this IP, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  ...(rateLimitStore ? { store: rateLimitStore } : {}),
   skip: (req) => {
     // Skip rate limiting ONLY in explicit development mode
     return process.env.NODE_ENV === 'development';
@@ -214,12 +341,25 @@ const authLimiter = rateLimit({
   max: 20, // 20 login attempts per minute per IP
   message: { message: 'Too many login attempts, please try again later.' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  ...(rateLimitStore ? { store: rateLimitStore } : {})
 });
 
 app.use('/api/', generalLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
+app.use('/api/auth/register-tenant', authLimiter);
+
+// Dedicated MFA rate limiter — 5 attempts per minute per IP
+const mfaLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 10,
+  message: { message: 'Too many 2FA attempts, please wait before trying again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  ...(rateLimitStore ? { store: rateLimitStore } : {})
+});
+app.use('/api/auth/2fa/authenticate', mfaLimiter);
 
 // Serve static frontend files from specific paths
 app.use('/admin-css', express.static(path.join(__dirname, '../frontend/admin-dashboard/admin-css')));
@@ -239,6 +379,21 @@ app.use('/frontend', express.static(path.join(__dirname, '../frontend')));
 // Shared singleton — same instance used by all route files via src/utils/logger.js
 const logger = require('./src/utils/logger');
 
+const sendSuccess = (res, statusCode = 200, payload = {}) => {
+  return res.status(statusCode).json({
+    success: true,
+    ...payload
+  });
+};
+
+const sendError = (res, statusCode = 500, message = 'Internal Server Error', details) => {
+  return res.status(statusCode).json({
+    success: false,
+    error: message,
+    ...(details ? { details } : {})
+  });
+};
+
 // Use Morgan for HTTP request logging (skip in test environment)
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', { 
@@ -250,7 +405,14 @@ if (process.env.NODE_ENV !== 'test') {
 // 100kb is ample for any legitimate JSON payload in this API.
 // 10mb was dangerously high — a crafted large body would burn CPU parsing
 // before any route handler ran, enabling a cheap DoS attack.
-app.use(express.json({ limit: '100kb' }));
+app.use(express.json({
+  limit: '100kb',
+  verify: (req, _res, buffer) => {
+    if (req.originalUrl && req.originalUrl.startsWith('/api/billing/webhook')) {
+      req.rawBody = Buffer.from(buffer);
+    }
+  }
+}));
 app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
 // ============================================================
@@ -294,13 +456,16 @@ app.use((req, _res, next) => {
 // DATABASE CONNECTION
 // ============================================================
 const mongoOptions = {
-  maxPoolSize: 10,
+  maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE || '100', 10),
+  minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE || '10', 10),
+  maxIdleTimeMS: 30000,
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
 };
 
-mongoose.connect(process.env.MONGODB_URI, mongoOptions)
-  .then(() => {
+const connectWithRetry = async (attempt = 1) => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI, mongoOptions);
     logger.info('✅ MongoDB connected');
     logger.info(`📊 Database: ${mongoose.connection.name}`);
 
@@ -323,26 +488,103 @@ mongoose.connect(process.env.MONGODB_URI, mongoOptions)
       safeWarrantyNotify();
       setInterval(safeWarrantyNotify, 24 * 60 * 60 * 1000);
       logger.info('⏰ Warranty notification cron started (leader worker)');
+
+      // Start scheduled report generation (daily + weekly)
+      startReportScheduler();
+
+      // Check trial expiration reminders (daily)
+      const checkTrialExpirations = async () => {
+        try {
+          const { sendTrialExpiringEmail } = require('./src/services/email.service');
+          const Tenant = require('./src/models/Tenant');
+          const now = Date.now();
+          const sevenDaysAhead = new Date(now + 8 * 24 * 60 * 60 * 1000);
+
+          const tenants = await Tenant.find({
+            status: { $in: ['active', 'ACTIVE', 'TRIAL'] },
+            trialEndsAt: { $gte: new Date(now), $lte: sevenDaysAhead }
+          }).populate('ownerId', 'name email');
+
+          for (const tenant of tenants) {
+            if (!tenant.ownerId?.email) continue;
+            const daysRemaining = Math.ceil((new Date(tenant.trialEndsAt).getTime() - now) / 86400000);
+            if ([7, 3, 1].includes(daysRemaining)) {
+              await sendTrialExpiringEmail({
+                to: tenant.ownerId.email,
+                name: tenant.ownerId.name || 'Admin',
+                daysRemaining,
+                companyName: tenant.name || 'Your Company',
+                upgradeUrl: `${process.env.FRONTEND_BASE_URL || 'https://acustock.com'}/billing`
+              }).catch(() => {});
+            }
+          }
+        } catch (err) {
+          logger.error('Trial expiration check failed:', err.message);
+        }
+      };
+      checkTrialExpirations();
+      setInterval(checkTrialExpirations, 24 * 60 * 60 * 1000);
+      logger.info('⏰ Trial expiration reminder cron started');
+
+      // Retry failed Stripe events on the leader only; dead-letter records stop
+      // retrying after the configured maximum and remain inspectable.
+      const retryBilling = async () => {
+        try {
+          await retryFailedBillingEvents();
+        } catch (err) {
+          logger.error('Billing retry worker failed:', err.message);
+        }
+      };
+      retryBilling();
+      setInterval(retryBilling, 60 * 1000);
     } else {
       logger.info(`⏰ Warranty notification cron skipped (worker ${process.env.NODE_APP_INSTANCE})`);
     }
 
     // Verify email configuration on startup (non-blocking)
     verifyEmailConfig();
-  })
-  .catch(err => {
-    logger.error('❌ MongoDB connection error:', err.message);
-    process.exit(1); // Exit process on database connection failure
-  });
+  } catch (err) {
+    logger.error(`❌ MongoDB connection attempt ${attempt} failed: ${err.message}`);
+    if (attempt < 5) {
+      const delayMs = 2 ** attempt * 1000;
+      logger.info(`⏳ Retrying MongoDB connection in ${delayMs}ms...`);
+      setTimeout(() => connectWithRetry(attempt + 1), delayMs);
+    } else {
+      logger.error('💥 MongoDB connection failed after 5 attempts');
+      process.exit(1);
+    }
+  }
+};
+
+connectWithRetry();
+
+// Request ID tracing — placed before routes so all handlers can access req.requestId
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  res.setHeader('x-request-id', req.requestId);
+  next();
+});
+
+// Tenant resolution — reads X-Tenant-ID header (no-op unless MULTI_TENANCY_ENABLED=true)
+app.use('/api/', resolveTenant);
 
 // Routes
+app.use('/api/auth', registerTenantRoutes); // Self-service tenant registration (public)
+app.use('/api/auth', googleAuthRoutes);  // Google OAuth (must be before authRoutes)
+app.use('/api/auth/2fa', twoFactorRoutes); // Two-Factor Authentication (TOTP)
 app.use('/api/auth', authRoutes);
+app.use('/api/audit-logs', (req, res, next) => {
+  req.url = '/audit-logs' + (req.url === '/' ? '' : req.url);
+  authRoutes(req, res, next);
+});
+app.use('/api/superadmin', superadminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/managers', managerRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/stock', stockRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/reports/scheduled', reportScheduledRoutes);
 app.use('/api/units', unitRoutes);
 app.use('/api/logistics', logisticsRoutes);
 app.use('/api/shipments', shipmentRoutes);
@@ -352,17 +594,44 @@ app.use('/api/warranty',      warrantyRoutes);
 app.use('/api/setup',         setupRoutes);
 app.use('/api/ownership',     ownershipRoutes);
 app.use('/api/invites',       inviteRoutes);
+app.use('/api/permissions',   permissionRoutes);
+app.use('/api/gdpr',          gdprRoutes);
+app.use('/api/onboarding',    onboardingRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/sales-orders',    salesOrderRoutes);
+app.use('/api/warehouses',      warehouseRoutes);
+app.use('/api/stock-transfers', stockTransferRoutes);
+app.use('/api/billing',         billingRoutes);
+app.use('/api/forecasts',       forecastRoutes);
+app.use('/api/tenants',         tenantRoutes);
+app.use('/api/activity',        activityRoutes);
+// CSV exports (mounted at root /api so paths like /api/stock/export/csv work)
+app.use('/api', csvExportRoutes);
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   const healthcheck = {
     status: 'OK',
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     environment: process.env.NODE_ENV || 'development',
     version: require('./package.json').version,
+    requestId: req.requestId,
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   };
+
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const pingStart = Date.now();
+      await mongoose.connection.db.admin().ping();
+      healthcheck.database = 'connected';
+      healthcheck.databaseLatencyMs = Date.now() - pingStart;
+    } catch (error) {
+      healthcheck.status = 'DEGRADED';
+      healthcheck.database = 'unreachable';
+      healthcheck.databaseError = error.message;
+    }
+  }
   
   // Include memory usage in development
   if (!IS_PRODUCTION) {
@@ -373,7 +642,29 @@ app.get('/api/health', (req, res) => {
     };
   }
   
-  res.json(healthcheck);
+  res.status(healthcheck.status === 'OK' ? 200 : 503).json(healthcheck);
+});
+
+app.get('/api/ready', (req, res) => {
+  const ready = mongoose.connection.readyState === 1 &&
+    (!IS_PRODUCTION || Boolean(process.env.REDIS_URL));
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'READY' : 'NOT_READY',
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    redisRequired: IS_PRODUCTION,
+    redisConfigured: Boolean(process.env.REDIS_URL),
+    requestId: req.requestId
+  });
+});
+
+// Standard cloud/Kubernetes health and liveness aliases
+app.get('/api/health/live', (req, res) => res.json({ status: 'LIVE', uptime: Math.floor(process.uptime()) }));
+app.get('/api/health/ready', (req, res) => {
+  const ready = mongoose.connection.readyState === 1;
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'READY' : 'NOT_READY',
+    database: ready ? 'connected' : 'disconnected'
+  });
 });
 
 // Serve frontend HTML pages (must come after API routes)
@@ -401,11 +692,14 @@ app.get('/accept-invite', (req, res) => {
 app.use((req, res) => {
   // If it's an API request, return JSON 404
   if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ message: 'API route not found' });
+    return sendError(res, 404, 'API route not found');
   }
   // For other requests, try to serve the file or redirect to login
   res.redirect('/admin-html/login.html');
 });
+
+// Sentry error handler — must come before any other error middleware
+if (Sentry) Sentry.setupExpressErrorHandler(app);
 
 // Global error handler
 app.use((err, req, res, next) => {
@@ -426,15 +720,17 @@ app.use((err, req, res, next) => {
     message = 'Invalid ID format';
     details = `Invalid ID: ${err.value}`;
   } else if (process.env.NODE_ENV === 'development') {
-    // In development, provide more details for other errors
+    // In development only: expose error details for debugging
     message = err.message;
     details = err.stack;
   }
+  // Production: message stays 'Internal Server Error', details stays undefined
+  // — never leak stack traces or internal paths to clients
 
   res.status(statusCode).json({
-    status: 'error',
-    message: message,
-    details: details
+    success: false,
+    error: message,
+    ...(details ? { details } : {})
   });
 });
 

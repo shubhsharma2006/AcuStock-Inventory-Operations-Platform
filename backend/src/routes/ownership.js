@@ -23,7 +23,8 @@ const requireSuperAdmin = [requireAuth, requireRole(['SUPER_ADMIN'])];
 router.get('/admins', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const admins = await User.find({
-      role: { $in: ['SUPER_ADMIN', 'ADMIN', 'MANAGER'] }
+      role: { $in: ['SUPER_ADMIN', 'ADMIN', 'MANAGER'] },
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
     }).select('name email username role isSuperAdmin isActive lastLogin createdAt')
       .sort({ role: 1, name: 1 });
     res.json(admins);
@@ -39,7 +40,7 @@ router.post('/promote-admin', requireSuperAdmin, async (req, res) => {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ message: 'userId is required' });
 
-    const user = await User.findById(userId);
+    const user = await User.findOne({ _id: userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) });
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') {
@@ -64,6 +65,7 @@ router.post('/promote-admin', requireSuperAdmin, async (req, res) => {
       relatedId:    user._id,
       createdBy:     req.user._id,
       createdByRole: req.user.role,
+      tenantId:      req.tenantId || undefined,
       metadata: { userId: user._id, userName: user.name, promotedBy: req.user.name }
     });
 
@@ -80,6 +82,7 @@ router.post('/promote-admin', requireSuperAdmin, async (req, res) => {
       relatedId:    user._id,
       createdBy:     req.user._id,
       createdByRole: req.user.role,
+      tenantId:      req.tenantId || undefined,
       metadata: { promotedBy: req.user.name }
     });
 
@@ -100,7 +103,7 @@ router.post('/demote-admin', requireSuperAdmin, async (req, res) => {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ message: 'userId is required' });
 
-    const user = await User.findById(userId);
+    const user = await User.findOne({ _id: userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) });
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     if (user.isSuperAdmin) {
@@ -126,6 +129,7 @@ router.post('/demote-admin', requireSuperAdmin, async (req, res) => {
       relatedId:    user._id,
       createdBy:     req.user._id,
       createdByRole: req.user.role,
+      tenantId:      req.tenantId || undefined,
       metadata: { userId: user._id, userName: user.name, demotedBy: req.user.name }
     });
 
@@ -142,6 +146,7 @@ router.post('/demote-admin', requireSuperAdmin, async (req, res) => {
       relatedId:    user._id,
       createdBy:     req.user._id,
       createdByRole: req.user.role,
+      tenantId:      req.tenantId || undefined,
       metadata: { demotedBy: req.user.name }
     });
 
@@ -173,8 +178,8 @@ router.post('/transfer', requireSuperAdmin, async (req, res) => {
       return res.status(403).json({ message: 'Incorrect password. Ownership transfer denied.' });
     }
 
-    // The new owner must exist and be an ADMIN
-    const newOwner = await User.findById(newOwnerUserId);
+    // The new owner must exist and be an ADMIN in this tenant
+    const newOwner = await User.findOne({ _id: newOwnerUserId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) });
     if (!newOwner) return res.status(404).json({ message: 'New owner user not found' });
     if (newOwner.role !== 'ADMIN') {
       return res.status(400).json({ message: 'New owner must be an existing Admin. Promote them to Admin first.' });
@@ -207,6 +212,7 @@ router.post('/transfer', requireSuperAdmin, async (req, res) => {
       relatedId:    newOwner._id,
       createdBy:     currentSA._id,
       createdByRole: 'SUPER_ADMIN',
+      tenantId:      req.tenantId || undefined,
       metadata: {
         previousOwner:   currentSA.name,
         previousOwnerId: currentSA._id,
@@ -228,6 +234,7 @@ router.post('/transfer', requireSuperAdmin, async (req, res) => {
       relatedId:    newOwner._id,
       createdBy:     currentSA._id,
       createdByRole: 'SUPER_ADMIN',
+      tenantId:      req.tenantId || undefined,
       metadata: { previousOwner: currentSA.name }
     });
 

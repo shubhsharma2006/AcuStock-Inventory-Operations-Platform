@@ -6,6 +6,7 @@ const Permission = require('../models/permission');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
+const { logBusinessEvent } = require('../utils/auditHelper');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { sendPasswordResetByAdminEmail } = require('../services/email.service');
@@ -32,7 +33,7 @@ const generateTempPassword = () => {
  */
 router.get('/serial-policies', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const policies = await ProductionPolicy.find()
+    const policies = await ProductionPolicy.find({ ...(req.tenantId ? { tenantId: req.tenantId } : {}) })
       .populate('productId', 'name shortName')
       .populate('createdBy', 'name')
       .populate('updatedBy', 'name')
@@ -50,7 +51,10 @@ router.get('/serial-policies', requireAuth, requireRole(['ADMIN', 'MANAGER']), a
  */
 router.get('/serial-policies/:productId', requireAuth, async (req, res) => {
   try {
-    const policy = await ProductionPolicy.findOne({ productId: req.params.productId })
+    const policy = await ProductionPolicy.findOne({ 
+      productId: req.params.productId,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    })
       .populate('productId', 'name shortName')
       .populate('updatedBy', 'name');
     
@@ -85,7 +89,10 @@ router.post('/serial-policies', requireAuth, requireRole(['ADMIN']), async (req,
     }
 
     // ── 1. Update / create ProductionPolicy (UI display record) ──────────────
-    let policy = await ProductionPolicy.findOne({ productId });
+    let policy = await ProductionPolicy.findOne({ 
+      productId,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
 
     if (policy) {
       if (policy.locked) {
@@ -106,20 +113,39 @@ router.post('/serial-policies', requireAuth, requireRole(['ADMIN']), async (req,
         requireSerialIn,
         requireSerialOut,
         createdBy: req.userId,
-        updatedBy: req.userId
+        updatedBy: req.userId,
+        tenantId:  req.tenantId || undefined
       });
     }
 
     // ── 2. Sync into Item.serialPolicy — SINGLE SOURCE OF TRUTH for stock ops ─
     const Item = require('../models/Item');
-    await Item.findByIdAndUpdate(productId, {
-      'serialPolicy.enableSerial':      !!serialEnabled,
-      'serialPolicy.requireSerialOnIN':  !!requireSerialIn,
-      'serialPolicy.requireSerialOnOUT': !!requireSerialOut
-    });
+    await Item.findOneAndUpdate(
+      { _id: productId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) },
+      {
+        'serialPolicy.enableSerial':      !!serialEnabled,
+        'serialPolicy.requireSerialOnIN':  !!requireSerialIn,
+        'serialPolicy.requireSerialOnOUT': !!requireSerialOut
+      }
+    );
 
-    const populated = await ProductionPolicy.findById(policy._id)
+    const populated = await ProductionPolicy.findOne({ _id: policy._id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) })
       .populate('productId', 'name shortName');
+
+    logBusinessEvent({
+      req,
+      action: 'SETTING_CHANGED',
+      entityType: 'Item',
+      entityId: productId,
+      changes: {
+        after: {
+          serialEnabled: !!serialEnabled,
+          requireSerialIn: !!requireSerialIn,
+          requireSerialOut: !!requireSerialOut
+        },
+        summary: `Updated serial policy for item ${populated?.productId?.name || productId}`
+      }
+    }).catch(() => {});
 
     res.json({
       message: 'Serial policy saved successfully',
@@ -272,7 +298,10 @@ router.put('/users/:id/status', requireAuth, requireRole(['ADMIN']), async (req,
       return res.status(400).json({ message: 'isActive must be a boolean' });
     }
     
-    const user = await User.findById(req.params.id);
+    const user = await User.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -308,7 +337,10 @@ router.put('/users/:id/status', requireAuth, requireRole(['ADMIN']), async (req,
  */
 router.delete('/users/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -352,7 +384,10 @@ router.post('/users/:id/reset-password', requireAuth, requireRole(['ADMIN', 'MAN
   try {
     const { newPassword, generateTemporary = false } = req.body;
     
-    const user = await User.findById(req.params.id);
+    const user = await User.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -405,6 +440,7 @@ router.post('/users/:id/reset-password', requireAuth, requireRole(['ADMIN', 'MAN
       title: 'Password Reset',
       message: `${req.user.name} (${req.userRole}) reset password for ${user.name}`,
       targetRole: 'ADMIN',
+      tenantId: req.tenantId || undefined,
       metadata: {
         targetUserId: user._id,
         targetUserName: user.name,
@@ -448,7 +484,10 @@ router.post('/users/:id/reset-password', requireAuth, requireRole(['ADMIN', 'MAN
  */
 router.post('/users/:id/force-logout', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -469,6 +508,7 @@ router.post('/users/:id/force-logout', requireAuth, requireRole(['ADMIN']), asyn
       targetUserRole: user.role,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
+      tenantId: req.tenantId || undefined,
       severity: 'WARNING'
     });
     
@@ -488,11 +528,13 @@ router.post('/users/:id/force-logout', requireAuth, requireRole(['ADMIN']), asyn
  */
 router.get('/account-stats', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+
     const [totalUsers, activeUsers, totalManagers, activeManagers] = await Promise.all([
-      User.countDocuments({ role: 'USER' }),
-      User.countDocuments({ role: 'USER', isActive: true }),
-      User.countDocuments({ role: 'MANAGER' }),
-      User.countDocuments({ role: 'MANAGER', isActive: true })
+      User.countDocuments({ role: 'USER', ...tenantFilter }),
+      User.countDocuments({ role: 'USER', isActive: true, ...tenantFilter }),
+      User.countDocuments({ role: 'MANAGER', ...tenantFilter }),
+      User.countDocuments({ role: 'MANAGER', isActive: true, ...tenantFilter })
     ]);
     
     res.json({
@@ -515,7 +557,10 @@ router.get('/account-stats', requireAuth, requireRole(['ADMIN']), async (req, re
  */
 router.get('/profile', requireAuth, async (req, res) => {
   try {
-    const user = await User.findById(req.userId).select('-password');
+    const user = await User.findOne({ 
+      _id: req.userId,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    }).select('-password');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -549,7 +594,11 @@ router.put('/profile', requireAuth, async (req, res) => {
         return res.status(400).json({ message: 'Invalid email format' });
       }
       // Uniqueness check — exclude the current user's own document
-      const conflict = await User.findOne({ email: trimmedEmail, _id: { $ne: req.userId } });
+      const conflict = await User.findOne({ 
+        email: trimmedEmail, 
+        _id: { $ne: req.userId },
+        ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      });
       if (conflict) {
         return res.status(409).json({ message: 'Email is already in use by another account' });
       }
@@ -560,8 +609,8 @@ router.put('/profile', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'No valid fields provided to update' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.userId,
+    const user = await User.findOneAndUpdate(
+      { _id: req.userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) },
       { $set: updates },
       { new: true, runValidators: true }
     ).select('-password');
@@ -589,7 +638,10 @@ router.put('/profile/password', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'New password must be at least 8 characters' });
     }
     
-    const user = await User.findById(req.userId).select('+password');
+    const user = await User.findOne({ 
+      _id: req.userId,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    }).select('+password');
     
     // Verify current password
     const isMatch = await bcrypt.compare(currentPassword, user.password);
@@ -616,6 +668,7 @@ router.put('/profile/password', requireAuth, async (req, res) => {
       title: 'Password Changed',
       message: `${user.name} (${user.role}) changed their own password`,
       targetRole: 'ADMIN',
+      tenantId: req.tenantId || undefined,
       metadata: {
         userId: user._id,
         userName: user.name,
@@ -641,7 +694,10 @@ router.put('/profile/password', requireAuth, async (req, res) => {
  */
 router.get('/users/:id/password-info', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select(
+    const user = await User.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    }).select(
       'name email phone role passwordChangedAt passwordChangedBy forcePasswordReset failedLoginAttempts isActive'
     );
     
@@ -677,7 +733,10 @@ router.get('/users/:id/password-info', requireAuth, requireRole(['ADMIN', 'MANAG
  */
 router.post('/users/:id/reset-failed-attempts', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findOne({ 
+      _id: req.params.id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -697,6 +756,7 @@ router.post('/users/:id/reset-failed-attempts', requireAuth, requireRole(['ADMIN
       targetUserRole: user.role,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
+      tenantId: req.tenantId || undefined,
       severity: 'INFO'
     });
     
@@ -716,7 +776,11 @@ router.post('/users/:id/reset-failed-attempts', requireAuth, requireRole(['ADMIN
  */
 router.get('/users/password-summary', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const users = await User.find({ role: { $in: ['MANAGER', 'USER'] }, isActive: true })
+    const users = await User.find({ 
+      role: { $in: ['MANAGER', 'USER'] }, 
+      isActive: true,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    })
       .select('name email phone role passwordChangedAt passwordChangedBy forcePasswordReset failedLoginAttempts')
       .sort({ role: 1, name: 1 });
     

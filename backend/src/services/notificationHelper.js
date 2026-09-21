@@ -115,6 +115,7 @@ async function notify(opts) {
       relatedId:     opts.relatedId || null,
       createdBy:     opts.createdBy || null,
       createdByRole: opts.createdByRole || 'SYSTEM',
+      tenantId:      opts.tenantId || null,
       metadata:      opts.metadata || {}
     };
 
@@ -132,7 +133,8 @@ async function notify(opts) {
         message:    notification.message,
         link:       notification.link,
         createdAt:  notification.createdAt,
-        metadata:   notification.metadata
+        metadata:   notification.metadata,
+        tenantId:   notification.tenantId
       };
 
       // Emit to specific user room

@@ -15,16 +15,22 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
     const skip  = (page - 1) * limit;
 
     // Always exclude soft-deleted users
-    let query = { isDeleted: { $ne: true } };
+    let query = { isDeleted: { $ne: true }, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
 
     // Managers can only see active USER-role accounts (not other managers or admins)
     if (req.userRole === 'MANAGER') {
       query.role = 'USER';
     }
-    // Admin sees all non-deleted users (no role filter)
+    // Admin sees all non-deleted users in this tenant
 
     const [users, total] = await Promise.all([
-      User.find(query).select('-password').sort({ createdAt: -1 }).skip(skip).limit(limit),
+      User.find(query)
+        .select('-password')
+        // Include creator info for "Created By" column in UI
+        .populate('createdBy', 'name role email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
       User.countDocuments(query)
     ]);
 
@@ -44,7 +50,13 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
 // Data isolation: Manager can only view users they created
 router.get('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const user = await User.findOne({ _id: req.params.id, isDeleted: { $ne: true } }).select('-password');
+    const user = await User.findOne({ 
+      _id: req.params.id, 
+      isDeleted: { $ne: true },
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    })
+      .select('-password')
+      .populate('createdBy', 'name role email');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -81,7 +93,11 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         if (!emailRegex.test(email)) {
           return res.status(400).json({ message: 'Invalid email format' });
         }
-        const existingUser = await User.findOne({ email: email.toLowerCase(), _id: { $ne: id } });
+        const existingUser = await User.findOne({ 
+          email: email.toLowerCase(), 
+          _id: { $ne: id },
+          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        });
         if (existingUser) {
           return res.status(400).json({ message: 'Email already in use by another user' });
         }
@@ -91,7 +107,11 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         if (!phoneRegex.test(phone)) {
           return res.status(400).json({ message: 'Invalid phone number format (10-15 digits)' });
         }
-        const existingUser = await User.findOne({ phone, _id: { $ne: id } });
+        const existingUser = await User.findOne({ 
+          phone, 
+          _id: { $ne: id },
+          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        });
         if (existingUser) {
           return res.status(400).json({ message: 'Phone number already in use by another user' });
         }
@@ -102,7 +122,10 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
       }
   
       try {
-        const userToUpdate = await User.findById(id);
+        const userToUpdate = await User.findOne({ 
+          _id: id,
+          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        });
         if (!userToUpdate) {
           return res.status(404).json({ message: 'User not found' });
         }
@@ -203,7 +226,13 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
     userToUpdate.email = email || userToUpdate.email;
     userToUpdate.phone = phone || userToUpdate.phone;
     userToUpdate.role = role || userToUpdate.role;
+    const prevIsActive = userToUpdate.isActive;
     userToUpdate.isActive = isActive !== undefined ? isActive : userToUpdate.isActive;
+
+    // If active status changed, invalidate sessions so user is forced to re-login
+    if (isActive !== undefined && prevIsActive !== userToUpdate.isActive) {
+      userToUpdate.tokenVersion = (userToUpdate.tokenVersion || 0) + 1;
+    }
 
     // Use validateModifiedOnly to avoid triggering validation on unchanged fields
     await userToUpdate.save({ validateModifiedOnly: true });
@@ -215,6 +244,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         userId: userToUpdate._id,
         userName: userToUpdate.name,
         userRole: userToUpdate.role,
+        tenantId: req.tenantId,
         timestamp: new Date()
       });
     }
@@ -241,6 +271,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         relatedId:    userToUpdate._id,
         createdBy:     req.user._id,
         createdByRole: req.user.role,
+        tenantId:      req.tenantId || undefined,
         metadata: {
           userId:       userToUpdate._id,
           userName:     userToUpdate.name,
@@ -252,7 +283,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
     }
 
     // Notification: user deactivated / activated
-    if (isActive !== undefined && isActive !== userToUpdate.isActive) {
+    if (isActive !== undefined && prevIsActive !== userToUpdate.isActive) {
       const action = isActive ? 'activated' : 'deactivated';
       notify({
         type:       isActive ? 'user_activated' : 'user_deactivated',
@@ -265,6 +296,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         relatedId:    userToUpdate._id,
         createdBy:     req.user._id,
         createdByRole: req.user.role,
+        tenantId:      req.tenantId || undefined,
         metadata: { userId: userToUpdate._id, userName: userToUpdate.name, action }
       }).catch(() => {});
     }
@@ -279,7 +311,10 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
 // DELETE /api/users/:id - Soft delete a user (Admin only)
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
     try {
-        const user = await User.findById(req.params.id);
+        const user = await User.findOne({ 
+          _id: req.params.id,
+          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -292,6 +327,14 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
           });
         }
 
+        // ⚠️ SELF-DELETION PROTECTION: Cannot delete/deactivate self
+        if (req.user._id.toString() === user._id.toString()) {
+          return res.status(403).json({
+            message: 'You cannot delete or deactivate your own account',
+            code: 'SELF_DELETION_PROHIBITED'
+          });
+        }
+
         // ⚠️ ADMIN PROTECTION: Only SUPER_ADMIN can deactivate an admin
         if (user.role === 'ADMIN' && req.user.role !== 'SUPER_ADMIN') {
           return res.status(403).json({ 
@@ -300,8 +343,10 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
           });
         }
 
-        user.isActive = false;
-        await user.save();
+  user.isActive = false;
+  // Invalidate current sessions so the user is forced to logout immediately
+  user.tokenVersion = (user.tokenVersion || 0) + 1;
+  await user.save({ validateModifiedOnly: true });
         
         // Emit real-time update
         if (global.emitRealTimeUpdate) {
@@ -325,6 +370,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
           relatedId:    user._id,
           createdBy:     req.user._id,
           createdByRole: req.user.role,
+          tenantId:      req.tenantId || undefined,
           metadata: { userId: user._id, userName: user.name, deactivatedBy: req.user.name }
         }).catch(() => {});
 
@@ -345,9 +391,20 @@ router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', '
     }
 
     try {
-        const userToUpdate = await User.findById(id);
+        const userToUpdate = await User.findOne({ 
+          _id: id,
+          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        });
         if (!userToUpdate) {
             return res.status(404).json({ message: 'User not found' });
+        }
+
+        // ⚠️ SELF-DEACTIVATION PROTECTION: Cannot deactivate own account
+        if (req.user._id.toString() === userToUpdate._id.toString() && isActive === false) {
+            return res.status(403).json({
+                message: 'You cannot deactivate your own account',
+                code: 'SELF_DEACTIVATION_PROHIBITED'
+            });
         }
 
         // SUPER_ADMIN protection — cannot be deactivated ever
@@ -364,8 +421,15 @@ router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', '
             return res.status(403).json({ message: 'Managers can only update users' });
         }
 
+        const prevIsActive = userToUpdate.isActive;
         userToUpdate.isActive = isActive;
-        await userToUpdate.save();
+
+        // If status changed, invalidate sessions so user must re-login
+        if (prevIsActive !== userToUpdate.isActive) {
+          userToUpdate.tokenVersion = (userToUpdate.tokenVersion || 0) + 1;
+        }
+
+        await userToUpdate.save({ validateModifiedOnly: true });
         
         // Emit real-time update for user status change
         if (global.emitRealTimeUpdate) {
@@ -390,7 +454,10 @@ router.put('/profile', requireAuth, async (req, res) => {
   const { name, password, currentPassword } = req.body;
   
   try {
-    const user = await User.findById(req.user._id);
+    const user = await User.findOne({ 
+      _id: req.user._id,
+      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+    });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -440,6 +507,5 @@ router.put('/profile', requireAuth, async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 module.exports = router;

@@ -19,10 +19,25 @@ const userSchema = new mongoose.Schema({
   phone: {
     type: String,
     required: function() {
-      return this.role === 'USER'; // Phone required for User
+      // Phone required for local User accounts (Google OAuth users don't have phone initially)
+      return this.role === 'USER' && !this.googleId && this.authProvider !== 'google';
     },
     sparse: true,
     trim: true
+  },
+  googleId: {
+    type: String,
+    sparse: true,
+    unique: true
+  },
+  profilePicture: {
+    type: String,
+    default: null
+  },
+  authProvider: {
+    type: String,
+    enum: ['local', 'google'],
+    default: 'local'
   },
   password: {
     type: String,
@@ -57,7 +72,7 @@ const userSchema = new mongoose.Schema({
   },
   passwordChangedBy: {
     type: String,
-    enum: ['SELF', 'ADMIN', 'MANAGER', 'SYSTEM'],
+    enum: ['SELF', 'ADMIN', 'MANAGER', 'SYSTEM', 'GOOGLE_OAUTH'],
     default: 'SYSTEM'
   },
   forcePasswordReset: {
@@ -89,13 +104,36 @@ const userSchema = new mongoose.Schema({
   // END PASSWORD MANAGEMENT FIELDS
   // ============================================================
   
+  // ============================================================
+  // TWO-FACTOR AUTHENTICATION (2FA / TOTP)
+  // ============================================================
   twoFactorEnabled: {
     type: Boolean,
-    default: false
+    default: false,
+    index: true
   },
-  twoFactorSecret: {
+  twoFactorSecretEncrypted: {
     type: String,
-    select: false
+    select: false,
+    default: null
+  },
+  twoFactorPendingSecretEncrypted: {
+    type: String,
+    select: false,
+    default: null
+  },
+  twoFactorEnabledAt: {
+    type: Date,
+    default: null
+  },
+  twoFactorRecoveryCodes: {
+    type: [{
+      codeHash: { type: String, required: true },
+      used:     { type: Boolean, default: false },
+      usedAt:   { type: Date, default: null }
+    }],
+    select: false,
+    default: []
   },
   lastLogin: {
     type: Date
@@ -103,6 +141,17 @@ const userSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    index: true,
+    default: null
+  },
+  customPermissions: {
+    type: Map,
+    of: Boolean,
+    default: {}
   },
   isDeleted: {
     type: Boolean,
@@ -120,18 +169,26 @@ const userSchema = new mongoose.Schema({
 });
 
 // Method to increment failed login attempts
-// Locks the account for 15 minutes after 5 consecutive failures
+// Locks the account after 5 consecutive failures using an env override when provided.
 userSchema.methods.incrementLoginAttempts = async function() {
   const newAttempts = (this.failedLoginAttempts || 0) + 1;
   const MAX_ATTEMPTS = 5;
-  const LOCK_DURATION_MS = 2 * 60 * 1000; // 15 minutes
+  const configuredMinutes = Number.parseInt(process.env.LOCK_DURATION_MINUTES || '15', 10);
+  const lockDurationMinutes = Number.isFinite(configuredMinutes) && configuredMinutes > 0
+    ? configuredMinutes
+    : 15;
+  const LOCK_DURATION_MS = lockDurationMinutes * 60 * 1000;
 
   const update = { $set: { failedLoginAttempts: newAttempts } };
 
   if (newAttempts >= MAX_ATTEMPTS) {
-    update.$set.lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
+    this.lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
+    update.$set.lockUntil = this.lockUntil;
+  } else {
+    this.lockUntil = null;
   }
 
+  this.failedLoginAttempts = newAttempts;
   await this.updateOne(update);
 };
 
@@ -145,17 +202,22 @@ userSchema.methods.resetLoginAttempts = async function() {
   }
 };
 
-// Remove password from JSON output
+// Remove sensitive credentials from JSON output
 userSchema.methods.toJSON = function() {
   const userObject = this.toObject();
   delete userObject.password;
   delete userObject.passwordResetToken;
   delete userObject.passwordResetExpires;
   delete userObject.twoFactorSecret;
+  delete userObject.twoFactorSecretEncrypted;
+  delete userObject.twoFactorPendingSecretEncrypted;
+  delete userObject.twoFactorRecoveryCodes;
   return userObject;
 };
 
-// Index for password reset token lookup
+// Indexes
+userSchema.index({ tenantId: 1, email: 1 });
+userSchema.index({ tenantId: 1, role: 1, isDeleted: 1 });
 userSchema.index({ passwordResetToken: 1 }, { sparse: true });
 
 module.exports = mongoose.model('User', userSchema);

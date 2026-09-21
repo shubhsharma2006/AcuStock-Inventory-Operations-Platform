@@ -29,13 +29,24 @@ const unitSchema = new mongoose.Schema({
   updatedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: true,
+    index: true
   }
 }, {
   timestamps: true
 });
 
-// Single compound index for efficient querying and uniqueness
-unitSchema.index({ name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
+// Multi-tenant compound index for uniqueness within organization
+unitSchema.index({ tenantId: 1, name: 1 }, { unique: true, collation: { locale: 'en', strength: 2 } });
+unitSchema.index({ tenantId: 1, isActive: 1 });
+unitSchema.index({ name: 1 }, { collation: { locale: 'en', strength: 2 } });
 unitSchema.index({ isActive: 1 });
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+unitSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Unit', unitSchema);

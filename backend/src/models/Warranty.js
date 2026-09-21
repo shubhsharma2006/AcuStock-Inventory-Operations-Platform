@@ -81,16 +81,18 @@ const warrantySchema = new mongoose.Schema({
   claims:    [claimSchema],
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   notes:     { type: String, maxlength: 1000 },
-  isActive:  { type: Boolean, default: true }
+  isActive:  { type: Boolean, default: true },
+  tenantId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true }
 
 }, { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } });
 
 // ── Compound indexes ───────────────────────────────────────────
-// Unique on (productId + serialNumber) so a returned-and-restocked serial
-// can never produce a second Warranty document. The stock.service upserts
-// against this key; the DB enforces it as a hard constraint.
-// sparse: true allows multiple docs where serialNumber is null (non-serial products).
-warrantySchema.index({ productId: 1, serialNumber: 1 }, { unique: true, sparse: true });
+// Unique on (tenantId + productId + serialNumber) so a returned-and-restocked serial
+// can never produce a second Warranty document within a tenant.
+warrantySchema.index({ tenantId: 1, productId: 1, serialNumber: 1 }, { unique: true, sparse: true });
+warrantySchema.index({ tenantId: 1, 'purchaseWarranty.expiryDate': 1 });
+warrantySchema.index({ tenantId: 1, 'sellerWarranty.expiryDate': 1 });
+warrantySchema.index({ productId: 1, serialNumber: 1 }, { sparse: true });
 warrantySchema.index({ 'purchaseWarranty.expiryDate': 1, 'purchaseWarranty.status': 1 });
 warrantySchema.index({ 'sellerWarranty.expiryDate': 1, 'sellerWarranty.status': 1 });
 
@@ -146,5 +148,8 @@ warrantySchema.statics.buildSellerWarranty = function (period, startDate, buyerI
     status: computeStatus(expiry, true)
   };
 };
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+warrantySchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Warranty', warrantySchema);
