@@ -25,7 +25,14 @@ const superAuth = [requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN'])];
 // ── 1. GET /api/superadmin/users — List all system users with session status ──
 router.get('/users', superAuth, async (req, res) => {
   try {
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin
+      ? (req.query.tenantId ? { tenantId: req.query.tenantId } : {})
+      : { tenantId: req.tenantId };
+
     const users = await User.find({ isDeleted: { $ne: true }, ...tenantFilter })
       .select('name email phone role isActive isSuperAdmin lastLogin createdAt tokenVersion customPermissions')
       .sort({ createdAt: -1 })
@@ -56,7 +63,11 @@ router.put('/users/:userId/status', superAuth, async (req, res) => {
       return res.status(400).json({ success: false, error: 'isActive boolean is required' });
     }
 
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
     const targetUser = await User.findOne({ _id: userId, ...tenantFilter });
     if (!targetUser) {
       return res.status(404).json({ success: false, error: 'User not found' });
@@ -75,14 +86,19 @@ router.put('/users/:userId/status', superAuth, async (req, res) => {
 
     // Audit Log
     try {
-      await AuditLog.create({
+      const effectiveTenantId = req.tenantId || targetUser.tenantId;
+      const auditDoc = new AuditLog({
         action: isActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
         performedBy: req.userId,
         targetUser: userId,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
-        tenantId: req.tenantId || undefined,
+        ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
       });
+      if (!effectiveTenantId) {
+        auditDoc.$locals = { skipTenantIsolation: true };
+      }
+      await auditDoc.save();
     } catch (_) {}
 
     res.json({
@@ -100,12 +116,17 @@ router.put('/users/:userId/status', superAuth, async (req, res) => {
 router.get('/users/:userId/permissions', superAuth, async (req, res) => {
   try {
     const { userId } = req.params;
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
     const user = await User.findOne({ _id: userId, ...tenantFilter }).lean();
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-    // Role default permissions
-    const rolePermission = await Permission.findOne({ role: user.role }).lean() || {};
+    // Role default permissions scoped to tenant if present
+    const permFilter = user.tenantId ? { tenantId: user.tenantId, role: user.role } : { role: user.role };
+    const rolePermission = await Permission.findOne(permFilter).lean() || {};
     const custom = user.customPermissions || {};
 
     // Merge: role defaults overridden by ID-based custom permissions
@@ -158,7 +179,11 @@ router.patch('/users/permissions', superAuth, async (req, res) => {
     }
 
     // Apply custom permissions map to each selected user ID
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
     const users = await User.find({ _id: { $in: targetIds }, ...tenantFilter });
     for (const u of users) {
       const currentMap = u.customPermissions || new Map();
@@ -172,15 +197,20 @@ router.patch('/users/permissions', superAuth, async (req, res) => {
 
     // Audit Log
     try {
-      await AuditLog.create({
+      const effectiveTenantId = req.tenantId || users[0]?.tenantId;
+      const auditDoc = new AuditLog({
         action: 'CUSTOM_PERMISSIONS_UPDATE',
         performedBy: req.userId,
         targetUsers: targetIds,
         changes: sanitized,
         ipAddress: req.ip,
         userAgent: req.headers['user-agent'],
-        tenantId: req.tenantId || undefined,
+        ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}),
       });
+      if (!effectiveTenantId) {
+        auditDoc.$locals = { skipTenantIsolation: true };
+      }
+      await auditDoc.save();
     } catch (_) {}
 
     res.json({
@@ -198,7 +228,14 @@ router.patch('/users/permissions', superAuth, async (req, res) => {
 // ── 5. GET /api/superadmin/active-sessions — Active Logged-In Sessions Monitor ──
 router.get('/active-sessions', superAuth, async (req, res) => {
   try {
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin
+      ? (req.query.tenantId ? { tenantId: req.query.tenantId } : {})
+      : { tenantId: req.tenantId };
+
     const activeUsers = await User.find({
       isActive: true,
       isDeleted: { $ne: true },
@@ -225,7 +262,11 @@ router.get('/active-sessions', superAuth, async (req, res) => {
 router.post('/revoke-session/:userId', superAuth, async (req, res) => {
   try {
     const { userId } = req.params;
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
     const user = await User.findOne({ _id: userId, ...tenantFilter });
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 

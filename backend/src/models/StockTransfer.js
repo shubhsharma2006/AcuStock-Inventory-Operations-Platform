@@ -98,6 +98,19 @@ const stockTransferSchema = new mongoose.Schema({
     trim: true,
     maxlength: 300
   },
+  transporterId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Transporter',
+    default: null
+  },
+  trackingNumber: {
+    type: String,
+    trim: true,
+    uppercase: true
+  },
+  estimatedArrival: {
+    type: Date
+  },
   notes: {
     type: String,
     trim: true,

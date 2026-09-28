@@ -13,7 +13,7 @@ const router  = express.Router();
 const Invite  = require('../models/Invite');
 const User    = require('../models/User');
 const bcrypt  = require('bcryptjs');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { sendInviteEmail }          = require('../services/email.service');
 const logger  = require('../utils/logger');
 const checkPlanLimits = require('../middleware/checkPlanLimits');
@@ -36,7 +36,7 @@ function buildInviteUrl(req, rawToken) {
 // Only SUPER_ADMIN or ADMIN can send invites.
 // ADMIN cannot invite another ADMIN (only SUPER_ADMIN can).
 // ─────────────────────────────────────────────────────────────
-router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLimits('maxUsers'), async (req, res) => {
+router.post('/', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLimits('maxUsers'), async (req, res) => {
   try {
     const { email, role } = req.body;
     const senderRole = req.userRole;
@@ -65,7 +65,7 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLi
     const existingUser = await User.findOne({ 
       email: email.toLowerCase(), 
       isDeleted: { $ne: true },
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
     if (existingUser) {
       return res.status(409).json({ message: 'A user with this email already exists in the system.' });
@@ -75,7 +75,7 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLi
     const existingInvite = await Invite.findOne({ 
       email: email.toLowerCase(), 
       status: 'pending',
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
     if (existingInvite) {
       return res.status(409).json({ message: 'A pending invite already exists for this email. Revoke it first to resend.' });
@@ -90,12 +90,12 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLi
       role,
       tokenHash,
       invitedBy: req.userId,
-      tenantId:  req.tenantId || undefined
+      tenantId:  req.tenantId
     });
 
     // Build invite URL and send email
     const inviteUrl = buildInviteUrl(req, rawToken);
-    const sender    = await User.findOne({ _id: req.userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) }).select('name');
+    const sender    = await User.findOne({ _id: req.userId, tenantId: req.tenantId }).select('name');
     const senderName = sender ? sender.name : 'AcuStock Admin';
 
     const emailResult = await sendInviteEmail({
@@ -126,11 +126,11 @@ router.post('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), checkPlanLi
 // ─────────────────────────────────────────────────────────────
 // GET /api/invites — List pending invites
 // ─────────────────────────────────────────────────────────────
-router.get('/', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+router.get('/', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const invites = await Invite.find({ 
       status: 'pending',
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     })
       .populate('invitedBy', 'name email role')
       .sort({ createdAt: -1 });
@@ -218,7 +218,7 @@ router.post('/accept', async (req, res) => {
     const existing = await User.findOne({ 
       email: invite.email, 
       isDeleted: { $ne: true },
-      ...(invite.tenantId ? { tenantId: invite.tenantId } : {})
+      tenantId: invite.tenantId
     });
     if (existing) {
       await Invite.findByIdAndUpdate(invite._id, { status: 'accepted' });
@@ -237,7 +237,7 @@ router.post('/accept', async (req, res) => {
       isSuperAdmin: false,
       isActive:   true,
       createdBy:  invite.invitedBy,
-      tenantId:   invite.tenantId || undefined,
+      tenantId:   invite.tenantId,
       forcePasswordReset: false
     });
 
@@ -267,11 +267,11 @@ router.post('/accept', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // DELETE /api/invites/:id — Revoke a pending invite
 // ─────────────────────────────────────────────────────────────
-router.delete('/:id', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+router.delete('/:id', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const invite = await Invite.findOne({ 
       _id: req.params.id,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
 
     if (!invite) {
@@ -301,11 +301,11 @@ router.delete('/:id', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async 
 // ─────────────────────────────────────────────────────────────
 // POST /api/invites/:id/resend — Resend a pending invite email
 // ─────────────────────────────────────────────────────────────
-router.post('/:id/resend', requireAuth, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
+router.post('/:id/resend', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMIN']), async (req, res) => {
   try {
     const invite = await Invite.findOne({ 
       _id: req.params.id,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     }).populate('invitedBy', 'name');
 
     if (!invite) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Role } from "@/lib/acustock";
 import { apiFetch } from "@/lib/api";
@@ -44,6 +44,16 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [suppliers, setSuppliers] = useState<{ _id: string; companyName?: string; name?: string }[]>([]);
+
+  useEffect(() => {
+    apiFetch("/companies")
+      .then((data: any) => {
+        const list = Array.isArray(data) ? data : data?.companies || [];
+        setSuppliers(list);
+      })
+      .catch(() => {});
+  }, []);
 
   const [form, setForm] = useState({
     name: "",
@@ -60,6 +70,9 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
     taxRate: "18",
     taxType: "GST",
     lowStockThreshold: "10",
+    reorderQuantity: "20",
+    autoPoEnabled: false,
+    preferredSupplierId: "",
     hsn: "",
     description: "",
   });
@@ -112,6 +125,9 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
           taxRate: Number(form.taxRate || 0),
           taxType: form.taxType,
           lowStockThreshold: Number(form.lowStockThreshold || 10),
+          reorderQuantity: Number(form.reorderQuantity || 20),
+          autoPoEnabled: form.autoPoEnabled,
+          preferredSupplierId: form.preferredSupplierId || undefined,
           hsn: form.hsn.trim() || undefined,
           description: form.description.trim() || undefined,
         }),
@@ -133,6 +149,9 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
         taxRate: "18",
         taxType: "GST",
         lowStockThreshold: "10",
+        reorderQuantity: "20",
+        autoPoEnabled: false,
+        preferredSupplierId: "",
         hsn: "",
         description: "",
       });
@@ -233,7 +252,14 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                           <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-300">Good</span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-500 mt-0.5">Alert at {threshold}</div>
+                      <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
+                        <span>Alert at {threshold}</span>
+                        {item.autoPoEnabled ? (
+                          <span className="rounded bg-emerald-500/10 border border-emerald-500/20 px-1 py-0.2 text-[10px] font-semibold text-emerald-400">
+                            ⚡ Auto-PO ({item.reorderQuantity || 20})
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-4 py-4 text-slate-300">
                       <div>
@@ -425,6 +451,62 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                     placeholder="e.g. 8471"
                     className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
                   />
+                </div>
+              </div>
+
+              {/* Auto-Reorder Settings */}
+              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+                <div className="text-xs font-semibold uppercase tracking-wider text-emerald-400">⚙️ Auto-Reorder Settings</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">Reorder Quantity (units)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={form.reorderQuantity}
+                      onChange={(e) => setForm({ ...form, reorderQuantity: e.target.value })}
+                      placeholder="20"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">Quantity ordered when Auto-PO draft fires</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">Preferred Supplier</label>
+                    <select
+                      value={form.preferredSupplierId}
+                      onChange={(e) => setForm({ ...form, preferredSupplierId: e.target.value })}
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
+                    >
+                      <option value="">Select Supplier (Optional)</option>
+                      {suppliers.map((s) => (
+                        <option key={s._id} value={s._id}>
+                          {s.companyName || s.name || s._id}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-slate-500">Target vendor for auto-generated drafts</p>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-emerald-500/10">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <div
+                      onClick={() => setForm({ ...form, autoPoEnabled: !form.autoPoEnabled })}
+                      className={`relative h-6 w-11 rounded-full transition-colors ${
+                        form.autoPoEnabled ? "bg-emerald-500" : "bg-slate-700"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                          form.autoPoEnabled ? "translate-x-5" : "translate-x-0.5"
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-white">Enable Auto-PO Drafts</div>
+                      <div className="text-xs text-slate-500">Automatically creates draft PO when stock dips below alert threshold</div>
+                    </div>
+                  </label>
                 </div>
               </div>
 

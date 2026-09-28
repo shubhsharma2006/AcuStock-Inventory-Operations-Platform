@@ -40,8 +40,31 @@ export function useRealtimeSync({ role, userId }: UseRealtimeSyncOptions) {
       setConnected(false);
     });
 
-    ["stock-update", "product-update", "notification", "low-stock-alert", "user-update", "company-update", "permission-update"].forEach((eventName) => {
+    ["stock-update", "product-update", "user-update", "company-update", "permission-update"].forEach((eventName) => {
       socket.on(eventName, bump);
+    });
+
+    socket.on("notification", (payload?: unknown) => {
+      bump();
+      if (typeof window !== "undefined" && payload) {
+        window.dispatchEvent(new CustomEvent("acustock:notification", { detail: payload }));
+      }
+    });
+
+    socket.on("low-stock-alert", (payload?: any) => {
+      bump();
+      if (typeof window !== "undefined" && payload) {
+        window.dispatchEvent(
+          new CustomEvent("acustock:notification", {
+            detail: {
+              title: "Low Stock Alert",
+              message: payload?.name ? `${payload.name} has fallen below minimum threshold` : "An item is running low on stock",
+              priority: "HIGH",
+              type: "low_stock",
+            },
+          })
+        );
+      }
     });
 
     return () => {

@@ -1,106 +1,75 @@
 const mongoose = require('mongoose');
 
-/**
- * Transporter Schema
- * Stores logistics/transporter company information
- */
-const TransporterSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: [true, 'Transporter name is required'],
-      trim: true
-    },
-    contactPerson: {
-      type: String,
-      trim: true
-    },
-    phone: {
-      type: String,
-      trim: true
-    },
-    email: {
-      type: String,
-      trim: true,
-      lowercase: true
-    },
-    address: {
-      street: String,
-      city: String,
-      state: String,
-      pincode: String,
-      country: { type: String, default: 'India' }
-    },
-    gstin: {
-      type: String,
-      trim: true,
-      uppercase: true
-    },
-    panNumber: {
-      type: String,
-      trim: true,
-      uppercase: true
-    },
-    vehicleTypes: [{
-      type: String,
-      enum: ['Truck', 'Mini Truck', 'Tempo', 'Container', 'Trailer', 'Van', 'Other']
-    }],
-    serviceAreas: [{
-      type: String,
-      trim: true
-    }],
-    isActive: {
-      type: Boolean,
-      default: true
-    },
-    notes: {
-      type: String,
-      trim: true
-    },
-    // Audit fields
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true
-    },
-    updatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    // Soft-delete fields (hard-delete replaced by soft-delete for audit trail)
-    isDeleted: {
-      type: Boolean,
-      default: false
-    },
-    deletedAt: {
-      type: Date
-    },
-    deletedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    tenantId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Tenant',
-      required: true,
-      index: true
-    }
+const transporterSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+    maxlength: 100
   },
-  { 
-    timestamps: true,
-    toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+  code: {
+    type: String,
+    required: true,
+    trim: true,
+    uppercase: true,
+    maxlength: 30
+  },
+  trackingUrlPattern: {
+    type: String,
+    trim: true,
+    maxlength: 300,
+    default: ''
+  },
+  contactPerson: {
+    type: String,
+    trim: true,
+    maxlength: 100
+  },
+  phone: {
+    type: String,
+    trim: true,
+    maxlength: 25
+  },
+  email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    maxlength: 100
+  },
+  gstin: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    maxlength: 20
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  notes: {
+    type: String,
+    trim: true,
+    maxlength: 500
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  tenantId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Tenant',
+    required: true,
+    index: true
   }
-);
+}, {
+  timestamps: true
+});
 
-// Indexes
-TransporterSchema.index({ tenantId: 1, name: 1 });
-TransporterSchema.index({ tenantId: 1, isActive: 1 });
-TransporterSchema.index({ name: 'text', contactPerson: 'text', city: 'text' });
-TransporterSchema.index({ createdBy: 1 });
-TransporterSchema.index({ isActive: 1 });
+transporterSchema.index({ tenantId: 1, code: 1 }, { unique: true });
+transporterSchema.index({ tenantId: 1, isActive: 1, name: 1 });
 
 const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
-TransporterSchema.plugin(tenantIsolationPlugin);
+transporterSchema.plugin(tenantIsolationPlugin);
 
-module.exports = mongoose.model('Transporter', TransporterSchema);
+module.exports = mongoose.model('Transporter', transporterSchema);

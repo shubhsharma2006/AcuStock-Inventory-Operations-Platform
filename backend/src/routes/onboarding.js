@@ -7,22 +7,23 @@
 const express = require('express');
 const Item    = require('../models/Item');
 const User    = require('../models/User');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const logger  = require('../utils/logger');
 
 const router = express.Router();
 
+router.use(requireTenantId);
+
 // GET /api/onboarding/status
 router.get('/status', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
     const [itemCount, userCount] = await Promise.all([
-      Item.countDocuments({ createdBy: req.userId, ...tenantFilter }),
+      Item.countDocuments({ createdBy: req.userId, tenantId: req.tenantId }),
       User.countDocuments({
         createdBy: req.userId,
         isDeleted: { $ne: true },
         role: { $in: ['MANAGER', 'USER'] },
-        ...tenantFilter
+        tenantId: req.tenantId
       })
     ]);
 

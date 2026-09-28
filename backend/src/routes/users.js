@@ -1,10 +1,11 @@
 const express = require('express');
 const User = require('../models/User');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const { notify } = require('../services/notificationHelper');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // GET /api/users - Get all users (paginated)
 // Admin sees all, Manager sees all users with role USER
@@ -15,7 +16,7 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
     const skip  = (page - 1) * limit;
 
     // Always exclude soft-deleted users
-    let query = { isDeleted: { $ne: true }, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    let query = { isDeleted: { $ne: true }, tenantId: req.tenantId };
 
     // Managers can only see active USER-role accounts (not other managers or admins)
     if (req.userRole === 'MANAGER') {
@@ -28,6 +29,7 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
         .select('-password')
         // Include creator info for "Created By" column in UI
         .populate('createdBy', 'name role email')
+        .populate('assignedWarehouseId', 'name code')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -53,10 +55,11 @@ router.get('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
     const user = await User.findOne({ 
       _id: req.params.id, 
       isDeleted: { $ne: true },
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     })
       .select('-password')
-      .populate('createdBy', 'name role email');
+      .populate('createdBy', 'name role email')
+      .populate('assignedWarehouseId', 'name code');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -77,7 +80,7 @@ router.get('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
 
 // PUT /api/users/:id - Update a user
 router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
-      const { name, email, phone, role, isActive } = req.body;
+      const { name, email, phone, role, isActive, assignedWarehouseId } = req.body;
       const { id } = req.params;
   
       // Validation
@@ -96,7 +99,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         const existingUser = await User.findOne({ 
           email: email.toLowerCase(), 
           _id: { $ne: id },
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (existingUser) {
           return res.status(400).json({ message: 'Email already in use by another user' });
@@ -110,7 +113,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         const existingUser = await User.findOne({ 
           phone, 
           _id: { $ne: id },
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (existingUser) {
           return res.status(400).json({ message: 'Phone number already in use by another user' });
@@ -124,7 +127,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
       try {
         const userToUpdate = await User.findOne({ 
           _id: id,
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (!userToUpdate) {
           return res.status(404).json({ message: 'User not found' });
@@ -226,6 +229,9 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
     userToUpdate.email = email || userToUpdate.email;
     userToUpdate.phone = phone || userToUpdate.phone;
     userToUpdate.role = role || userToUpdate.role;
+    if (assignedWarehouseId !== undefined) {
+      userToUpdate.assignedWarehouseId = assignedWarehouseId ? assignedWarehouseId : null;
+    }
     const prevIsActive = userToUpdate.isActive;
     userToUpdate.isActive = isActive !== undefined ? isActive : userToUpdate.isActive;
 
@@ -271,7 +277,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         relatedId:    userToUpdate._id,
         createdBy:     req.user._id,
         createdByRole: req.user.role,
-        tenantId:      req.tenantId || undefined,
+        tenantId:      req.tenantId,
         metadata: {
           userId:       userToUpdate._id,
           userName:     userToUpdate.name,
@@ -296,7 +302,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
         relatedId:    userToUpdate._id,
         createdBy:     req.user._id,
         createdByRole: req.user.role,
-        tenantId:      req.tenantId || undefined,
+        tenantId:      req.tenantId,
         metadata: { userId: userToUpdate._id, userName: userToUpdate.name, action }
       }).catch(() => {});
     }
@@ -313,7 +319,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
     try {
         const user = await User.findOne({ 
           _id: req.params.id,
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -370,7 +376,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
           relatedId:    user._id,
           createdBy:     req.user._id,
           createdByRole: req.user.role,
-          tenantId:      req.tenantId || undefined,
+          tenantId:      req.tenantId,
           metadata: { userId: user._id, userName: user.name, deactivatedBy: req.user.name }
         }).catch(() => {});
 
@@ -393,7 +399,7 @@ router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', '
     try {
         const userToUpdate = await User.findOne({ 
           _id: id,
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (!userToUpdate) {
             return res.status(404).json({ message: 'User not found' });
@@ -456,7 +462,7 @@ router.put('/profile', requireAuth, async (req, res) => {
   try {
     const user = await User.findOne({ 
       _id: req.user._id,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });

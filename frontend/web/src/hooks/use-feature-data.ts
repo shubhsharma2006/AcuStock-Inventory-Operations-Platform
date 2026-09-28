@@ -25,6 +25,9 @@ export type ProductItem = {
   purchasePrice?: number;
   mrp?: number;
   lowStockThreshold?: number;
+  reorderQuantity?: number;
+  autoPoEnabled?: boolean;
+  preferredSupplierId?: { _id: string; companyName?: string; name?: string } | string | null;
 };
 
 export type RemainingStockItem = {

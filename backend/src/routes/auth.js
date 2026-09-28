@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
-const { requireAuth, requireRole, checkForcePasswordReset } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, checkForcePasswordReset } = require('../middleware/auth');
 const { validateRequest, schemas } = require('../middleware/validateRequest');
 const { sendPasswordResetEmail } = require('../services/email.service');
 const { notify } = require('../services/notificationHelper');
@@ -474,8 +474,8 @@ router.post('/logout', (req, res) => {
 });
 
 // POST /api/auth/register-manager - Admin creates a Manager
-router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req, res) => {
-  const { name, email, password, forcePasswordReset = true } = req.body;
+router.post('/register-manager', requireAuth, requireTenantId, requireRole(['ADMIN']), async (req, res) => {
+  const { name, email, password, forcePasswordReset = true, assignedWarehouseId } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required' });
@@ -493,7 +493,7 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
   try {
     const existingUser = await User.findOne({ 
       email: email.toLowerCase(),
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
     if (existingUser) {
       return res.status(400).json({ message: 'Manager with this email already exists' });
@@ -507,11 +507,12 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
       email: email.toLowerCase(),
       password: hashedPassword,
       role: 'MANAGER',
+      assignedWarehouseId: assignedWarehouseId || null,
       createdBy: req.user._id,
       passwordChangedAt: new Date(),
       passwordChangedBy: 'ADMIN',
       forcePasswordReset: forcePasswordReset, // Force password change on first login
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId
     });
 
     await manager.save();
@@ -527,7 +528,7 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
       targetUserRole: manager.role,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
-      tenantId: req.tenantId || undefined,
+      tenantId: req.tenantId,
       severity: 'INFO'
     });
     
@@ -551,8 +552,8 @@ router.post('/register-manager', requireAuth, requireRole(['ADMIN']), async (req
 
 // POST /api/auth/register-user - Admin/Manager creates a User
 // Users CANNOT self-register. Only Admin/Manager can create user accounts.
-router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
-  const { name, phone, email, password, forcePasswordReset = true } = req.body;
+router.post('/register-user', requireAuth, requireTenantId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  const { name, phone, email, password, forcePasswordReset = true, assignedWarehouseId } = req.body;
 
   if (!name || !phone || !password) {
     return res.status(400).json({ message: 'Name, phone, and password are required' });
@@ -578,7 +579,7 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
   try {
     const existingUser = await User.findOne({ 
       phone,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
     if (existingUser) {
       return res.status(400).json({ message: 'User with this phone number already exists' });
@@ -593,11 +594,12 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
       email: email ? email.toLowerCase() : undefined,
       password: hashedPassword,
       role: 'USER',
+      assignedWarehouseId: assignedWarehouseId || null,
       createdBy: req.user._id, // Track who created this user
       passwordChangedAt: new Date(),
       passwordChangedBy: req.user.role, // 'ADMIN' or 'MANAGER'
       forcePasswordReset: forcePasswordReset, // Force password change on first login
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId
     });
 
     await user.save();
@@ -613,7 +615,7 @@ router.post('/register-user', requireAuth, requireRole(['ADMIN', 'MANAGER']), as
       targetUserRole: user.role,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
-      tenantId: req.tenantId || undefined,
+      tenantId: req.tenantId,
       severity: 'INFO'
     });
     

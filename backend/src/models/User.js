@@ -148,6 +148,12 @@ const userSchema = new mongoose.Schema({
     index: true,
     default: null
   },
+  assignedWarehouseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Warehouse',
+    default: null,
+    index: true
+  },
   customPermissions: {
     type: Map,
     of: Boolean,

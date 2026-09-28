@@ -246,9 +246,30 @@ const checkForcePasswordReset = async (req, res, next) => {
   }
 };
 
+
+/**
+ * requireTenantId
+ * Middleware: rejects any request where req.tenantId has not been resolved.
+ * Must be placed AFTER requireAuth (which sets req.tenantId via tenancy middleware).
+ * Provides a centralized, explicit fail-closed gate for all tenant-scoped routes.
+ *
+ * Usage: router.get('/', requireAuth, requireTenantId, handler)
+ */
+const requireTenantId = (req, res, next) => {
+  if (!req.tenantId) {
+    return res.status(403).json({
+      success: false,
+      error: 'Tenant context required',
+      code: 'TENANT_REQUIRED'
+    });
+  }
+  next();
+};
+
 module.exports = {
   requireAuth,
   requireRole,
+  requireTenantId,
   checkForcePasswordReset,
   validateObjectId,
   isValidObjectIdString,

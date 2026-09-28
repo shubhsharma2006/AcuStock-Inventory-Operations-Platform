@@ -4,15 +4,17 @@ const StockLedger = require('../models/StockLedger');
 const Item = require('../models/Item');
 const SerialAudit = require('../models/SerialAudit');
 const Notification = require('../models/Notification');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
 const { validateRequest, schemas } = require('../middleware/validateRequest');
 const logger = require('../utils/logger');
 const { notifyRoles } = require('../services/notificationHelper');
+const { checkAndTriggerAutoPo } = require('../services/reorderEngine');
 
 const stockService = require('../services/stock.service');
 const { logBusinessEvent } = require('../utils/auditHelper');
 const router = express.Router();
+router.use(requireTenantId);
 
 // Helper: escape regex special characters to prevent ReDoS / injection
 function escapeRegex(str) {
@@ -49,6 +51,7 @@ async function createStockNotification(type, item, quantity, user) {
       relatedId:     item._id,
       createdBy:     user._id,
       createdByRole: user.role,
+      tenantId:      item.tenantId || user.tenantId || null,
       metadata: {
         productId:    item._id,
         productName:  item.name,
@@ -69,10 +72,18 @@ async function createStockNotification(type, item, quantity, user) {
 // All authenticated users can access this (for remaining stock view)
 router.get('/summary', requireAuth, async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, warehouseId } = req.query;
 
     // Escape regex special characters to prevent injection / ReDoS
     const escapedSearch = search ? escapeRegex(search) : undefined;
+
+    // Branch scoping: user assigned warehouse takes precedence for non-admins, or query param
+    let effectiveWarehouseId = null;
+    if (req.user.assignedWarehouseId) {
+      effectiveWarehouseId = req.user.assignedWarehouseId;
+    } else if (warehouseId && mongoose.Types.ObjectId.isValid(warehouseId)) {
+      effectiveWarehouseId = warehouseId;
+    }
 
     // Build match for search
     let productMatch = {};
@@ -86,7 +97,11 @@ router.get('/summary', requireAuth, async (req, res) => {
     }
 
     // Aggregate stock ledger to get IN and OUT totals per product
-    const pipeline = [{ $match: { tenantId: req.tenantId } }];
+    const matchStage = { tenantId: new mongoose.Types.ObjectId(req.tenantId), isDeleted: { $ne: true } };
+    if (effectiveWarehouseId) {
+      matchStage.warehouseId = new mongoose.Types.ObjectId(effectiveWarehouseId);
+    }
+    const pipeline = [{ $match: matchStage }];
 
     pipeline.push(
       // Group by product and type
@@ -115,7 +130,7 @@ router.get('/summary', requireAuth, async (req, res) => {
           let: { productId: '$_id' },
           pipeline: [{ $match: { $expr: { $and: [
             { $eq: ['$_id', '$$productId'] },
-            { $eq: ['$tenantId', req.tenantId] }
+            { $eq: ['$tenantId', new mongoose.Types.ObjectId(req.tenantId)] }
           ] } } }],
           as: 'productInfo'
         }
@@ -139,7 +154,7 @@ router.get('/summary', requireAuth, async (req, res) => {
               initialValue: 0,
               in: {
                 $cond: [
-                  { $eq: ['$$this.type', 'IN'] },
+                  { $in: ['$$this.type', ['IN', 'TRANSFER_IN']] },
                   { $add: ['$$value', '$$this.total'] },
                   '$$value'
                 ]
@@ -152,7 +167,7 @@ router.get('/summary', requireAuth, async (req, res) => {
               initialValue: 0,
               in: {
                 $cond: [
-                  { $eq: ['$$this.type', 'OUT'] },
+                  { $in: ['$$this.type', ['OUT', 'TRANSFER_OUT']] },
                   { $add: ['$$value', '$$this.total'] },
                   '$$value'
                 ]
@@ -169,8 +184,7 @@ router.get('/summary', requireAuth, async (req, res) => {
     // Also include products with no stock entries (quantity = 0)
     const productsWithStock = stockSummary.map(s => s.productId.toString());
     
-    const allProdFilter = { isActive: { $ne: false } };
-    if (req.tenantId) allProdFilter.tenantId = req.tenantId;
+    const allProdFilter = { isActive: { $ne: false }, tenantId: req.tenantId };
     if (escapedSearch) {
       allProdFilter.$or = [
         { name: { $regex: escapedSearch, $options: 'i' } },
@@ -212,10 +226,7 @@ router.get('/serials/:productId', requireAuth, async (req, res) => {
     const { status = 'available' } = req.query; // available | all
     
     // Verify product exists and get its serial policy
-    const itemFilter = { _id: productId };
-    if (req.tenantId) itemFilter.tenantId = req.tenantId;
-
-    const item = await Item.findOne(itemFilter);
+    const item = await Item.findOne({ _id: productId, tenantId: req.tenantId });
     if (!item) {
       return res.status(404).json({ message: 'Product not found' });
     }
@@ -231,8 +242,10 @@ router.get('/serials/:productId', requireAuth, async (req, res) => {
     }
     
     // Get all serials for this product with their current status
-    const matchFilter = { productId: new mongoose.Types.ObjectId(productId) };
-    if (req.tenantId) matchFilter.tenantId = req.tenantId;
+    const matchFilter = {
+      productId: new mongoose.Types.ObjectId(productId),
+      tenantId: new mongoose.Types.ObjectId(req.tenantId)
+    };
 
     const serialsAgg = await SerialAudit.aggregate([
       { $match: matchFilter },
@@ -293,8 +306,10 @@ router.get('/serial/search', requireAuth, async (req, res) => {
     const query = escapeRegex(q.trim().toUpperCase());
 
     // Find all unique serials matching the query (prefix or substring) scoped to tenant
-    const searchMatch = { serial: { $regex: query, $options: 'i' } };
-    if (req.tenantId) searchMatch.tenantId = req.tenantId;
+    const searchMatch = {
+      serial: { $regex: query, $options: 'i' },
+      tenantId: new mongoose.Types.ObjectId(req.tenantId)
+    };
 
     const matches = await SerialAudit.aggregate([
       // Match serial containing the query string (escaped to prevent injection)
@@ -378,10 +393,7 @@ router.get('/serial-policy/:productId', requireAuth, async (req, res) => {
   try {
     const { productId } = req.params;
     
-    const itemFilter = { _id: productId };
-    if (req.tenantId) itemFilter.tenantId = req.tenantId;
-
-    const item = await Item.findOne(itemFilter).select('name serialPolicy');
+    const item = await Item.findOne({ _id: productId, tenantId: req.tenantId }).select('name serialPolicy');
     if (!item) {
       return res.status(404).json({ message: 'Product not found' });
     }
@@ -429,9 +441,9 @@ router.post('/validate-serials', requireAuth, async (req, res) => {
       // For Stock IN: Check if any serial has ever been used in this tenant
       const existingFilter = {
         serial: { $in: normalizedSerials },
-        action: 'IN'
+        action: 'IN',
+        tenantId: req.tenantId
       };
-      if (req.tenantId) existingFilter.tenantId = req.tenantId;
 
       const existingSerials = await SerialAudit.find(existingFilter).distinct('serial');
       
@@ -449,9 +461,9 @@ router.post('/validate-serials', requireAuth, async (req, res) => {
       // For Stock OUT: Check if serials are currently available (last action = IN)
       const outMatch = { 
         serial: { $in: normalizedSerials },
-        productId: new mongoose.Types.ObjectId(productId)
+        productId: new mongoose.Types.ObjectId(productId),
+        tenantId: new mongoose.Types.ObjectId(req.tenantId)
       };
-      if (req.tenantId) outMatch.tenantId = req.tenantId;
 
       const serialsAgg = await SerialAudit.aggregate([
         { $match: outMatch },
@@ -496,8 +508,7 @@ router.get('/serial-audit/:serial', requireAuth, async (req, res) => {
     const { serial } = req.params;
     const normalizedSerial = serial.trim().toUpperCase();
     
-    const auditFilter = { serial: normalizedSerial };
-    if (req.tenantId) auditFilter.tenantId = req.tenantId;
+    const auditFilter = { serial: normalizedSerial, tenantId: req.tenantId };
 
     const auditHistory = await SerialAudit.find(auditFilter)
       .populate('productId', 'name shortName')
@@ -548,12 +559,18 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
       serialNumbers
     });
 
-    const itemFilter = { _id: productId };
-    if (req.tenantId) itemFilter.tenantId = req.tenantId;
-
-    const item = await Item.findOne(itemFilter);
+    const item = await Item.findOne({ _id: productId, tenantId: req.tenantId });
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
+    }
+
+    // Branch Scoping: Non-admins can only stock-in at their assigned warehouse
+    let effectiveWarehouseId = req.body.warehouseId || null;
+    if (req.user.assignedWarehouseId) {
+      if (effectiveWarehouseId && String(effectiveWarehouseId) !== String(req.user.assignedWarehouseId)) {
+        return res.status(403).json({ message: 'Forbidden: You can only perform Stock IN at your assigned warehouse branch.' });
+      }
+      effectiveWarehouseId = req.user.assignedWarehouseId;
     }
 
     // Include modelVariant in transaction details
@@ -563,7 +580,7 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
     };
 
     await stockService.stockIn(
-      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, supplier, condition, transaction: transactionData, tenantId: req.tenantId },
+      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, supplier, condition, transaction: transactionData, tenantId: req.tenantId, warehouseId: effectiveWarehouseId },
       req.user
     );
 
@@ -627,12 +644,18 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
       serialNumbers
     });
 
-    const itemFilter = { _id: productId };
-    if (req.tenantId) itemFilter.tenantId = req.tenantId;
-
-    const item = await Item.findOne(itemFilter);
+    const item = await Item.findOne({ _id: productId, tenantId: req.tenantId });
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
+    }
+
+    // Branch Scoping: Non-admins can only stock-out from their assigned warehouse
+    let effectiveWarehouseId = req.body.warehouseId || null;
+    if (req.user.assignedWarehouseId) {
+      if (effectiveWarehouseId && String(effectiveWarehouseId) !== String(req.user.assignedWarehouseId)) {
+        return res.status(403).json({ message: 'Forbidden: You can only perform Stock OUT at your assigned warehouse branch.' });
+      }
+      effectiveWarehouseId = req.user.assignedWarehouseId;
     }
 
     // Include modelVariant in transaction details
@@ -642,7 +665,7 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
     };
 
     await stockService.stockOut(
-      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, buyer, condition, transaction: transactionData, tenantId: req.tenantId },
+      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, buyer, condition, transaction: transactionData, tenantId: req.tenantId, warehouseId: effectiveWarehouseId },
       req.user
     );
 
@@ -713,6 +736,11 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
       }
     }
     
+    // Trigger auto-PO draft if stock falls below reorder threshold (fire-and-forget)
+    checkAndTriggerAutoPo(productId, req.tenantId, req.user._id).catch((err) =>
+      logger.warn('Auto-PO reorder check error:', err.message)
+    );
+
     res.status(201).json({ success: true, message: 'Stock entry created successfully' });
   } catch (error) {
     console.error('Stock OUT error:', error);
@@ -730,8 +758,7 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
 // - Manager/User see only their own entries (CANNOT see Admin activity)
 router.get('/', requireAuth, async (req, res) => {
   try {
-    let query = {};
-    if (req.tenantId) query.tenantId = req.tenantId;
+    let query = { tenantId: req.tenantId };
     
     if (req.userRole === 'ADMIN' || req.userRole === 'SUPER_ADMIN') {
       // Admin / Super Admin sees all data in tenant
@@ -778,8 +805,7 @@ router.get('/ledger', requireAuth, requirePermission('canViewStockLedger'), asyn
   try {
     const { productId, type, startDate, endDate, userId, page = 1, limit = 50 } = req.query;
     
-    let query = {};
-    if (req.tenantId) query.tenantId = req.tenantId;
+    let query = { tenantId: req.tenantId };
     
     if (req.userRole === 'ADMIN' || req.userRole === 'SUPER_ADMIN') {
       if (userId) query.createdBy = userId;
@@ -831,16 +857,12 @@ router.get('/activity/:userId', requireAuth, requireRole(['ADMIN']), async (req,
     const { productId, type, startDate, endDate, page = 1, limit = 50 } = req.query;
     
     const User = require('../models/User');
-    const userFilter = { _id: userId };
-    if (req.tenantId) userFilter.tenantId = req.tenantId;
-
-    const targetUser = await User.findOne(userFilter).select('name email role');
+    const targetUser = await User.findOne({ _id: userId, tenantId: req.tenantId }).select('name email role');
     if (!targetUser) {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    let query = { createdBy: userId };
-    if (req.tenantId) query.tenantId = req.tenantId;
+    let query = { createdBy: userId, tenantId: req.tenantId };
     
     if (productId) query.productId = productId;
     if (type) query.type = type.toUpperCase();
@@ -853,8 +875,10 @@ router.get('/activity/:userId', requireAuth, requireRole(['ADMIN']), async (req,
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    const aggMatch = { createdBy: new mongoose.Types.ObjectId(userId) };
-    if (req.tenantId) aggMatch.tenantId = req.tenantId;
+    const aggMatch = {
+      createdBy: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(req.tenantId)
+    };
 
     const [entries, total, summary] = await Promise.all([
       StockLedger.find(query)
@@ -898,14 +922,15 @@ router.get('/activity-summary', requireAuth, requireRole(['ADMIN']), async (req,
   try {
     const User = require('../models/User');
 
-    const userFilter = { role: { $in: ['MANAGER', 'USER'] } };
-    if (req.tenantId) userFilter.tenantId = req.tenantId;
+    const userFilter = { role: { $in: ['MANAGER', 'USER'] }, tenantId: req.tenantId };
 
     const usersAndManagers = await User.find(userFilter)
       .select('name email role isActive createdAt').lean();
 
-    const aggMatch = { role: { $in: ['MANAGER', 'USER'] } };
-    if (req.tenantId) aggMatch.tenantId = req.tenantId;
+    const aggMatch = {
+      role: { $in: ['MANAGER', 'USER'] },
+      tenantId: new mongoose.Types.ObjectId(req.tenantId)
+    };
 
     const activityAgg = await StockLedger.aggregate([
       { $match: aggMatch },
@@ -968,8 +993,7 @@ router.get('/activity-summary', requireAuth, requireRole(['ADMIN']), async (req,
 router.get('/ledger/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
     const { id } = req.params;
-    const filter = { _id: id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: id, tenantId: req.tenantId };
 
     const entry = await StockLedger.findOne(filter)
       .populate('productId', 'name shortName serialPolicy salesPrice purchasePrice')
@@ -1007,8 +1031,7 @@ router.post('/ledger/:id/reverse', requireAuth, validateObjectId, requireRole(['
       return res.status(400).json({ message: 'A reason for the reversal is required (min 5 characters).', code: 'REASON_REQUIRED' });
     }
 
-    const filter = { _id: id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: id, tenantId: req.tenantId };
 
     const original = await StockLedger.findOne(filter).populate('productId', 'name');
     if (!original) {
@@ -1134,16 +1157,12 @@ router.delete('/:id', requireAuth, (req, res) => {
 router.get('/:productId', requireAuth, validateObjectId, async (req, res) => {
   try {
     const { productId } = req.params;
-    const itemFilter = { _id: productId };
-    if (req.tenantId) itemFilter.tenantId = req.tenantId;
-
-    const item = await Item.findOne(itemFilter);
+    const item = await Item.findOne({ _id: productId, tenantId: req.tenantId });
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
     }
     
-    let historyQuery = { productId };
-    if (req.tenantId) historyQuery.tenantId = req.tenantId;
+    let historyQuery = { productId, tenantId: req.tenantId };
 
     if (req.userRole === 'MANAGER' || req.userRole === 'USER') {
       historyQuery.createdBy = req.userId;
@@ -1154,8 +1173,7 @@ router.get('/:productId', requireAuth, validateObjectId, async (req, res) => {
       .populate('createdBy', 'name role')
       .sort({ createdAt: -1 });
       
-    const allQuery = { productId };
-    if (req.tenantId) allQuery.tenantId = req.tenantId;
+    const allQuery = { productId, tenantId: req.tenantId };
 
     const allEntries = await StockLedger.find(allQuery);
     const stock = allEntries.reduce((acc, entry) => {

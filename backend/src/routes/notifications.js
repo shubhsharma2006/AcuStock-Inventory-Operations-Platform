@@ -1,8 +1,9 @@
 const express = require('express');
 const Notification = require('../models/Notification');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // ============================================================
 // GET /api/notifications — Paginated list with filtering
@@ -99,7 +100,7 @@ router.patch('/read-all', requireAuth, async (req, res) => {
 // ============================================================
 router.patch('/:id/read', requireAuth, async (req, res) => {
   try {
-    const query = { _id: req.params.id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const query = { _id: req.params.id, tenantId: req.tenantId };
     const notification = await Notification.findOne(query);
 
     if (!notification) {
@@ -153,7 +154,7 @@ router.post('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
       priority:      priority || 'MEDIUM',
       createdBy:     req.user._id,
       createdByRole: req.user.role,
-      tenantId:      req.tenantId || undefined
+      tenantId:      req.tenantId
     });
 
     res.status(201).json(notification);
@@ -185,7 +186,7 @@ router.delete('/read', requireAuth, async (req, res) => {
 // ============================================================
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
-    const query = { _id: req.params.id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const query = { _id: req.params.id, tenantId: req.tenantId };
     const notification = await Notification.findOne(query);
 
     if (!notification) {

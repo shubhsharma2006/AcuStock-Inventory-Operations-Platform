@@ -31,6 +31,9 @@ interface StockTransfer {
   status: "DRAFT" | "APPROVED" | "IN_TRANSIT" | "RECEIVED" | "CANCELLED";
   items: TransferItem[];
   requestedBy: { name: string; email: string };
+  transporterId?: { _id: string; name: string; code: string; trackingUrlPattern?: string };
+  trackingNumber?: string;
+  estimatedArrival?: string;
   notes?: string;
   createdAt: string;
 }
@@ -54,6 +57,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
 export default function StockTransfersPage() {
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [selectedTransferForShip, setSelectedTransferForShip] = useState<StockTransfer | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("");
 
   const { data, isLoading, error } = useQuery<{ transfers: StockTransfer[]; total: number }>({
@@ -69,8 +73,12 @@ export default function StockTransfersPage() {
   });
 
   const shipMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/stock-transfers/${id}/ship`, { method: "PUT" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stock-transfers"] }),
+    mutationFn: ({ id, data }: { id: string; data?: any }) =>
+      apiFetch(`/stock-transfers/${id}/ship`, { method: "PUT", body: JSON.stringify(data || {}) }),
+    onSuccess: () => {
+      setSelectedTransferForShip(null);
+      queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+    },
   });
 
   const receiveMutation = useMutation({
@@ -177,6 +185,23 @@ export default function StockTransfersPage() {
                       <span className={`inline-block rounded-full border px-3 py-1 text-xs font-semibold ${conf.color} ${conf.bg}`}>
                         {conf.label}
                       </span>
+                      {trf.trackingNumber ? (
+                        <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-400">
+                          <span>🚚 {trf.transporterId?.name || "Carrier"}:</span>
+                          {trf.transporterId?.trackingUrlPattern ? (
+                            <a
+                              href={trf.transporterId.trackingUrlPattern.replace(/\{awb\}|\{trackingNumber\}|\{tracking_number\}/gi, trf.trackingNumber)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-mono font-semibold text-amber-400 underline hover:text-amber-300"
+                            >
+                              {trf.trackingNumber} ↗
+                            </a>
+                          ) : (
+                            <span className="font-mono font-semibold text-white">{trf.trackingNumber}</span>
+                          )}
+                        </div>
+                      ) : null}
                     </td>
 
                     <td className="px-5 py-4">
@@ -195,7 +220,7 @@ export default function StockTransfersPage() {
                         {trf.status === "APPROVED" ? (
                           <button
                             type="button"
-                            onClick={() => shipMutation.mutate(trf._id)}
+                            onClick={() => setSelectedTransferForShip(trf)}
                             disabled={shipMutation.isPending}
                             className="rounded-xl bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-500/30 transition"
                           >
@@ -247,6 +272,18 @@ export default function StockTransfersPage() {
         <CreateTransferModal
           onClose={() => setShowCreateModal(false)}
           onCreated={() => queryClient.invalidateQueries({ queryKey: ["stock-transfers"] })}
+        />
+      ) : null}
+
+      {/* Dispatch Logistics Modal */}
+      {selectedTransferForShip ? (
+        <ShipDispatchModal
+          transfer={selectedTransferForShip}
+          isPending={shipMutation.isPending}
+          onClose={() => setSelectedTransferForShip(null)}
+          onConfirm={(dispatchData) =>
+            shipMutation.mutate({ id: selectedTransferForShip._id, data: dispatchData })
+          }
         />
       ) : null}
     </div>
@@ -470,3 +507,117 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
     </div>
   );
 }
+
+function ShipDispatchModal({
+  transfer,
+  isPending,
+  onClose,
+  onConfirm,
+}: {
+  transfer: StockTransfer;
+  isPending: boolean;
+  onClose: () => void;
+  onConfirm: (data: { transporterId?: string; trackingNumber?: string; estimatedArrival?: string }) => void;
+}) {
+  const [transporterId, setTransporterId] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [estimatedArrival, setEstimatedArrival] = useState("");
+
+  const { data: transporters = [] } = useQuery<{ _id: string; name: string; code: string }[]>({
+    queryKey: ["transporters"],
+    queryFn: () => apiFetch("/transporters"),
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    onConfirm({
+      transporterId: transporterId || undefined,
+      trackingNumber: trackingNumber.trim() || undefined,
+      estimatedArrival: estimatedArrival || undefined,
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
+      <div className="w-full max-w-lg rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-white/10 pb-4">
+          <div>
+            <h3 className="text-xl font-bold text-white">Dispatch Transfer</h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Assign logistics carrier and tracking details for {transfer.transferNumber}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-2 text-slate-400 hover:bg-white/10 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+          <div className="rounded-xl border border-white/5 bg-slate-950/50 p-3 text-xs text-slate-300">
+            <span className="text-slate-400">Route:</span>{" "}
+            <span className="font-semibold text-white">{transfer.fromWarehouse?.name}</span> →{" "}
+            <span className="font-semibold text-white">{transfer.toWarehouse?.name}</span>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Shipping Partner / Transporter</label>
+            <select
+              value={transporterId}
+              onChange={(e) => setTransporterId(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
+            >
+              <option value="">Select Carrier (Optional)</option>
+              {transporters.map((t) => (
+                <option key={t._id} value={t._id}>
+                  {t.name} ({t.code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">AWB / Tracking Number</label>
+            <input
+              value={trackingNumber}
+              onChange={(e) => setTrackingNumber(e.target.value.toUpperCase())}
+              placeholder="e.g. DL987654321IN"
+              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm font-mono text-white outline-none focus:border-amber-400"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Estimated Arrival Date</label>
+            <input
+              type="date"
+              value={estimatedArrival}
+              onChange={(e) => setEstimatedArrival(e.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
+            />
+          </div>
+
+          <div className="mt-6 flex items-center justify-end gap-3 pt-4 border-t border-white/10">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl px-4 py-2 text-sm text-slate-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isPending}
+              className="rounded-xl bg-amber-400 px-6 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-50"
+            >
+              {isPending ? "Dispatching…" : "Confirm & Dispatch 🚚"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+

@@ -4,6 +4,7 @@ const Shipment = require('../models/Shipment');
 const Item = require('../models/Item');
 const StockLedger = require('../models/StockLedger');
 const SerialAudit = require('../models/SerialAudit');
+const Transporter = require('../models/Transporter');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generateShipmentChallanPdf } = require('../services/pdfGenerator');
 const logger = require('../utils/logger');
@@ -16,7 +17,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { status, type, page = 1, limit = 20, search } = req.query;
     const query = {};
     
-    if (req.tenantId) query.tenantId = req.tenantId;
+    query.tenantId = req.tenantId;
 
     // Role-based filtering:
     // USER → only their own shipments
@@ -53,6 +54,7 @@ router.get('/', requireAuth, async (req, res) => {
       Shipment.find(query)
         .populate('productId', 'name shortName')
         .populate('createdBy', 'name')
+        .populate('transporterId', 'name code trackingUrlPattern')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
@@ -95,7 +97,7 @@ router.get('/pending', requireAuth, async (req, res) => {
 router.get('/stats', requireAuth, async (req, res) => {
   try {
     const query = {};
-    if (req.tenantId) query.tenantId = req.tenantId;
+    query.tenantId = req.tenantId;
 
     if (req.user.role === 'USER' || req.user.role === 'MANAGER') {
       query.createdBy = req.user._id;
@@ -132,12 +134,12 @@ router.get('/stats', requireAuth, async (req, res) => {
 // GET /api/shipments/:id - Get single shipment
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const shipment = await Shipment.findOne(filter)
       .populate('productId', 'name shortName hsnCode')
       .populate('createdBy', 'name email')
+      .populate('transporterId', 'name code trackingUrlPattern contactPerson phone email')
       .populate('statusHistory.updatedBy', 'name');
     
     if (!shipment) {
@@ -159,8 +161,8 @@ router.get('/:id', requireAuth, async (req, res) => {
 // ── GET /api/shipments/:id/pdf - Download Delivery Challan PDF ─
 router.get('/:id/pdf', requireAuth, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    if (!req.tenantId) return res.status(403).json({ success: false, error: 'Tenant context required', code: 'TENANT_REQUIRED' });
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const shipment = await Shipment.findOne(filter)
       .populate('productId', 'name shortName hsnCode')
@@ -208,6 +210,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       state,
       pincode,
       courier,
+      transporterId,
+      trackingUrl,
       awb,
       dispatchDate,
       deliveryType,
@@ -230,8 +234,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
     }
     
     // Get product scoped to tenant
-    const itemFilter = { _id: productId };
-    if (req.tenantId) itemFilter.tenantId = req.tenantId;
+    const itemFilter = { _id: productId, tenantId: req.tenantId };
 
     const item = await Item.findOne(itemFilter).session(session);
     if (!item) {
@@ -261,8 +264,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       
       // Validate serials are in stock
       if (serialNumbers.length > 0) {
-        const auditMatch = { serial: { $in: serialNumbers } };
-        if (req.tenantId) auditMatch.tenantId = req.tenantId;
+        if (!req.tenantId) throw new Error('Tenant context is required for serial validation');
+        const auditMatch = { serial: { $in: serialNumbers }, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
 
         const existingAudits = await SerialAudit.aggregate([
           { $match: auditMatch },
@@ -283,6 +286,20 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       }
     }
     
+    // Auto-compute trackingUrl from transporter tracking pattern
+    let finalCourier = courier;
+    let finalTrackingUrl = trackingUrl || null;
+    if (transporterId) {
+      const tFilter = { _id: transporterId, tenantId: req.tenantId };
+      const carrier = await Transporter.findOne(tFilter).session(session);
+      if (carrier) {
+        finalCourier = finalCourier || carrier.name;
+        if (!finalTrackingUrl && carrier.trackingUrlPattern && awb) {
+          finalTrackingUrl = carrier.trackingUrlPattern.replace(/\{awb\}|\{trackingNumber\}|\{tracking_number\}/gi, awb.trim());
+        }
+      }
+    }
+
     // Create shipment
     const shipment = new Shipment({
       productId,
@@ -299,7 +316,9 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       city,
       state,
       pincode,
-      courier,
+      courier: finalCourier,
+      transporterId: transporterId || null,
+      trackingUrl: finalTrackingUrl,
       awb,
       dispatchDate: dispatchDate ? new Date(dispatchDate) : null,
       deliveryType,
@@ -315,7 +334,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       type,
       status: dispatchDate ? 'DISPATCHED' : 'PENDING',
       createdBy: req.user._id,
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId,
     });
     
     await shipment.save({ session });
@@ -329,7 +348,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
         serialNumbers,
         createdBy: req.user._id,
         role: req.user.role,
-        tenantId: req.tenantId || undefined
+        tenantId: req.tenantId,
       });
       await ledgerEntry.save({ session });
       
@@ -341,7 +360,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
           action: 'OUT',
           performedBy: req.user._id,
           role: req.user.role,
-          tenantId: req.tenantId || undefined
+          tenantId: req.tenantId,
         }));
         await SerialAudit.insertMany(auditEntries, { session });
       }
@@ -356,7 +375,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
         serialNumbers,
         createdBy: req.user._id,
         role: req.user.role,
-        tenantId: req.tenantId || undefined
+        tenantId: req.tenantId,
       });
       await ledgerEntry.save({ session });
       
@@ -368,7 +387,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
           action: 'IN',
           performedBy: req.user._id,
           role: req.user.role,
-          tenantId: req.tenantId || undefined
+          tenantId: req.tenantId,
         }));
         await SerialAudit.insertMany(auditEntries, { session });
       }
@@ -399,8 +418,7 @@ router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
       return res.status(400).json({ message: 'Invalid status' });
     }
     
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const shipment = await Shipment.findOne(filter);
     if (!shipment) {
@@ -443,8 +461,7 @@ router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
 // PUT /api/shipments/:id - Update shipment details
 router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const shipment = await Shipment.findOne(filter);
     if (!shipment) {
@@ -462,7 +479,7 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
     }
     
     const allowedUpdates = [
-      'courier', 'awb', 'dispatchDate', 'courierCharges', 'boxes',
+      'courier', 'transporterId', 'trackingUrl', 'awb', 'dispatchDate', 'courierCharges', 'boxes',
       'weight', 'dimensions', 'remarks', 'expectedDeliveryDate'
     ];
     
@@ -471,6 +488,14 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
         shipment[field] = req.body[field];
       }
     });
+
+    if (shipment.transporterId && shipment.awb && !req.body.trackingUrl) {
+      const tFilter = { _id: shipment.transporterId, tenantId: req.tenantId };
+      const carrier = await Transporter.findOne(tFilter);
+      if (carrier && carrier.trackingUrlPattern) {
+        shipment.trackingUrl = carrier.trackingUrlPattern.replace(/\{awb\}|\{trackingNumber\}|\{tracking_number\}/gi, shipment.awb.trim());
+      }
+    }
     
     await shipment.save();
     
@@ -487,8 +512,7 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
 // DELETE /api/shipments/:id - Cancel/Delete shipment (Admin only)
 router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const shipment = await Shipment.findOne(filter);
     if (!shipment) {

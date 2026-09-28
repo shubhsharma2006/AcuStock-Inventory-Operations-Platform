@@ -17,9 +17,12 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
     const { action, entityType, entityId, performedBy, severity, from, to, search } = req.query;
 
     const filter = {};
+    const queryOptions = {};
     if (req.tenantId) {
       filter.tenantId = req.tenantId;
-    } else if (req.user?.role !== 'SUPER_ADMIN') {
+    } else if (req.user?.role === 'SUPER_ADMIN') {
+      queryOptions.skipTenantIsolation = true;
+    } else {
       return res.status(403).json({ success: false, error: 'Tenant context required' });
     }
 
@@ -68,11 +71,12 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
 
     const [activities, total] = await Promise.all([
       AuditLog.find(filter)
+        .setOptions(queryOptions)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      AuditLog.countDocuments(filter)
+      AuditLog.countDocuments(filter, queryOptions)
     ]);
 
     const isAdmin = req.user?.role === 'ADMIN' || req.user?.role === 'SUPER_ADMIN';
@@ -112,13 +116,17 @@ router.get('/entity/:type/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), 
       entityId: new mongoose.Types.ObjectId(id)
     };
 
+    const queryOptions = {};
     if (req.tenantId) {
       filter.tenantId = req.tenantId;
-    } else if (req.user?.role !== 'SUPER_ADMIN') {
+    } else if (req.user?.role === 'SUPER_ADMIN') {
+      queryOptions.skipTenantIsolation = true;
+    } else {
       return res.status(403).json({ success: false, error: 'Tenant context required' });
     }
 
     const activities = await AuditLog.find(filter)
+      .setOptions(queryOptions)
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();

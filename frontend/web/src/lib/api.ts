@@ -11,8 +11,10 @@ async function parseResponse<T>(response: Response): Promise<T> {
   if (contentType.includes("application/json")) {
     const data = (await response.json()) as T & ApiErrorShape;
     if (!response.ok) {
-      const errPayload = data as { message?: string; error?: string };
-      throw new Error(errPayload.message || errPayload.error || "Request failed");
+      const errPayload = data as { message?: string; error?: string; detail?: string; details?: string };
+      const err = new Error(errPayload.detail || errPayload.error || errPayload.message || "Request failed") as Error & { data?: any };
+      err.data = data;
+      throw err;
     }
     return data as T;
   }
@@ -34,8 +36,9 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}) {
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
 
   const csrfToken = getCookie("csrfToken");
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     ...(init.headers as Record<string, string> ?? {}),
   };
   if (csrfToken) {

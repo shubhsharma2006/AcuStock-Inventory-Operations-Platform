@@ -2,9 +2,10 @@ const express = require('express');
 const mongoose = require('mongoose');
 const Warehouse = require('../models/Warehouse');
 const StockLedger = require('../models/StockLedger');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // GET /api/warehouses - List all warehouses
 router.get('/', requireAuth, async (req, res) => {
@@ -135,7 +136,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req,
       capacity:      capacity !== undefined ? Number(capacity) : undefined,
       notes:         notes ? String(notes).trim() : undefined,
       createdBy:     req.user._id,
-      tenantId:      req.tenantId || undefined
+      tenantId:      req.tenantId
     });
 
     await warehouse.save();
@@ -154,8 +155,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'SUPER_A
   try {
     const { name, code, address, contactPerson, phone, email, isDefault, capacity, notes, isActive } = req.body;
 
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const warehouse = await Warehouse.findOne(filter);
     if (!warehouse) {
@@ -210,8 +210,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'SUPER_A
 // DELETE /api/warehouses/:id - Soft delete
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id, isActive: true };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, isActive: true, tenantId: req.tenantId };
 
     const warehouse = await Warehouse.findOne(filter);
     if (!warehouse) {
@@ -221,6 +220,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'SUPE
     // Check if warehouse has positive stock
     const stockEntries = await StockLedger.findOne({
       warehouseId: warehouse._id,
+      tenantId: req.tenantId,
       isDeleted: false
     });
     if (stockEntries) {

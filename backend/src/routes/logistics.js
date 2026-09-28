@@ -1,7 +1,9 @@
 const express = require('express');
-const router = express.Router();
-const { requireAuth, requireRole, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
 const Transporter = require('../models/Transporter');
+
+const router = express.Router();
+router.use(requireTenantId);
 
 /**
  * GET /api/logistics
@@ -13,8 +15,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { page, limit } = normalizePaginationQuery(req.query);
     
     // Build query - Admin and Manager can see all transporters
-    const query = { isDeleted: { $ne: true } };
-    if (req.tenantId) query.tenantId = req.tenantId;
+    const query = { isDeleted: { $ne: true }, tenantId: req.tenantId };
     
     // For regular users, show only their own transporters
     if (req.userRole === 'USER') {
@@ -71,9 +72,9 @@ router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
     const filter = {
       _id: req.params.id,
-      isDeleted: { $ne: true }
+      isDeleted: { $ne: true },
+      tenantId: req.tenantId
     };
-    if (req.tenantId) filter.tenantId = req.tenantId;
 
     const transporter = await Transporter.findOne(filter)
       .populate('createdBy', 'name')
@@ -130,13 +131,13 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       serviceAreas,
       notes,
       createdBy: req.userId,
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId
     });
     
     await transporter.save();
     
     // Populate and return
-    const populated = await Transporter.findOne({ _id: transporter._id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) })
+    const populated = await Transporter.findOne({ _id: transporter._id, tenantId: req.tenantId })
       .populate('createdBy', 'name');
     
     res.status(201).json({
@@ -155,8 +156,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
  */
 router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id, isDeleted: { $ne: true } };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, isDeleted: { $ne: true }, tenantId: req.tenantId };
 
     const transporter = await Transporter.findOne(filter);
     
@@ -203,8 +203,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
  */
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id, isDeleted: { $ne: true } };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, isDeleted: { $ne: true }, tenantId: req.tenantId };
 
     const transporter = await Transporter.findOne(filter);
     
@@ -234,8 +233,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
 router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
     const { isActive } = req.body;
-    const filter = { _id: req.params.id, isDeleted: { $ne: true } };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, isDeleted: { $ne: true }, tenantId: req.tenantId };
 
     const transporter = await Transporter.findOne(filter);
     

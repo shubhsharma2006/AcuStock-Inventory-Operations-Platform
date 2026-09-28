@@ -12,10 +12,11 @@ const express     = require('express');
 const User        = require('../models/User');
 const StockLedger = require('../models/StockLedger');
 const AuditLog    = require('../models/AuditLog');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireTenantId } = require('../middleware/auth');
 const logger      = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ router.delete('/delete-account', requireAuth, async (req, res) => {
   }
 
   try {
-    const user = await User.findOne({ _id: req.userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) });
+    const user = await User.findOne({ _id: req.userId, tenantId: req.tenantId });
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
     if (user.isDeleted) {
@@ -126,7 +127,7 @@ router.delete('/delete-account', requireAuth, async (req, res) => {
         performedBy: req.userId,
         ipAddress:   req.ip,
         userAgent:   req.headers['user-agent'],
-        tenantId:    req.tenantId || undefined,
+        tenantId:    req.tenantId,
         metadata:    { selfInitiated: true }
       });
     } catch (_) { /* non-blocking */ }

@@ -1,9 +1,10 @@
 const express = require('express');
 const User = require('../models/User');
-const { requireAuth, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireTenantId, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // GET /api/managers - Get all managers (Admin only, paginated)
 router.get('/', requireAuth, requirePermission('canManageManagers'), async (req, res) => {
@@ -15,7 +16,7 @@ router.get('/', requireAuth, requirePermission('canManageManagers'), async (req,
     const query = {
       role: 'MANAGER',
       isDeleted: { $ne: true },
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     };
 
     const [managers, total] = await Promise.all([
@@ -42,7 +43,7 @@ router.get('/:id', requireAuth, validateObjectId, requirePermission('canManageMa
       _id: req.params.id, 
       role: 'MANAGER',
       $or: [{ isDeleted: { $ne: true } }, { isDeleted: { $exists: false } }],
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     }).select('-password');
     if (!manager) {
       return res.status(404).json({ message: 'Manager not found' });
@@ -75,7 +76,7 @@ router.put('/:id', requireAuth, validateObjectId, requirePermission('canManageMa
         email: email.toLowerCase(), 
         _id: { $ne: id }, 
         role: 'MANAGER',
-        ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        tenantId: req.tenantId
       });
       if (existingManager) {
         return res.status(400).json({ message: 'Email already in use by another manager' });
@@ -85,7 +86,7 @@ router.put('/:id', requireAuth, validateObjectId, requirePermission('canManageMa
     const manager = await User.findOne({ 
       _id: id, 
       role: 'MANAGER',
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
     if (!manager) {
       return res.status(404).json({ message: 'Manager not found' });
@@ -115,7 +116,7 @@ router.delete('/:id', requireAuth, validateObjectId, requirePermission('canManag
         const manager = await User.findOne({ 
           _id: req.params.id, 
           role: 'MANAGER',
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (!manager) {
             return res.status(404).json({ message: 'Manager not found' });
@@ -152,7 +153,7 @@ router.put('/:id/status', requireAuth, validateObjectId, requirePermission('canM
         const manager = await User.findOne({ 
           _id: id, 
           role: 'MANAGER',
-          ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          tenantId: req.tenantId
         });
         if (!manager) {
             return res.status(404).json({ message: 'Manager not found' });

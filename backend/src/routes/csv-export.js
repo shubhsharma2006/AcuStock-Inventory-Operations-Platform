@@ -11,10 +11,13 @@ const express     = require('express');
 const StockLedger = require('../models/StockLedger');
 const Item        = require('../models/Item');
 const User        = require('../models/User');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const logger      = require('../utils/logger');
 
 const router = express.Router();
+
+// Fail-closed tenant isolation guard for all CSV exports
+router.use(requireTenantId);
 
 // ── Shared CSV helpers ─────────────────────────────────────────
 
@@ -136,7 +139,7 @@ router.get('/users/export/csv', requireAuth, requireRole(['ADMIN']), async (req,
     while (hasMore) {
       const users = await User.find({ 
         isDeleted: { $ne: true },
-        ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        tenantId: req.tenantId
       })
         .select('name email phone role isActive createdAt lastLogin forcePasswordReset')
         .sort({ createdAt: -1 })
@@ -190,8 +193,7 @@ router.get('/items/export/csv', requireAuth, requireRole(['ADMIN']), async (req,
     let hasMore = true;
 
     while (hasMore) {
-      const Item = require('../models/Item');
-      const items = await Item.find({ ...(req.tenantId ? { tenantId: req.tenantId } : {}) })
+      const items = await Item.find({ tenantId: req.tenantId })
         .sort({ name: 1 })
         .skip(skip)
         .limit(BATCH_SIZE);

@@ -1,6 +1,7 @@
 "use client";
 
 import { DashboardMetrics } from "@/components/dashboard-metrics";
+import { DashboardKpiStrip } from "@/components/dashboard-kpi-strip";
 import { useAdminDashboardData } from "@/hooks/use-dashboard-data";
 import { useRealtimeState } from "@/components/realtime-provider";
 
@@ -67,6 +68,9 @@ export function AdminDashboardView() {
           </div>
         </div>
       </section>
+
+      {/* Financial & Operational KPI Radar */}
+      <DashboardKpiStrip basePath="/dashboard/admin" refreshToken={refreshToken} />
 
       {/* Metrics Cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">

@@ -71,7 +71,7 @@ async function generateDailySummary(triggeredBy = 'scheduler', tenantId = null) 
   }
 
   const movements = await StockLedger.aggregate([
-    { $match: { createdAt: { $gte: start, $lte: end }, ...tenantFilter } },
+    { $match: { createdAt: { $gte: start, $lte: end }, tenantId: new mongoose.Types.ObjectId(tenantId) } },
     {
       $group: {
         _id: { productId: '$productId', type: '$type' },
@@ -86,7 +86,7 @@ async function generateDailySummary(triggeredBy = 'scheduler', tenantId = null) 
         pipeline: [{
           $match: { $expr: { $and: [
             { $eq: ['$_id', '$$productId'] },
-            { $eq: ['$tenantId', tenantId] }
+            { $eq: ['$tenantId', new mongoose.Types.ObjectId(tenantId)] }
           ] } }
         }],
         as: 'product'
@@ -121,7 +121,7 @@ async function generateDailySummary(triggeredBy = 'scheduler', tenantId = null) 
       data: summary, 
       generatedBy: triggeredBy, 
       generatedAt: new Date(),
-      tenantId: tenantId || undefined
+      tenantId
     },
     { upsert: true, new: true }
   );
@@ -158,7 +158,7 @@ async function generateWeeklyLowStock(triggeredBy = 'scheduler', tenantId = null
 
   // Aggregate current stock per item
   const stockAgg = await StockLedger.aggregate([
-    { $match: { ...tenantFilter } },
+    { $match: { tenantId: new mongoose.Types.ObjectId(tenantId) } },
     {
       $group: {
         _id: '$productId',
@@ -201,7 +201,7 @@ async function generateWeeklyLowStock(triggeredBy = 'scheduler', tenantId = null
       data: summary, 
       generatedBy: triggeredBy, 
       generatedAt: new Date(),
-      tenantId: tenantId || undefined
+      tenantId
     },
     { upsert: true, new: true }
   );

@@ -81,6 +81,15 @@ const shipmentSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  transporterId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Transporter',
+    default: null
+  },
+  trackingUrl: {
+    type: String,
+    trim: true
+  },
   awb: {
     type: String,
     trim: true,

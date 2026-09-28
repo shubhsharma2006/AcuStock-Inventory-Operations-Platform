@@ -3,22 +3,17 @@ const router     = express.Router();
 const mongoose   = require('mongoose');
 const Warranty      = require('../models/Warranty');
 const Notification  = require('../models/Notification');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 
 router.use(requireAuth);
+router.use(requireTenantId);
 
 // ── GET /api/warranty/stats ────────────────────────────────────
 router.get('/stats', async (req, res) => {
   try {
-    const pMatch = { isActive: true, 'purchaseWarranty.months': { $gt: 0 } };
-    const sMatch = { isActive: true, 'sellerWarranty.months': { $gt: 0 }, 'sellerWarranty.status': { $nin: ['not-sold', 'none'] } };
-    const notSoldFilter = { isActive: true, 'sellerWarranty.status': 'not-sold' };
-
-    if (req.tenantId) {
-      pMatch.tenantId = req.tenantId;
-      sMatch.tenantId = req.tenantId;
-      notSoldFilter.tenantId = req.tenantId;
-    }
+    const pMatch = { isActive: true, 'purchaseWarranty.months': { $gt: 0 }, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const sMatch = { isActive: true, 'sellerWarranty.months': { $gt: 0 }, 'sellerWarranty.status': { $nin: ['not-sold', 'none'] }, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const notSoldFilter = { isActive: true, 'sellerWarranty.status': 'not-sold', tenantId: req.tenantId };
 
     const [purchase, seller] = await Promise.all([
       Warranty.aggregate([
@@ -51,9 +46,9 @@ router.get('/serial/:serial', async (req, res) => {
   try {
     const filter = {
       serialNumber: req.params.serial.trim().toUpperCase(),
-      isActive: true
+      isActive: true,
+      tenantId: req.tenantId
     };
-    if (req.tenantId) filter.tenantId = req.tenantId;
 
     const warranty = await Warranty.findOne(filter)
       .populate('productId', 'name sku unit category')
@@ -73,9 +68,7 @@ router.get('/serial/:serial', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { type, status, productId, search, page = 1, limit = 20 } = req.query;
-    const filter = { isActive: true };
-
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { isActive: true, tenantId: req.tenantId };
 
     // Data isolation: non-SUPER_ADMIN users see only their own company's records if companyId is set
     if (req.user.role !== 'SUPER_ADMIN' && req.user.companyId) {
@@ -133,8 +126,7 @@ router.get('/:id', async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ message: 'Invalid ID' });
 
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const warranty = await Warranty.findOne(filter)
       .populate('productId', 'name sku unit category')
@@ -163,8 +155,7 @@ router.post('/:id/claim', async (req, res) => {
     if (!description || description.trim().length < 5)
       return res.status(400).json({ message: 'Description is required (min 5 chars)' });
 
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const warranty = await Warranty.findOne(filter);
     if (!warranty) return res.status(404).json({ message: 'Warranty not found' });
@@ -180,7 +171,7 @@ router.post('/:id/claim', async (req, res) => {
         title: 'Warranty Claim Raised',
         message: `A ${claimType} warranty claim was raised for serial ${warranty.serialNumber || 'N/A'}.`,
         link: 'warranty-list',
-        tenantId: req.tenantId || undefined,
+        tenantId: req.tenantId,
         metadata: {
           warrantyId:  String(warranty._id),
           serialNumber: warranty.serialNumber,
@@ -214,8 +205,7 @@ router.put('/:id/claim/:claimId', requireRole(['ADMIN', 'MANAGER']), async (req,
     if (!status || !validStatuses.includes(status))
       return res.status(400).json({ message: `status must be one of: ${validStatuses.join(', ')}` });
 
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const warranty = await Warranty.findOne(filter);
     if (!warranty) return res.status(404).json({ message: 'Warranty not found' });

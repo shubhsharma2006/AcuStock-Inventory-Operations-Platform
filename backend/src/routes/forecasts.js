@@ -15,10 +15,11 @@ const express = require('express');
 const mongoose = require('mongoose');
 const Item = require('../models/Item');
 const StockLedger = require('../models/StockLedger');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 /**
  * Helper: Calculate standard deviation of an array of numbers
@@ -33,7 +34,8 @@ function calculateStdDev(values, mean) {
 // ── GET /api/forecasts/reorder-recommendations ──────────────────────────────
 router.get('/reorder-recommendations', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantId = req.tenantId;
+    const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
     const lookbackDays = Math.min(180, Math.max(14, parseInt(req.query.days) || 60));
     const defaultLeadTimeDays = 7;
     const reviewPeriodDays = 14;
@@ -43,7 +45,7 @@ router.get('/reorder-recommendations', requireAuth, requireRole(['ADMIN', 'SUPER
     startDate.setDate(startDate.getDate() - lookbackDays);
 
     // 1. Fetch all items for this tenant
-    const items = await Item.find({ ...tenantFilter, isDeleted: { $ne: true } })
+    const items = await Item.find({ tenantId, isDeleted: { $ne: true } })
       .select('name shortName sku uom lowStockThreshold serialPolicy')
       .lean();
 
@@ -55,7 +57,7 @@ router.get('/reorder-recommendations', requireAuth, requireRole(['ADMIN', 'SUPER
 
     // 2. Fetch current stock balance per item (from ledger)
     const stockBalance = await StockLedger.aggregate([
-      { $match: { ...tenantFilter, productId: { $in: itemIds } } },
+      { $match: { tenantId: tenantObjectId, productId: { $in: itemIds } } },
       {
         $group: {
           _id: '$productId',
@@ -82,7 +84,7 @@ router.get('/reorder-recommendations', requireAuth, requireRole(['ADMIN', 'SUPER
     const dailyOutflows = await StockLedger.aggregate([
       {
         $match: {
-          ...tenantFilter,
+          tenantId: tenantObjectId,
           productId: { $in: itemIds },
           type: { $in: ['OUT', 'TRANSFER_OUT'] },
           createdAt: { $gte: startDate }
@@ -201,8 +203,9 @@ router.get('/demand/:productId', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid productId' });
     }
 
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
-    const item = await Item.findOne({ _id: productId, ...tenantFilter }).select('name sku uom');
+    const tenantId = req.tenantId;
+    const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+    const item = await Item.findOne({ _id: productId, tenantId }).select('name sku uom');
     if (!item) {
       return res.status(404).json({ success: false, error: 'Product not found' });
     }
@@ -214,7 +217,7 @@ router.get('/demand/:productId', requireAuth, async (req, res) => {
     const dailyData = await StockLedger.aggregate([
       {
         $match: {
-          ...tenantFilter,
+          tenantId: tenantObjectId,
           productId: new mongoose.Types.ObjectId(productId),
           type: { $in: ['OUT', 'TRANSFER_OUT'] },
           createdAt: { $gte: past30Days }

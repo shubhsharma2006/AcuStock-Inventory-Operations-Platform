@@ -3,9 +3,10 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Item = require('../models/Item');
 const StockLedger = require('../models/StockLedger');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // ============================================================
 // IN-PROCESS DASHBOARD CACHE
@@ -45,10 +46,10 @@ router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN', 'SUPER_A
     const userObjectId = new mongoose.Types.ObjectId(userId);
     
     // Build query for find (auto-casts string to ObjectId)
-    const query = { createdBy: userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const query = { createdBy: userId, tenantId: req.tenantId };
     
     // Build query for aggregation (needs explicit ObjectId)
-    const aggQuery = { createdBy: userObjectId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const aggQuery = { createdBy: userObjectId, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
     
     if (startDate || endDate) {
       query.createdAt = {};
@@ -69,7 +70,7 @@ router.get('/user-activity/:userId', requireAuth, requireRole(['ADMIN', 'SUPER_A
     }
     
     // Get user info
-    const user = await User.findOne({ _id: userId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) }).select('name email phone role');
+    const user = await User.findOne({ _id: userId, tenantId: req.tenantId }).select('name email phone role');
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -118,7 +119,7 @@ router.get('/user-summary', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), 
     const { role, startDate, endDate } = req.query;
     
     // Get all users/managers
-    const userQuery = { isActive: true, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const userQuery = { isActive: true, tenantId: req.tenantId };
     if (role && ['MANAGER', 'USER'].includes(role)) {
       userQuery.role = role;
     } else {
@@ -128,7 +129,7 @@ router.get('/user-summary', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), 
     const users = await User.find(userQuery).select('name email phone role lastLogin createdAt');
     
     // Build date filter for aggregation
-    const dateMatch = { ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const dateMatch = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
     if (startDate || endDate) {
       dateMatch.createdAt = {};
       if (startDate) dateMatch.createdAt.$gte = new Date(startDate);
@@ -201,7 +202,7 @@ async function handleProductByUser(req, res) {
     
     const matchQuery = { 
       createdBy: new (require('mongoose').Types.ObjectId)(userId),
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: new mongoose.Types.ObjectId(req.tenantId)
     };
     
     if (startDate || endDate) {
@@ -273,7 +274,7 @@ router.get('/stock-movement', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN'])
   try {
     const stockMovements = await StockLedger.aggregate([
       {
-        $match: { ...(req.tenantId ? { tenantId: req.tenantId } : {}) }
+        $match: { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
       },
       {
         $group: {
@@ -320,7 +321,7 @@ router.get('/my-activity', requireAuth, async (req, res) => {
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
 
     // Build a single query object used by BOTH find() and aggregate()
-    const query = { createdBy: userObjectId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const query = { createdBy: userObjectId, tenantId: req.tenantId };
     
     if (startDate || endDate) {
       query.createdAt = {};
@@ -351,8 +352,9 @@ router.get('/my-activity', requireAuth, async (req, res) => {
     // Summary aggregation — use same query so filters (date, type) are respected
     // Strip the 'type' filter for the summary so we always get both IN and OUT totals
     const { type: _t, ...summaryQuery } = query;
+    const summaryMatch = { ...summaryQuery, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
     const summary = await StockLedger.aggregate([
-      { $match: summaryQuery },
+      { $match: summaryMatch },
       {
         $group: {
           _id: '$type',
@@ -396,7 +398,7 @@ router.get('/my-products', requireAuth, async (req, res) => {
     const { startDate, endDate } = req.query;
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
 
-    const matchQuery = { createdBy: userObjectId, ...(req.tenantId ? { tenantId: req.tenantId } : {}) };
+    const matchQuery = { createdBy: userObjectId, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
     
     if (startDate || endDate) {
       matchQuery.createdAt = {};
@@ -472,13 +474,14 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantFilter = { tenantId: req.tenantId };
+    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
 
     // Get own activity counts
     const [totalActivity, todayActivity, productCount] = await Promise.all([
       // Total activity
       StockLedger.aggregate([
-        { $match: { createdBy: userObjectId, ...tenantFilter } },
+        { $match: { createdBy: userObjectId, ...tenantAggFilter } },
         { $group: { 
           _id: '$type', 
           count: { $sum: 1 }, 
@@ -487,7 +490,7 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
       ]),
       // Today's activity
       StockLedger.aggregate([
-        { $match: { createdBy: userObjectId, createdAt: { $gte: today }, ...tenantFilter } },
+        { $match: { createdBy: userObjectId, createdAt: { $gte: today }, ...tenantAggFilter } },
         { $group: { 
           _id: '$type', 
           count: { $sum: 1 }, 
@@ -540,7 +543,8 @@ const handleAdminDashboard = async (req, res) => {
   try {
     const Company = require('../models/Company');
     const mongoose = require('mongoose');
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantFilter = { tenantId: req.tenantId };
+    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
     
     // Date calculations
     const now = new Date();
@@ -569,7 +573,7 @@ const handleAdminDashboard = async (req, res) => {
     
     // Get total stock count from StockLedger (IN - OUT = current stock)
     const stockAgg = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$productId',
@@ -596,7 +600,7 @@ const handleAdminDashboard = async (req, res) => {
     
     // ========== TODAY'S STOCK IN/OUT ==========
     const todayStockAgg = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: today }, ...tenantFilter } },
+      { $match: { createdAt: { $gte: today }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$type',
@@ -617,7 +621,7 @@ const handleAdminDashboard = async (req, res) => {
     
     // ========== STOCK MOVEMENT CHART (Last 7 days) ==========
     const stockMovementData = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo }, ...tenantFilter } },
+      { $match: { createdAt: { $gte: sevenDaysAgo }, ...tenantAggFilter } },
       {
         $group: {
           _id: {
@@ -652,7 +656,7 @@ const handleAdminDashboard = async (req, res) => {
     // ========== PRODUCT-WISE STOCK CHART ==========
     // Calculate from StockLedger (IN adds, OUT subtracts)
     const productWiseStock = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$productId',
@@ -706,7 +710,7 @@ const handleAdminDashboard = async (req, res) => {
         $match: {
           createdAt: { $gte: sevenDaysAgo },
           createdByRole: 'MANAGER',
-          ...tenantFilter
+          ...tenantAggFilter
         }
       },
       {
@@ -740,7 +744,7 @@ const handleAdminDashboard = async (req, res) => {
         $match: {
           createdAt: { $gte: sevenDaysAgo },
           createdByRole: 'USER',
-          ...tenantFilter
+          ...tenantAggFilter
         }
       },
       {
@@ -771,7 +775,7 @@ const handleAdminDashboard = async (req, res) => {
     // ========== LOW STOCK ALERTS ==========
     // Calculate current stock from StockLedger
     const lowStockProducts = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$productId',
@@ -840,7 +844,7 @@ const handleAdminDashboard = async (req, res) => {
     
     // ========== TOP PERFORMERS (Managers & Users) ==========
     const topPerformers = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: thirtyDaysAgo }, createdByRole: { $in: ['MANAGER', 'USER'] }, ...tenantFilter } },
+      { $match: { createdAt: { $gte: thirtyDaysAgo }, createdByRole: { $in: ['MANAGER', 'USER'] }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$createdBy',
@@ -942,6 +946,219 @@ router.get('/dashboard', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANA
 router.get('/dashboard-stats', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), handleAdminDashboard);
 
 // ============================================================
+// GET /api/reports/kpis — Financial & Operational KPIs
+// ============================================================
+// Returns: stock valuation at cost & retail, gross margin %,
+// dead stock identification, stockout risk, open order pipeline.
+// period query param: 7d | 30d | 90d | ytd (default: 30d)
+// ============================================================
+router.get('/kpis', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  const cacheKey = `${req.tenantId || 'global'}:kpis:${req.query.period || '30d'}`;
+  const cached = getCached(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const PurchaseOrder = require('../models/PurchaseOrder');
+    const SalesOrder    = require('../models/SalesOrder');
+    const tenantFilter  = { tenantId: req.tenantId };
+    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+
+    // ── Determine dead stock window from period param ──────
+    const period = req.query.period || '30d';
+    let deadStockDays = 30;
+    const now = new Date();
+    if (period === '7d')  deadStockDays = 7;
+    if (period === '30d') deadStockDays = 30;
+    if (period === '90d') deadStockDays = 90;
+    if (period === 'ytd') {
+      deadStockDays = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / 86400000);
+    }
+    const deadStockSince = new Date(now.getTime() - deadStockDays * 86400000);
+
+    // ── 1. Current stock per product with financial valuation ──
+    const valuationPipeline = [
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
+      {
+        $group: {
+          _id: '$productId',
+          totalIn:  { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', 0] } },
+          totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$quantity', 0] } }
+        }
+      },
+      { $addFields: { currentStock: { $subtract: ['$totalIn', '$totalOut'] } } },
+      { $match: { currentStock: { $gt: 0 } } },
+      {
+        $lookup: {
+          from: 'items',
+          let:  { pid: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: [{ $eq: ['$_id', '$$pid'] }, { $ne: ['$isActive', false] }] } } },
+            { $project: { purchasePrice: 1, salesPrice: 1, name: 1, lowStockThreshold: 1 } }
+          ],
+          as: 'item'
+        }
+      },
+      { $unwind: '$item' },
+      {
+        $group: {
+          _id: null,
+          valuationAtCost:   { $sum: { $multiply: ['$currentStock', { $ifNull: ['$item.purchasePrice', 0] }] } },
+          valuationAtRetail: { $sum: { $multiply: ['$currentStock', { $ifNull: ['$item.salesPrice', 0] }] } },
+          totalStockUnits:   { $sum: '$currentStock' },
+          productCount:      { $sum: 1 }
+        }
+      }
+    ];
+
+    // ── 2. Dead stock: products with stock > 0 but no OUT in past N days ──
+    const recentOutProductIds = await StockLedger.distinct('productId', {
+      type: 'OUT',
+      createdAt: { $gte: deadStockSince },
+      ...tenantFilter
+    });
+
+    const deadStockPipeline = [
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
+      {
+        $group: {
+          _id: '$productId',
+          totalIn:  { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', 0] } },
+          totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$quantity', 0] } }
+        }
+      },
+      { $addFields: { currentStock: { $subtract: ['$totalIn', '$totalOut'] } } },
+      { $match: { currentStock: { $gt: 0 }, _id: { $nin: recentOutProductIds } } },
+      {
+        $lookup: {
+          from: 'items',
+          let:  { pid: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: [{ $eq: ['$_id', '$$pid'] }, { $ne: ['$isActive', false] }] } } },
+            { $project: { purchasePrice: 1, name: 1, shortName: 1 } }
+          ],
+          as: 'item'
+        }
+      },
+      { $unwind: { path: '$item', preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: null,
+          itemCount:      { $sum: 1 },
+          trappedCapital: { $sum: { $multiply: ['$currentStock', { $ifNull: ['$item.purchasePrice', 0] }] } }
+        }
+      }
+    ];
+
+    // ── 3. Stockout risk: products with stock <= lowStockThreshold ──
+    const stockoutPipeline = [
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
+      {
+        $group: {
+          _id: '$productId',
+          totalIn:  { $sum: { $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', 0] } },
+          totalOut: { $sum: { $cond: [{ $eq: ['$type', 'OUT'] }, '$quantity', 0] } }
+        }
+      },
+      { $addFields: { currentStock: { $subtract: ['$totalIn', '$totalOut'] } } },
+      {
+        $lookup: {
+          from: 'items',
+          let:  { pid: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $and: [{ $eq: ['$_id', '$$pid'] }, { $ne: ['$isActive', false] }] } } },
+            { $project: { lowStockThreshold: 1, name: 1, shortName: 1 } }
+          ],
+          as: 'item'
+        }
+      },
+      { $unwind: '$item' },
+      {
+        $match: {
+          $expr: {
+            $lte: ['$currentStock', { $ifNull: ['$item.lowStockThreshold', 10] }]
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          productId: '$_id',
+          name: '$item.name',
+          shortName: '$item.shortName',
+          currentStock: 1,
+          threshold: { $ifNull: ['$item.lowStockThreshold', 10] }
+        }
+      },
+      { $sort: { currentStock: 1 } },
+      { $limit: 10 }
+    ];
+
+    // ── 4. Open order pipeline ─────────────────────────────
+    const [
+      valuationResult,
+      deadStockResult,
+      stockoutItems,
+      pendingPOs,
+      pendingSOs
+    ] = await Promise.all([
+      StockLedger.aggregate(valuationPipeline),
+      StockLedger.aggregate(deadStockPipeline),
+      StockLedger.aggregate(stockoutPipeline),
+      PurchaseOrder.aggregate([
+        { $match: { status: { $in: ['draft', 'approved', 'sent'] }, ...tenantAggFilter } },
+        { $group: { _id: null, count: { $sum: 1 }, totalValue: { $sum: '$totalValue' } } }
+      ]),
+      SalesOrder.aggregate([
+        { $match: { status: { $in: ['draft', 'confirmed', 'picking'] }, ...tenantAggFilter } },
+        { $group: { _id: null, count: { $sum: 1 }, totalValue: { $sum: '$totalValue' } } }
+      ])
+    ]);
+
+    // ── Compute margin ─────────────────────────────────────
+    const val = valuationResult[0] || { valuationAtCost: 0, valuationAtRetail: 0, totalStockUnits: 0, productCount: 0 };
+    const potentialMarginPercent = val.valuationAtRetail > 0
+      ? parseFloat((((val.valuationAtRetail - val.valuationAtCost) / val.valuationAtRetail) * 100).toFixed(1))
+      : 0;
+
+    const kpis = {
+      period,
+      financials: {
+        valuationAtCost:       parseFloat((val.valuationAtCost || 0).toFixed(2)),
+        valuationAtRetail:     parseFloat((val.valuationAtRetail || 0).toFixed(2)),
+        potentialMarginPercent,
+        totalStockUnits:       val.totalStockUnits || 0,
+        productCount:          val.productCount    || 0
+      },
+      deadStock: {
+        itemCount:      deadStockResult[0]?.itemCount      || 0,
+        trappedCapital: parseFloat((deadStockResult[0]?.trappedCapital || 0).toFixed(2)),
+        windowDays:     deadStockDays
+      },
+      stockoutRisk: {
+        criticalCount: stockoutItems.length,
+        items:         stockoutItems
+      },
+      pipeline: {
+        pendingPOs: {
+          count:      pendingPOs[0]?.count      || 0,
+          totalValue: parseFloat((pendingPOs[0]?.totalValue || 0).toFixed(2))
+        },
+        pendingSOs: {
+          count:      pendingSOs[0]?.count      || 0,
+          totalValue: parseFloat((pendingSOs[0]?.totalValue || 0).toFixed(2))
+        }
+      }
+    };
+
+    setCache(cacheKey, kpis);
+    res.json(kpis);
+  } catch (error) {
+    console.error('Error fetching KPIs:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ============================================================
 // USER/MANAGER SELF-SERVICE REPORTS
 // ============================================================
 
@@ -952,7 +1169,7 @@ router.get('/dashboard-stats', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']
 router.get('/user-stats', requireAuth, async (req, res) => {
   try {
     const userId = req.user._id;
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantFilter = { tenantId: req.tenantId };
 
     // Count stock IN entries by this user
     const stockInCount = await StockLedger.countDocuments({
@@ -1005,7 +1222,7 @@ router.get('/user-activity', requireAuth, async (req, res) => {
   try {
     const userId = req.user._id;
     const limit = parseInt(req.query.limit) || 10;
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantFilter = { tenantId: req.tenantId };
 
     const activities = await StockLedger.find({ createdBy: userId, ...tenantFilter })
       .populate('productId', 'name shortName')
@@ -1040,7 +1257,8 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
 
   try {
     const Company = require('../models/Company');
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantFilter = { tenantId: req.tenantId };
+    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
     
     // Date calculations
     const now = new Date();
@@ -1067,7 +1285,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
       { 
         $match: { 
           createdAt: { $gte: today, $lt: tomorrow },
-          ...tenantFilter
+          ...tenantAggFilter
         } 
       },
       {
@@ -1083,7 +1301,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     
     // ========== STOCK MOVEMENT CHART (Last 7 days - All data) ==========
     const stockMovementData = await StockLedger.aggregate([
-      { $match: { createdAt: { $gte: sevenDaysAgo }, ...tenantFilter } },
+      { $match: { createdAt: { $gte: sevenDaysAgo }, ...tenantAggFilter } },
       {
         $group: {
           _id: {
@@ -1119,7 +1337,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     
     // ========== PRODUCT-WISE STOCK CHART (Top 5) ==========
     const productWiseStock = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$productId',
@@ -1161,7 +1379,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
     
     // ========== LOW STOCK ALERTS ==========
     const lowStockProducts = await StockLedger.aggregate([
-      { $match: { isDeleted: { $ne: true }, ...tenantFilter } },
+      { $match: { isDeleted: { $ne: true }, ...tenantAggFilter } },
       {
         $group: {
           _id: '$productId',
@@ -1261,7 +1479,8 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
 router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { type, startDate, endDate, userId } = req.query;
-    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantFilter = { tenantId: req.tenantId };
+    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
 
     if (!['stock-ledger', 'user-activity', 'products'].includes(type)) {
       return res.status(400).json({ message: 'type must be stock-ledger, user-activity, or products' });
@@ -1310,7 +1529,7 @@ router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async 
 
     // ── user-activity ──────────────────────────────────────────
     if (type === 'user-activity') {
-      const matchDate = { ...tenantFilter };
+      const matchDate = { ...tenantAggFilter };
       if (startDate) matchDate.createdAt = { $gte: new Date(startDate) };
       if (endDate)   matchDate.createdAt = { ...(matchDate.createdAt || {}), $lte: new Date(endDate + 'T23:59:59.999Z') };
 
@@ -1341,7 +1560,7 @@ router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async 
 
     // ── products ───────────────────────────────────────────────
     if (type === 'products') {
-      const matchDate = { ...tenantFilter };
+      const matchDate = { ...tenantAggFilter };
       if (startDate) matchDate.createdAt = { $gte: new Date(startDate) };
       if (endDate)   matchDate.createdAt = { ...(matchDate.createdAt || {}), $lte: new Date(endDate + 'T23:59:59.999Z') };
 

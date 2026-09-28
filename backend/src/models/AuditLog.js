@@ -200,6 +200,9 @@ auditLogSchema.statics.logEvent = async function(data) {
       tenantId: data.tenantId || null
     };
     const log = new this(payload);
+    if (!payload.tenantId) {
+      log.$locals = { skipTenantIsolation: true };
+    }
     await log.save();
     
     // Also log to console for development

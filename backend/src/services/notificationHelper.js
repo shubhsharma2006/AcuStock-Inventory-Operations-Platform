@@ -115,11 +115,15 @@ async function notify(opts) {
       relatedId:     opts.relatedId || null,
       createdBy:     opts.createdBy || null,
       createdByRole: opts.createdByRole || 'SYSTEM',
-      tenantId:      opts.tenantId || null,
+      tenantId:      opts.tenantId || undefined,
       metadata:      opts.metadata || {}
     };
 
-    const notification = await Notification.create(data);
+    const doc = new Notification(data);
+    if (!opts.tenantId) {
+      doc.$locals = { skipTenantIsolation: true };
+    }
+    const notification = await doc.save();
 
     // ── Emit Socket.IO event ───────────────────────────────
     if (global.emitRealTimeUpdate) {

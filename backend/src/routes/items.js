@@ -1,17 +1,20 @@
 const express = require('express');
 const multer = require('multer');
 const csv = require('csv-parser');
+const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 const Item = require('../models/Item');
 const Counter = require('../models/Counter');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const Tenant = require('../models/Tenant');
+const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
 const checkPlanLimits = require('../middleware/checkPlanLimits');
 const { validateCsvBuffer } = require('../services/storage.service');
 const { logBusinessEvent } = require('../utils/auditHelper');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // ============================================================
 // MULTER CONFIGURATION FOR CSV UPLOAD
@@ -29,17 +32,25 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'products-' + uniqueSuffix + '.csv');
+    const ext = path.extname(file.originalname).toLowerCase() || '.csv';
+    cb(null, 'products-' + uniqueSuffix + ext);
   }
 });
 
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype === 'text/csv' || 
-      file.originalname.toLowerCase().endsWith('.csv') ||
-      file.mimetype === 'application/vnd.ms-excel') {
+  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedExts = ['.csv', '.xlsx', '.xls'];
+  const allowedMimes = [
+    'text/csv',
+    'text/plain',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/octet-stream'
+  ];
+  if (allowedExts.includes(ext) || allowedMimes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Only CSV files are allowed'), false);
+    cb(new Error('Only CSV and Excel (.xlsx, .xls) files are allowed'), false);
   }
 };
 
@@ -75,7 +86,7 @@ function getUploadErrorResponse(error) {
 }
 
 const handleCsvUpload = (req, res, next) => {
-  upload.single('csvFile')(req, res, (err) => {
+  upload.fields([{ name: 'csvFile', maxCount: 1 }, { name: 'file', maxCount: 1 }])(req, res, (err) => {
     if (err) {
       const uploadError = getUploadErrorResponse(err);
       return res.status(uploadError.statusCode).json({
@@ -83,6 +94,10 @@ const handleCsvUpload = (req, res, next) => {
         error: uploadError.error,
         details: err.code === 'LIMIT_FILE_SIZE' ? `Maximum allowed size is ${(Number(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024) / (1024 * 1024)} MB` : undefined
       });
+    }
+
+    if (req.files) {
+      req.file = (req.files['csvFile'] && req.files['csvFile'][0]) || (req.files['file'] && req.files['file'][0]);
     }
 
     next();
@@ -95,9 +110,10 @@ const handleCsvUpload = (req, res, next) => {
 
 function parseBoolean(value) {
   if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
   if (typeof value === 'string') {
     const lower = value.toLowerCase().trim();
-    return lower === 'true' || lower === 'yes' || lower === '1';
+    return lower === 'true' || lower === 'yes' || lower === '1' || lower === 'y';
   }
   return false;
 }
@@ -197,7 +213,7 @@ router.get('/models-by-name/:productName', requireAuth, async (req, res) => {
     const StockLedger = require('../models/StockLedger');
     const itemsWithStock = await Promise.all(items.map(async (item) => {
       const stockResult = await StockLedger.aggregate([
-        { $match: { productId: item._id } },
+        { $match: { productId: item._id, tenantId: new mongoose.Types.ObjectId(req.tenantId) } },
         {
           $group: {
             _id: null,
@@ -224,6 +240,57 @@ router.get('/models-by-name/:productName', requireAuth, async (req, res) => {
 
 // GET /api/items/bulk-upload/template
 router.get('/bulk-upload/template', requireAuth, requireRole(['ADMIN']), (req, res) => {
+  const format = (req.query.format || 'csv').toLowerCase();
+  const sampleProducts = [
+    {
+      productName: 'Laptop Dell XPS 15',
+      shortName: 'DXPS15',
+      hsnCode: '8471',
+      salesPrice: 85000,
+      purchasePrice: 75000,
+      mrp: 90000,
+      warrantyPeriod: '12 months',
+      enableSerial: true,
+      requireSerialOnIN: true,
+      requireSerialOnOUT: true
+    },
+    {
+      productName: 'Wireless Mouse Logitech',
+      shortName: 'WMOUSE',
+      hsnCode: '8471',
+      salesPrice: 800,
+      purchasePrice: 500,
+      mrp: 999,
+      warrantyPeriod: '6 months',
+      enableSerial: false,
+      requireSerialOnIN: false,
+      requireSerialOnOUT: false
+    },
+    {
+      productName: 'USB-C Hub 7-in-1',
+      shortName: 'USBHUB',
+      hsnCode: '8471',
+      salesPrice: 2500,
+      purchasePrice: 1800,
+      mrp: 2999,
+      warrantyPeriod: '12 months',
+      enableSerial: true,
+      requireSerialOnIN: true,
+      requireSerialOnOUT: false
+    }
+  ];
+
+  if (format === 'xlsx' || format === 'excel') {
+    const ws = XLSX.utils.json_to_sheet(sampleProducts);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Products');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename=product-upload-template.xlsx');
+    return res.send(buffer);
+  }
+
   const template = 'productName,shortName,hsnCode,salesPrice,purchasePrice,mrp,warrantyPeriod,enableSerial,requireSerialOnIN,requireSerialOnOUT\nLaptop Dell XPS 15,DXPS15,8471,85000,75000,90000,12 months,true,true,true\nWireless Mouse Logitech,WMOUSE,8471,800,500,999,6 months,false,false,false\nUSB-C Hub 7-in-1,USBHUB,8471,2500,1800,2999,12 months,true,true,false';
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename=product-upload-template.csv');
@@ -233,79 +300,102 @@ router.get('/bulk-upload/template', requireAuth, requireRole(['ADMIN']), (req, r
 // POST /api/items/bulk-upload
 router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload, async (req, res) => {
   let filePath = null;
+  const isDryRun = req.query.dryRun === 'true' || req.body?.dryRun === 'true' || req.body?.dryRun === true;
   
   try {
     if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No CSV file uploaded' });
+      return res.status(400).json({ success: false, error: 'No CSV or Excel file uploaded' });
     }
     
     filePath = req.file.path;
-    const fileBuffer = await fs.promises.readFile(filePath);
-    if (!validateCsvBuffer(fileBuffer)) {
-      return res.status(400).json({ success: false, error: 'Uploaded file is not a valid text CSV' });
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const isExcel = ext === '.xlsx' || ext === '.xls';
+
+    let rawRows = [];
+
+    if (isExcel) {
+      const workbook = XLSX.readFile(filePath);
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        return res.status(400).json({ success: false, error: 'Excel file contains no sheets' });
+      }
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+    } else {
+      const fileBuffer = await fs.promises.readFile(filePath);
+      if (!validateCsvBuffer(fileBuffer)) {
+        return res.status(400).json({ success: false, error: 'Uploaded file is not a valid text CSV' });
+      }
+
+      await new Promise((resolve, reject) => {
+        fs.createReadStream(filePath)
+          .pipe(csv({ mapHeaders: ({ header }) => header.trim(), skipEmptyLines: true }))
+          .on('data', (row) => rawRows.push(row))
+          .on('end', resolve)
+          .on('error', reject);
+      });
     }
+
     const products = [];
     const errors = [];
     let rowIndex = 1;
-    
-    await new Promise((resolve, reject) => {
-      fs.createReadStream(filePath)
-        .pipe(csv({ mapHeaders: ({ header }) => header.trim(), skipEmptyLines: true }))
-        .on('data', (row) => {
-          rowIndex++;
-          const result = transformRow(row, req.user._id, rowIndex);
-          if (result.errors && result.errors.length > 0) {
-            errors.push(...result.errors);
-          } else if (result.product) {
-            products.push(result.product);
-          }
-        })
-        .on('end', resolve)
-        .on('error', reject);
-    });
+
+    for (const row of rawRows) {
+      rowIndex++;
+      const result = transformRow(row, req.user._id, rowIndex);
+      if (result.errors && result.errors.length > 0) {
+        errors.push(...result.errors);
+      } else if (result.product) {
+        products.push(result.product);
+      }
+    }
     
     if (errors.length > 0 && products.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'CSV validation failed',
-        errors: errors.slice(0, 20),
-        totalErrors: errors.length
-      });
+      if (!isDryRun) {
+        return res.status(400).json({
+          success: false,
+          error: `${isExcel ? 'Excel' : 'CSV'} validation failed`,
+          errors: errors.slice(0, 20),
+          totalErrors: errors.length
+        });
+      }
     }
     
-    if (products.length === 0) {
-      return res.status(400).json({ success: false, error: 'No valid products found in CSV' });
+    if (products.length === 0 && !isDryRun) {
+      return res.status(400).json({ success: false, error: `No valid products found in ${isExcel ? 'Excel' : 'CSV'} file` });
     }
     
-    // Check for duplicates within CSV using name + shortName combination
+    // Check for duplicates within file using name + shortName combination
     const productKeys = products.map(p => `${p.name.toLowerCase()}|${(p.shortName || '').toLowerCase()}`);
     const duplicateKeys = productKeys.filter((key, index) => productKeys.indexOf(key) !== index);
+    const duplicateProducts = duplicateKeys.length > 0 ? [...new Set(duplicateKeys)].map(key => {
+      const [name, shortName] = key.split('|');
+      return shortName ? `${name} (${shortName})` : name;
+    }) : [];
     
-    if (duplicateKeys.length > 0) {
-      const duplicateProducts = [...new Set(duplicateKeys)].map(key => {
-        const [name, shortName] = key.split('|');
-        return shortName ? `${name} (${shortName})` : name;
-      });
+    if (duplicateProducts.length > 0 && !isDryRun) {
       return res.status(400).json({
         success: false,
-        error: 'Duplicate product (name + model) combinations found in CSV',
+        error: `Duplicate product (name + model) combinations found in ${isExcel ? 'Excel' : 'CSV'}`,
         duplicates: duplicateProducts.slice(0, 10)
       });
     }
     
     // Check for existing products with same name + model within this tenant
-    const duplicateFilter = {
-      isActive: true,
-      $or: products.map(p => ({
-        name: { $regex: new RegExp(`^${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-        shortName: { $regex: new RegExp(`^${(p.shortName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-      }))
-    };
-    if (req.tenantId) duplicateFilter.tenantId = req.tenantId;
+    let existingProducts = [];
+    if (products.length > 0) {
+      const duplicateFilter = {
+        isActive: true,
+        tenantId: req.tenantId,
+        $or: products.map(p => ({
+          name: { $regex: new RegExp(`^${p.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+          shortName: { $regex: new RegExp(`^${(p.shortName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
+        }))
+      };
 
-    const existingProducts = await Item.find(duplicateFilter).select('name shortName');
+      existingProducts = await Item.find(duplicateFilter).select('name shortName');
+    }
     
-    if (existingProducts.length > 0) {
+    if (existingProducts.length > 0 && !isDryRun) {
       return res.status(400).json({
         success: false,
         error: 'Some products already exist in the database (same name + model)',
@@ -314,11 +404,66 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
       });
     }
 
-    if (req.tenantId) {
-      products.forEach(p => { p.tenantId = req.tenantId; });
+    // Plan limits validation
+    let planLimitRemaining = null;
+    if (req.tenantId && req.tenant) {
+      const limit = req.tenant.limits?.maxItems;
+      if (typeof limit === 'number' && limit !== -1) {
+        const currentUsage = req.tenant.usage?.items ?? (await Item.countDocuments({ tenantId: req.tenantId, isActive: true }));
+        planLimitRemaining = Math.max(0, limit - currentUsage);
+        const projectedUsage = currentUsage + products.length;
+
+        if (projectedUsage > limit) {
+          return res.status(402).json({
+            success: false,
+            error: 'Plan limit reached',
+            code: 'PLAN_LIMIT_EXCEEDED',
+            detail: `Your plan allows up to ${limit} items. You currently have ${currentUsage} and are trying to import ${products.length} items (total: ${projectedUsage}). Upgrade your plan to add more.`,
+            limitKey: 'maxItems',
+            current: currentUsage,
+            limit,
+            attempted: products.length,
+            remaining: planLimitRemaining
+          });
+        }
+      }
     }
+
+    // Dry Run response
+    if (isDryRun) {
+      return res.json({
+        success: true,
+        dryRun: true,
+        message: `Dry-run completed: ${products.length} valid, ${errors.length} validation errors found.`,
+        totalRows: rawRows.length,
+        validCount: products.length,
+        errorCount: errors.length,
+        errors: errors.slice(0, 50),
+        duplicates: duplicateProducts.length > 0 ? duplicateProducts.slice(0, 10) : [],
+        existingInDb: existingProducts.length > 0 ? existingProducts.map(p => p.shortName ? `${p.name} (${p.shortName})` : p.name).slice(0, 10) : [],
+        planLimitRemaining,
+        sample: products.slice(0, 5).map(p => ({
+          name: p.name,
+          shortName: p.shortName,
+          salesPrice: p.salesPrice,
+          purchasePrice: p.purchasePrice,
+          hsn: p.hsn,
+          enableSerial: p.serialPolicy?.enableSerial
+        }))
+      });
+    }
+
+    products.forEach(p => { p.tenantId = req.tenantId; });
     
     const insertedProducts = await Item.insertMany(products, { ordered: false });
+
+    // Update tenant item usage
+    if (req.tenantId) {
+      await Tenant.updateOne(
+        { _id: req.tenantId },
+        { $inc: { 'usage.items': insertedProducts.length } }
+      ).catch(() => {});
+    }
     
     if (global.emitRealTimeUpdate) {
       global.emitRealTimeUpdate('product-update', {
@@ -335,18 +480,20 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
       action: 'ITEM_IMPORTED',
       entityType: 'Item',
       changes: {
-        summary: `Bulk imported ${insertedProducts.length} items from CSV`
+        summary: `Bulk imported ${insertedProducts.length} items from ${isExcel ? 'Excel' : 'CSV'}`
       },
       details: {
         count: insertedProducts.length,
+        format: isExcel ? 'XLSX' : 'CSV',
         warningsCount: errors.length
       }
     }).catch(() => {});
     
     res.status(201).json({
       success: true,
-      message: 'Successfully uploaded ' + insertedProducts.length + ' products',
+      message: `Successfully uploaded ${insertedProducts.length} products`,
       count: insertedProducts.length,
+      format: isExcel ? 'XLSX' : 'CSV',
       warnings: errors.length > 0 ? errors.slice(0, 10) : undefined,
       warningCount: errors.length > 0 ? errors.length : undefined
     });
@@ -356,7 +503,7 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
     if (error.code === 11000) {
       return res.status(400).json({ success: false, error: 'Duplicate product found.', details: error.message });
     }
-    res.status(500).json({ success: false, error: 'Failed to process CSV file', details: error.message });
+    res.status(500).json({ success: false, error: 'Failed to process file', details: error.message });
   } finally {
     if (filePath && fs.existsSync(filePath)) {
       fs.unlink(filePath, (err) => {
@@ -373,11 +520,11 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
 // GET /api/items
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const filter = { isActive: true };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { isActive: true, tenantId: req.tenantId };
 
     const items = await Item.find(filter)
       .populate('createdBy', 'name email')
+      .populate('preferredSupplierId', 'companyName name')
       .sort({ createdAt: -1 });
 
     const itemsWithStock = await Promise.all(items.map(async (item) => {
@@ -402,10 +549,11 @@ router.get('/barcode/:code', requireAuth, async (req, res) => {
     if (!code) {
       return res.status(400).json({ message: 'Barcode code is required' });
     }
-    const filter = { barcode: code, isActive: true };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { barcode: code, isActive: true, tenantId: req.tenantId };
 
-    const item = await Item.findOne(filter).populate('createdBy', 'name email');
+    const item = await Item.findOne(filter)
+      .populate('createdBy', 'name email')
+      .populate('preferredSupplierId', 'companyName name');
     if (!item) {
       return res.status(404).json({ message: `No product found for barcode: ${code}` });
     }
@@ -427,10 +575,11 @@ router.get('/sku/:sku', requireAuth, async (req, res) => {
     if (!sku) {
       return res.status(400).json({ message: 'SKU is required' });
     }
-    const filter = { sku: sku, isActive: true };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { sku: sku, isActive: true, tenantId: req.tenantId };
 
-    const item = await Item.findOne(filter).populate('createdBy', 'name email');
+    const item = await Item.findOne(filter)
+      .populate('createdBy', 'name email')
+      .populate('preferredSupplierId', 'companyName name');
     if (!item) {
       return res.status(404).json({ message: `No product found for SKU: ${sku}` });
     }
@@ -448,10 +597,11 @@ router.get('/sku/:sku', requireAuth, async (req, res) => {
 // GET /api/items/:id
 router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
-    const item = await Item.findOne(filter).populate('createdBy', 'name email');
+    const item = await Item.findOne(filter)
+      .populate('createdBy', 'name email')
+      .populate('preferredSupplierId', 'companyName name');
     if (!item || !item.isActive) {
       return res.status(404).json({ message: 'Item not found' });
     }
@@ -473,6 +623,7 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddP
       name, shortName, hsn, serialPolicy,
       salesPrice, purchasePrice, sellingPrice, costPrice,
       mrp, warranty, lowStockThreshold, reorderLevel,
+      reorderQuantity, preferredSupplierId, autoPoEnabled,
       sku, barcode, barcodeFormat, uom, taxRate, taxType,
       category, brand, description, imageUrl
     } = req.body;
@@ -496,19 +647,14 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddP
     // SKU Generation / Validation
     let finalSku = sku ? String(sku).trim().toUpperCase() : null;
     if (!finalSku) {
-      if (req.tenantId) {
-        try {
-          finalSku = await Counter.getNextSequence(req.tenantId, 'SKU', 'SKU', 5);
-        } catch (counterErr) {
-          finalSku = `SKU-${Date.now().toString().slice(-6)}`;
-        }
-      } else {
+      try {
+        finalSku = await Counter.getNextSequence(req.tenantId, 'SKU', 'SKU', 5);
+      } catch (counterErr) {
         finalSku = `SKU-${Date.now().toString().slice(-6)}`;
       }
     } else {
       // Check duplicate SKU within tenant
-      const skuCheckFilter = { sku: finalSku, isActive: true };
-      if (req.tenantId) skuCheckFilter.tenantId = req.tenantId;
+      const skuCheckFilter = { sku: finalSku, isActive: true, tenantId: req.tenantId };
       const existingSku = await Item.findOne(skuCheckFilter);
       if (existingSku) {
         return res.status(400).json({ message: `SKU '${finalSku}' already exists in your catalog` });
@@ -535,8 +681,11 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddP
       purchasePrice:     finalPurchasePrice,
       mrp:               mrp !== undefined ? Number(mrp) : undefined,
       lowStockThreshold: Math.max(0, finalThreshold),
+      reorderQuantity:   reorderQuantity !== undefined ? Math.max(1, Number(reorderQuantity)) : 20,
+      preferredSupplierId: preferredSupplierId || undefined,
+      autoPoEnabled:     Boolean(autoPoEnabled),
       createdBy:         req.user._id,
-      tenantId:          req.tenantId || undefined
+      tenantId:          req.tenantId
     });
 
     await item.save();
@@ -587,12 +736,12 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
       name, shortName, hsn, serialPolicy,
       salesPrice, purchasePrice, sellingPrice, costPrice,
       mrp, warranty, isActive, lowStockThreshold, reorderLevel,
+      reorderQuantity, preferredSupplierId, autoPoEnabled,
       sku, barcode, barcodeFormat, uom, taxRate, taxType,
       category, brand, description, imageUrl
     } = req.body;
 
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const item = await Item.findOne(filter);
     if (!item) {
@@ -653,6 +802,10 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
     if (lowStockThreshold !== undefined) item.lowStockThreshold = Math.max(0, Number(lowStockThreshold));
     else if (reorderLevel !== undefined) item.lowStockThreshold = Math.max(0, Number(reorderLevel));
 
+    if (reorderQuantity !== undefined) item.reorderQuantity = Math.max(1, Number(reorderQuantity));
+    if (preferredSupplierId !== undefined) item.preferredSupplierId = preferredSupplierId ? preferredSupplierId : null;
+    if (autoPoEnabled !== undefined) item.autoPoEnabled = Boolean(autoPoEnabled);
+
     if (isActive !== undefined)      item.isActive = isActive;
 
     await item.save();
@@ -700,8 +853,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
 // DELETE /api/items/:id
 router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requirePermission('canDeactivateProduct'), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const item = await Item.findOne(filter);
     if (!item) {
@@ -731,3 +883,5 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), req
 
 module.exports = router;
 module.exports.getUploadErrorResponse = getUploadErrorResponse;
+module.exports.transformRow = transformRow;
+module.exports.parseBoolean = parseBoolean;

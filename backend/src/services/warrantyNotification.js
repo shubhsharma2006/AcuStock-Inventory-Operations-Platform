@@ -43,7 +43,7 @@ function buildPurchaseNotif(warranty, productName, daysLeft, threshold, targetRo
     category: 'WARRANTY',
     priority: expired ? 'HIGH' : (threshold <= 7 ? 'HIGH' : 'MEDIUM'),
     createdByRole: 'SYSTEM',
-    tenantId: warranty.tenantId || null,
+    tenantId: warranty.tenantId,
     type:  expired ? 'warranty-purchase-expired' : 'warranty-purchase-expiring',
     icon:  expired ? '⚠️' : '🔔',
     title: expired
@@ -77,7 +77,7 @@ function buildSellerNotif(warranty, productName, daysLeft, threshold, targetRole
     category: 'WARRANTY',
     priority: expired ? 'HIGH' : (threshold <= 7 ? 'HIGH' : 'MEDIUM'),
     createdByRole: 'SYSTEM',
-    tenantId: warranty.tenantId || null,
+    tenantId: warranty.tenantId,
     type:  expired ? 'warranty-seller-expired' : 'warranty-seller-expiring',
     icon:  expired ? '⚠️' : '🔔',
     title: expired
@@ -121,7 +121,7 @@ async function generateWarrantyNotifications() {
           'sellerWarranty.expiryDate': { $lte: maxAhead }
         }
       ]
-    }).populate('productId', 'name').lean();
+    }).setOptions({ skipTenantIsolation: true }).populate('productId', 'name').lean();
 
     const toCreate = [];
 

@@ -14,11 +14,12 @@ const UserPermission = require('../models/UserPermission');
 const User       = require('../models/User');
 const AuditLog   = require('../models/AuditLog');
 const { logBusinessEvent } = require('../utils/auditHelper');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const { invalidatePermissionCache } = require('../middleware/requirePermission');
 const logger     = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // Fields that are permanently hard-locked regardless of input
 const HARD_LOCKED = ['canEditStock', 'canDeleteStock', 'canManageAdmins'];
@@ -181,7 +182,7 @@ router.get('/user/:userId', requireAuth, requireRole(['ADMIN']), validateObjectI
     const { userId } = req.params;
     const targetUser = await User.findOne({
       _id: userId,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     }).select('name email role tenantId');
 
     if (!targetUser) {
@@ -189,8 +190,8 @@ router.get('/user/:userId', requireAuth, requireRole(['ADMIN']), validateObjectI
     }
 
     const [rolePerm, userOverride] = await Promise.all([
-      Permission.findOne({ role: targetUser.role, ...(req.tenantId ? { tenantId: req.tenantId } : {}) }).lean(),
-      UserPermission.findOne({ userId: targetUser._id, ...(req.tenantId ? { tenantId: req.tenantId } : {}) }).lean()
+      Permission.findOne({ role: targetUser.role, tenantId: req.tenantId }).lean(),
+      UserPermission.findOne({ userId: targetUser._id, tenantId: req.tenantId }).lean()
     ]);
 
     const effective = {};
@@ -238,7 +239,7 @@ router.patch('/user/:userId', requireAuth, requireRole(['ADMIN']), validateObjec
     const { userId } = req.params;
     const targetUser = await User.findOne({
       _id: userId,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
 
     if (!targetUser) {
@@ -306,7 +307,7 @@ router.delete('/user/:userId', requireAuth, requireRole(['ADMIN']), validateObje
     const { userId } = req.params;
     const targetUser = await User.findOne({
       _id: userId,
-      ...(req.tenantId ? { tenantId: req.tenantId } : {})
+      tenantId: req.tenantId
     });
 
     if (!targetUser) {

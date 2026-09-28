@@ -116,6 +116,20 @@ const itemSchema = new mongoose.Schema({
     default: 10,
     min: 0
   },
+  reorderQuantity: {
+    type: Number,
+    default: 20,
+    min: 1
+  },
+  preferredSupplierId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null
+  },
+  autoPoEnabled: {
+    type: Boolean,
+    default: false
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -133,7 +147,9 @@ const itemSchema = new mongoose.Schema({
 
 itemSchema.methods.getCurrentStock = async function () {
   const matchFilter = { productId: this._id };
-  if (this.tenantId) matchFilter.tenantId = this.tenantId;
+  if (this.tenantId) {
+    matchFilter.tenantId = new mongoose.Types.ObjectId(this.tenantId);
+  }
   const result = await mongoose.model('StockLedger').aggregate([
     { $match: matchFilter },
     {

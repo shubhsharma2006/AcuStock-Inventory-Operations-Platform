@@ -1,8 +1,9 @@
 const express = require('express');
 const Unit = require('../models/Unit');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // ============================================================
 // GET /api/units - List all units
@@ -11,8 +12,7 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const { search, status, page = 1, limit = 50 } = req.query;
     
-    const query = {};
-    if (req.tenantId) query.tenantId = req.tenantId;
+    const query = { tenantId: req.tenantId };
     
     // Filter by status
     if (status === 'active') {
@@ -61,8 +61,7 @@ router.get('/', requireAuth, async (req, res) => {
 // ============================================================
 router.get('/active', requireAuth, async (req, res) => {
   try {
-    const query = { isActive: true };
-    if (req.tenantId) query.tenantId = req.tenantId;
+    const query = { isActive: true, tenantId: req.tenantId };
 
     const units = await Unit.find(query)
       .select('name shortName')
@@ -80,8 +79,7 @@ router.get('/active', requireAuth, async (req, res) => {
 // ============================================================
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const unit = await Unit.findOne(filter)
       .populate('createdBy', 'name')
@@ -116,9 +114,9 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
     
     // Check for duplicate name within tenant
     const dupQuery = { 
-      name: { $regex: new RegExp(`^${name.trim()}$`, 'i') }
+      name: { $regex: new RegExp(`^${name.trim()}$`, 'i') },
+      tenantId: req.tenantId
     };
-    if (req.tenantId) dupQuery.tenantId = req.tenantId;
 
     const existingUnit = await Unit.findOne(dupQuery);
     
@@ -132,7 +130,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       description: description?.trim(),
       createdBy: req.user._id,
       updatedBy: req.user._id,
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId
     });
     
     await unit.save();
@@ -157,8 +155,7 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
   try {
     const { name, shortName, description } = req.body;
     
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const unit = await Unit.findOne(filter);
     
@@ -170,9 +167,9 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
     if (name && name.trim() !== unit.name) {
       const dupQuery = { 
         _id: { $ne: req.params.id },
-        name: { $regex: new RegExp(`^${name.trim()}$`, 'i') }
+        name: { $regex: new RegExp(`^${name.trim()}$`, 'i') },
+        tenantId: req.tenantId
       };
-      if (req.tenantId) dupQuery.tenantId = req.tenantId;
 
       const existingUnit = await Unit.findOne(dupQuery);
       
@@ -207,8 +204,7 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
 // ============================================================
 router.put('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const unit = await Unit.findOne(filter);
     
@@ -236,8 +232,7 @@ router.put('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), async 
 // ============================================================
 router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const unit = await Unit.findOne(filter);
     

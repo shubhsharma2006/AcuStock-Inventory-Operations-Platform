@@ -5,9 +5,11 @@ const Warehouse = require('../models/Warehouse');
 const StockLedger = require('../models/StockLedger');
 const Item = require('../models/Item');
 const Counter = require('../models/Counter');
-const { requireAuth, requireRole, validateObjectId } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
+const { notifyRoles } = require('../services/notificationHelper');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // Helper: Calculate current stock of product at specific warehouse
 async function getWarehouseStock(warehouseId, productId, tenantId) {
@@ -44,11 +46,20 @@ router.get('/', requireAuth, async (req, res) => {
     if (fromWarehouse) filter.fromWarehouse = fromWarehouse;
     if (toWarehouse) filter.toWarehouse = toWarehouse;
 
+    // Branch scoping: Non-admins only see transfers involving their assigned warehouse
+    if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+      filter.$or = [
+        { fromWarehouse: req.user.assignedWarehouseId },
+        { toWarehouse: req.user.assignedWarehouseId }
+      ];
+    }
+
     const skip = (Number(page) - 1) * Number(limit);
     const [transfers, total] = await Promise.all([
       StockTransfer.find(filter)
         .populate('fromWarehouse', 'name code')
         .populate('toWarehouse', 'name code')
+        .populate('transporterId', 'name code trackingUrlPattern')
         .populate('requestedBy', 'name email')
         .populate('approvedBy', 'name email')
         .populate('items.product', 'name sku uom')
@@ -79,6 +90,7 @@ router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
     const transfer = await StockTransfer.findOne(filter)
       .populate('fromWarehouse', 'name code address contactPerson phone')
       .populate('toWarehouse', 'name code address contactPerson phone')
+      .populate('transporterId', 'name code trackingUrlPattern contactPerson phone email')
       .populate('requestedBy', 'name email')
       .populate('approvedBy', 'name email')
       .populate('shippedBy', 'name email')
@@ -110,6 +122,13 @@ router.post('/', requireAuth, async (req, res) => {
     }
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ message: 'At least one product item is required' });
+    }
+
+    // Branch Scoping: Non-admin users can only initiate transfers from their assigned warehouse
+    if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+      if (String(fromWarehouse) !== String(req.user.assignedWarehouseId)) {
+        return res.status(403).json({ message: 'Forbidden: You can only initiate transfers from your assigned warehouse branch.' });
+      }
     }
 
     // Validate warehouse ownership
@@ -154,7 +173,7 @@ router.post('/', requireAuth, async (req, res) => {
       items: parsedItems,
       requestedBy: req.user._id,
       notes: notes ? String(notes).trim() : undefined,
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId
     });
 
     await transfer.save();
@@ -168,8 +187,7 @@ router.post('/', requireAuth, async (req, res) => {
 // PUT /api/stock-transfers/:id/approve - Approve transfer
 router.put('/:id/approve', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const transfer = await StockTransfer.findOne(filter);
     if (!transfer) {
@@ -184,6 +202,18 @@ router.put('/:id/approve', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
     transfer.approvedAt = new Date();
     await transfer.save();
 
+    notifyRoles(['ADMIN', 'MANAGER'], {
+      type: 'system',
+      title: `Transfer Approved: ${transfer.transferNumber}`,
+      message: `Stock transfer ${transfer.transferNumber} has been approved and is ready to ship.`,
+      link: 'stock-transfers',
+      priority: 'MEDIUM',
+      tenantId: req.tenantId,
+      createdBy: req.user._id,
+      createdByRole: req.user.role,
+      metadata: { transferNumber: transfer.transferNumber }
+    }).catch(() => {});
+
     res.json({ message: 'Transfer approved successfully', transfer });
   } catch (error) {
     console.error('Error approving transfer:', error);
@@ -194,8 +224,7 @@ router.put('/:id/approve', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
 // PUT /api/stock-transfers/:id/ship - Mark IN_TRANSIT & create TRANSFER_OUT ledger
 router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const transfer = await StockTransfer.findOne(filter);
     if (!transfer) {
@@ -205,11 +234,24 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
       return res.status(400).json({ message: `Cannot ship transfer in status '${transfer.status}'. It must be APPROVED first.` });
     }
 
+    // Branch Scoping: Non-admin users can only ship transfers originating from their assigned warehouse
+    if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+      if (String(transfer.fromWarehouse) !== String(req.user.assignedWarehouseId)) {
+        return res.status(403).json({ message: 'Forbidden: Only the originating warehouse can dispatch this transfer.' });
+      }
+    }
+
+    // Optional logistics info
+    const { transporterId, trackingNumber, estimatedArrival } = req.body;
+    if (transporterId) transfer.transporterId = transporterId;
+    if (trackingNumber) transfer.trackingNumber = String(trackingNumber).trim().toUpperCase();
+    if (estimatedArrival) transfer.estimatedArrival = new Date(estimatedArrival);
+
     // Verify stock availability at source warehouse
     for (const it of transfer.items) {
       const availStock = await getWarehouseStock(transfer.fromWarehouse, it.product, transfer.tenantId);
       if (availStock < it.quantity) {
-        const prod = await Item.findById(it.product);
+        const prod = await Item.findOne({ _id: it.product, tenantId: transfer.tenantId });
         const name = prod ? prod.name : it.product;
         return res.status(400).json({
           message: `Insufficient stock at source warehouse for '${name}'. Available: ${availStock}, Required: ${it.quantity}`
@@ -229,7 +271,7 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
         createdBy: req.user._id,
         role: req.user.role,
         notes: `Transfer out: ${transfer.transferNumber}`,
-        tenantId: transfer.tenantId || undefined
+        tenantId: transfer.tenantId
       });
       await outLedger.save();
     }
@@ -238,6 +280,18 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
     transfer.shippedBy = req.user._id;
     transfer.shippedAt = new Date();
     await transfer.save();
+
+    notifyRoles(['ADMIN', 'MANAGER'], {
+      type: 'system',
+      title: `Transfer In Transit: ${transfer.transferNumber}`,
+      message: `Stock transfer ${transfer.transferNumber} is now in transit to the destination warehouse.`,
+      link: 'stock-transfers',
+      priority: 'MEDIUM',
+      tenantId: req.tenantId,
+      createdBy: req.user._id,
+      createdByRole: req.user.role,
+      metadata: { transferNumber: transfer.transferNumber }
+    }).catch(() => {});
 
     res.json({ message: 'Stock dispatched and in transit', transfer });
   } catch (error) {
@@ -249,8 +303,7 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
 // PUT /api/stock-transfers/:id/receive - Confirm receipt & create TRANSFER_IN ledger
 router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER', 'USER']), validateObjectId, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const transfer = await StockTransfer.findOne(filter);
     if (!transfer) {
@@ -258,6 +311,13 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
     }
     if (transfer.status !== 'IN_TRANSIT') {
       return res.status(400).json({ message: `Cannot receive transfer in status '${transfer.status}'. It must be IN_TRANSIT.` });
+    }
+
+    // Branch Scoping: Non-admin users can only confirm receipt for transfers destined to their assigned warehouse
+    if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+      if (String(transfer.toWarehouse) !== String(req.user.assignedWarehouseId)) {
+        return res.status(403).json({ message: 'Forbidden: Only the destination warehouse can confirm receipt for this transfer.' });
+      }
     }
 
     const { receivedItems } = req.body;
@@ -291,7 +351,7 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
           createdBy: req.user._id,
           role: req.user.role,
           notes: `Transfer in: ${transfer.transferNumber}`,
-          tenantId: transfer.tenantId || undefined
+          tenantId: transfer.tenantId
         });
         await inLedger.save();
       }
@@ -301,6 +361,18 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
     transfer.receivedBy = req.user._id;
     transfer.receivedAt = new Date();
     await transfer.save();
+
+    notifyRoles(['ADMIN', 'MANAGER'], {
+      type: 'order_completed',
+      title: `Transfer Completed: ${transfer.transferNumber}`,
+      message: `Stock transfer ${transfer.transferNumber} has been received at the destination warehouse.`,
+      link: 'stock-transfers',
+      priority: 'HIGH',
+      tenantId: req.tenantId,
+      createdBy: req.user._id,
+      createdByRole: req.user.role,
+      metadata: { transferNumber: transfer.transferNumber }
+    }).catch(() => {});
 
     res.json({ message: 'Stock successfully received at destination warehouse', transfer });
   } catch (error) {
@@ -312,8 +384,7 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
 // PUT /api/stock-transfers/:id/cancel - Cancel transfer
 router.put('/:id/cancel', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const transfer = await StockTransfer.findOne(filter);
     if (!transfer) {
@@ -339,7 +410,7 @@ router.put('/:id/cancel', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MAN
           createdBy: req.user._id,
           role: req.user.role,
           notes: `Reversal on transfer cancellation: ${transfer.transferNumber}`,
-          tenantId: transfer.tenantId || undefined
+          tenantId: transfer.tenantId
         });
         await revertLedger.save();
       }

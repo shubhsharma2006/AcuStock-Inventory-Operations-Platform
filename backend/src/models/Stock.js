@@ -57,7 +57,6 @@ const stockSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    unique: true,
     uppercase: true
   },
   company: {
@@ -161,10 +160,16 @@ stockSchema.methods.getAllSerialNumbers = function() {
 
 // Static method to find stock by reference
 stockSchema.statics.findByReference = function(reference, tenantId) {
-  return this.findOne({
-    reference: reference.toUpperCase(),
-    ...(tenantId ? { tenantId } : {})
-  });
+  const query = { reference: reference.toUpperCase() };
+  if (tenantId) query.tenantId = tenantId;
+  return this.findOne(query);
 };
+
+// Compound index to guarantee uniqueness of reference within each tenant
+stockSchema.index({ tenantId: 1, reference: 1 }, { unique: true });
+stockSchema.index({ tenantId: 1, type: 1, transactionDate: -1 });
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+stockSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Stock', stockSchema);

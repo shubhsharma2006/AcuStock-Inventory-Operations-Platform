@@ -81,7 +81,10 @@ const stockTransferRoutes  = require('./src/routes/stock-transfers');
 const forecastRoutes       = require('./src/routes/forecasts');
 const tenantRoutes         = require('./src/routes/tenants');
 const activityRoutes       = require('./src/routes/activity');
+const searchRoutes         = require('./src/routes/search');
+const transporterRoutes    = require('./src/routes/transporters');
 const { resolveTenant }    = require('./src/middleware/tenancy');
+const { requireAuth, requireTenantId } = require('./src/middleware/auth');
 const { retryFailedBillingEvents } = require('./src/routes/billing');
 
 // Services
@@ -565,8 +568,27 @@ app.use((req, res, next) => {
   next();
 });
 
-// Tenant resolution — reads X-Tenant-ID header (no-op unless MULTI_TENANCY_ENABLED=true)
+// Tenant resolution — reads X-Tenant-ID header / subdomain slug
 app.use('/api/', resolveTenant);
+
+// Global auth + tenant guard for all protected API routes (runs before route-level guards)
+// Public routes (/api/auth/*) do NOT reach these because they are mounted first and short-circuit.
+const UNGUARDED_PREFIXES = [
+  '/api/auth/',
+  '/api/auth',
+  '/api/billing/webhook',
+  '/api/setup',
+];
+app.use('/api/', (req, res, next) => {
+  const path = req.originalUrl.split('?')[0];
+  const isPublic = UNGUARDED_PREFIXES.some(p => path.startsWith(p));
+  if (isPublic) return next();
+  // Run requireAuth which sets req.user + req.tenantId, then requireTenantId guard
+  requireAuth(req, res, (authErr) => {
+    if (authErr) return next(authErr);
+    next();
+  });
+});
 
 // Routes
 app.use('/api/auth', registerTenantRoutes); // Self-service tenant registration (public)
@@ -605,6 +627,8 @@ app.use('/api/billing',         billingRoutes);
 app.use('/api/forecasts',       forecastRoutes);
 app.use('/api/tenants',         tenantRoutes);
 app.use('/api/activity',        activityRoutes);
+app.use('/api/search',          searchRoutes);
+app.use('/api/transporters',    transporterRoutes);
 // CSV exports (mounted at root /api so paths like /api/stock/export/csv work)
 app.use('/api', csvExportRoutes);
 

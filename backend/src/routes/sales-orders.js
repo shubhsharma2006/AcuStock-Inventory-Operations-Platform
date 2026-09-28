@@ -19,6 +19,7 @@ const SerialAudit = require('../models/SerialAudit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generateSalesOrderInvoicePdf } = require('../services/pdfGenerator');
 const { logBusinessEvent } = require('../utils/auditHelper');
+const { notifyRoles }    = require('../services/notificationHelper');
 const logger      = require('../utils/logger');
 
 const router = express.Router();
@@ -31,7 +32,7 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
     const skip  = (page - 1) * limit;
     const filter = {};
 
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    filter.tenantId = req.tenantId;
     if (req.query.status) filter.status = req.query.status;
     if (req.userRole === 'MANAGER') filter.createdBy = req.userId;
 
@@ -65,7 +66,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
     if (productIds.length > 0) {
       const count = await Item.countDocuments({
         _id: { $in: productIds },
-        ...(req.tenantId ? { tenantId: req.tenantId } : {})
+        tenantId: req.tenantId
       });
       if (count !== productIds.length) {
         return res.status(404).json({ success: false, error: 'One or more referenced products not found' });
@@ -78,7 +79,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       expectedDeliveryDate,
       notes,
       createdBy: req.userId,
-      tenantId: req.tenantId || undefined
+      tenantId: req.tenantId,
     });
     await so.save();
 
@@ -107,8 +108,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
 // ── Get One ────────────────────────────────────────────────────
 router.get('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const so = await SalesOrder.findOne(filter)
       .populate('createdBy confirmedBy dispatchedBy', 'name email')
@@ -125,8 +125,8 @@ router.get('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
 // ── Download PDF Tax Invoice ──────────────────────────────────
 router.get('/:id/pdf', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    if (!req.tenantId) return res.status(403).json({ success: false, error: 'Tenant context required', code: 'TENANT_REQUIRED' });
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const so = await SalesOrder.findOne(filter)
       .populate('createdBy confirmedBy dispatchedBy', 'name email')
@@ -156,8 +156,7 @@ router.get('/:id/pdf', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (re
 // ── Update draft ───────────────────────────────────────────────
 router.patch('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const so = await SalesOrder.findOne(filter);
     if (!so) return res.status(404).json({ success: false, error: 'Sales order not found' });
@@ -179,8 +178,7 @@ router.patch('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req,
 // ── Confirm ────────────────────────────────────────────────────
 router.post('/:id/confirm', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const so = await SalesOrder.findOne(filter);
     if (!so) return res.status(404).json({ success: false, error: 'Sales order not found' });
@@ -203,6 +201,18 @@ router.post('/:id/confirm', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
       }
     }).catch(() => {});
 
+    notifyRoles(['ADMIN', 'MANAGER'], {
+      type: 'order_completed',
+      title: `SO Confirmed: ${so.soNumber}`,
+      message: `Sales Order ${so.soNumber} for ${so.buyer?.name || 'customer'} has been confirmed.`,
+      link: 'sales-orders',
+      priority: 'MEDIUM',
+      tenantId: req.tenantId,
+      createdBy: req.userId,
+      createdByRole: req.userRole,
+      metadata: { soNumber: so.soNumber, buyer: so.buyer?.name, totalValue: so.totalValue }
+    }).catch(() => {});
+
     res.json({ success: true, salesOrder: so });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -215,8 +225,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
   try {
     let result;
     await session.withTransaction(async () => {
-      const filter = { _id: req.params.id };
-      if (req.tenantId) filter.tenantId = req.tenantId;
+      const filter = { _id: req.params.id, tenantId: req.tenantId };
 
       const so = await SalesOrder.findOne(filter).session(session);
       if (!so) throw new Error('Sales order not found');
@@ -225,8 +234,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
 
       // Check available stock for all items before creating any OUT entry
       for (const line of so.items) {
-        const stockMatch = { productId: line.productId };
-        if (req.tenantId) stockMatch.tenantId = req.tenantId;
+        const stockMatch = { productId: line.productId, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
 
         const stockAgg = await StockLedger.aggregate([
           { $match: stockMatch },
@@ -242,8 +250,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
 
         const available = stockAgg[0]?.available ?? 0;
         if (available < line.quantity) {
-          const itemFilter = { _id: line.productId };
-          if (req.tenantId) itemFilter.tenantId = req.tenantId;
+          const itemFilter = { _id: line.productId, tenantId: req.tenantId };
 
           const item = await Item.findOne(itemFilter).select('name').session(session);
           throw new Error(`Insufficient stock for "${item?.name || line.productId}": need ${line.quantity}, have ${available}`);
@@ -261,8 +268,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
       }
 
       for (const line of so.items) {
-        const itemFilter = { _id: line.productId };
-        if (req.tenantId) itemFilter.tenantId = req.tenantId;
+        const itemFilter = { _id: line.productId, tenantId: req.tenantId };
 
         const item = await Item.findOne(itemFilter).session(session);
         if (!item) throw new Error(`Product ${line.productId} not found`);
@@ -287,8 +293,8 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
 
         // Validate serials are currently in stock (last action was IN)
         if (lineSerials.length > 0) {
-          const auditMatch = { serial: { $in: lineSerials } };
-          if (req.tenantId) auditMatch.tenantId = req.tenantId;
+          if (!req.tenantId) throw new Error('Tenant context is required for serial validation');
+          const auditMatch = { serial: { $in: lineSerials }, tenantId: new mongoose.Types.ObjectId(req.tenantId) };
 
           const existingAudits = await SerialAudit.aggregate([
             { $match: auditMatch },
@@ -319,7 +325,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
           transactionDetails: { reference: so.soNumber, notes: `Dispatched via SO ${so.soNumber}` },
           createdBy: req.userId,
           role:      req.userRole,
-          tenantId:  req.tenantId || undefined
+          tenantId:  req.tenantId,
         }], { session });
 
         ledgerIds.push(ledger._id);
@@ -332,7 +338,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
             action:      'OUT',
             performedBy: req.userId,
             role:        req.userRole,
-            tenantId:    req.tenantId || undefined
+            tenantId:    req.tenantId,
           }));
           await SerialAudit.insertMany(auditEntries, { session });
         }
@@ -357,6 +363,18 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
       }
     }).catch(() => {});
 
+    notifyRoles(['ADMIN', 'MANAGER'], {
+      type: 'order_completed',
+      title: `Order Dispatched: ${result.soNumber}`,
+      message: `Sales Order ${result.soNumber} for ${result.buyer?.name || 'customer'} has been dispatched — stock deducted.`,
+      link: 'sales-orders',
+      priority: 'HIGH',
+      tenantId: req.tenantId,
+      createdBy: req.userId,
+      createdByRole: req.userRole,
+      metadata: { soNumber: result.soNumber, buyer: result.buyer?.name, totalValue: result.totalValue }
+    }).catch(() => {});
+
     res.json({ success: true, message: 'SO dispatched — stock updated', salesOrder: result });
   } catch (err) {
     logger.error('SO dispatch error:', err);
@@ -369,8 +387,7 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
 // ── Cancel ─────────────────────────────────────────────────────
 router.post('/:id/cancel', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   try {
-    const filter = { _id: req.params.id };
-    if (req.tenantId) filter.tenantId = req.tenantId;
+    const filter = { _id: req.params.id, tenantId: req.tenantId };
 
     const so = await SalesOrder.findOne(filter);
     if (!so) return res.status(404).json({ success: false, error: 'Sales order not found' });

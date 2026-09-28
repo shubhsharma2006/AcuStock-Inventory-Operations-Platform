@@ -46,7 +46,11 @@ function validateStockMovementPayload(payload = {}) {
 async function stockIn(data, user) {
   const validated = validateStockMovementPayload(data);
   const session = await mongoose.startSession();
-  const tenantId = user?.tenantId || data?.tenantId || undefined;
+  const tenantId = user?.tenantId || data?.tenantId;
+
+  if (!tenantId) {
+    throw new Error('Tenant ID is required for stock operations');
+  }
 
   try {
     await session.withTransaction(async () => {
@@ -59,11 +63,8 @@ async function stockIn(data, user) {
         transaction
       } = validated;
 
-      // 1️⃣ Fetch item inside transaction (scoped to tenant if present)
-      const itemFilter = { _id: productId, isActive: true };
-      if (tenantId) itemFilter.tenantId = tenantId;
-
-      const item = await Item.findOne(itemFilter).session(session);
+      // 1️⃣ Fetch item inside transaction (strictly scoped to tenant)
+      const item = await Item.findOne({ _id: productId, isActive: true, tenantId }).session(session);
 
       if (!item) {
         throw new Error('Item not found or inactive');
@@ -87,12 +88,9 @@ async function stockIn(data, user) {
             throw new Error('Duplicate serial numbers in same entry');
           }
 
-          // Uniqueness check scoped to tenant
-          const auditMatch = { serial: { $in: [...unique] } };
-          if (tenantId) auditMatch.tenantId = tenantId;
-
+          // Uniqueness check strictly scoped to tenant
           const auditCheck = await SerialAudit.aggregate([
-            { $match: auditMatch },
+            { $match: { serial: { $in: [...unique] }, tenantId: new mongoose.Types.ObjectId(tenantId) } },
             { $sort: { createdAt: 1 } },
             { $group: { _id: '$serial', lastAction: { $last: '$action' } } },
             { $match: { lastAction: 'IN' } }
@@ -111,6 +109,7 @@ async function stockIn(data, user) {
       // 3️⃣ Ledger entry (APPEND ONLY - source of truth for stock)
       await StockLedger.create([{
         productId,
+        warehouseId: data.warehouseId || undefined,
         type: 'IN',
         quantity,
         serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
@@ -144,11 +143,8 @@ async function stockIn(data, user) {
       if (policy.enableSerial && serialNumbers.length > 0) {
         for (const serial of serialNumbers) {
           const normalizedSerial = serial.trim().toUpperCase();
-          const warrantyQuery = { serialNumber: normalizedSerial, productId };
-          if (tenantId) warrantyQuery.tenantId = tenantId;
-
           await Warranty.findOneAndUpdate(
-            warrantyQuery,
+            { serialNumber: normalizedSerial, productId, tenantId },
             { $setOnInsert: {
                 productId,
                 serialNumber:     normalizedSerial,
@@ -187,7 +183,11 @@ async function stockIn(data, user) {
 async function stockOut(data, user) {
   const validated = validateStockMovementPayload(data);
   const session = await mongoose.startSession();
-  const tenantId = user?.tenantId || data?.tenantId || undefined;
+  const tenantId = user?.tenantId || data?.tenantId;
+
+  if (!tenantId) {
+    throw new Error('Tenant ID is required for stock operations');
+  }
 
   try {
     await session.withTransaction(async () => {
@@ -200,11 +200,8 @@ async function stockOut(data, user) {
         transaction
       } = validated;
 
-      // 1️⃣ Fetch item inside transaction (scoped to tenant)
-      const itemFilter = { _id: productId, isActive: true };
-      if (tenantId) itemFilter.tenantId = tenantId;
-
-      const item = await Item.findOne(itemFilter).session(session);
+      // 1️⃣ Fetch item inside transaction (strictly scoped to tenant)
+      const item = await Item.findOne({ _id: productId, isActive: true, tenantId }).session(session);
 
       if (!item) {
         throw new Error('Item not found or inactive');
@@ -228,11 +225,8 @@ async function stockOut(data, user) {
         }
 
         if (normalized.length > 0) {
-          const auditMatch = { serial: { $in: normalized }, productId: item._id };
-          if (tenantId) auditMatch.tenantId = tenantId;
-
           const audits = await SerialAudit.aggregate([
-            { $match: auditMatch },
+            { $match: { serial: { $in: normalized }, productId: item._id, tenantId: new mongoose.Types.ObjectId(tenantId) } },
             { $sort: { createdAt: 1 } },
             { $group: { _id: '$serial', lastAction: { $last: '$action' } } }
           ]).session(session);
@@ -249,8 +243,7 @@ async function stockOut(data, user) {
       }
 
       // 3️⃣ Check current stock from ledger INSIDE transaction (prevents negative stock on concurrent writes)
-      const stockMatch = { productId: item._id, isDeleted: { $ne: true } };
-      if (tenantId) stockMatch.tenantId = tenantId;
+      const stockMatch = { productId: item._id, isDeleted: { $ne: true }, tenantId: new mongoose.Types.ObjectId(tenantId) };
 
       const stockResult = await StockLedger.aggregate([
         { $match: stockMatch },
@@ -275,6 +268,7 @@ async function stockOut(data, user) {
       // 4️⃣ Ledger entry
       await StockLedger.create([{
         productId,
+        warehouseId: data.warehouseId || undefined,
         type: 'OUT',
         quantity,
         serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
@@ -325,15 +319,13 @@ async function stockOut(data, user) {
       if (sellerWarrantyPeriod && policy.enableSerial && serialNumbers.length > 0) {
         const sellerData   = Warranty.buildSellerWarranty(sellerWarrantyPeriod, new Date(), buyer || {});
         const normalized   = serialNumbers.map(s => s.trim().toUpperCase());
-        const warrantyFilter = {
-          serialNumber: { $in: normalized },
-          productId,
-          'sellerWarranty.status': 'not-sold'
-        };
-        if (tenantId) warrantyFilter.tenantId = tenantId;
-
         await Warranty.updateMany(
-          warrantyFilter,
+          {
+            serialNumber: { $in: normalized },
+            productId,
+            'sellerWarranty.status': 'not-sold',
+            tenantId
+          },
           { $set: { sellerWarranty: sellerData } },
           { session }
         );

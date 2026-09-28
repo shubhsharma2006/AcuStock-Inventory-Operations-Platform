@@ -11,6 +11,9 @@ import { Breadcrumbs } from "@/components/breadcrumbs";
 import { useTheme } from "@/components/theme-provider";
 import { OfflineScannerCache } from "@/components/offline-scanner-cache";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { CommandMenu } from "@/components/command-menu";
+import { NotificationPopover } from "@/components/notification-popover";
+import { LiveToastContainer } from "@/components/live-toast-container";
 import type { Role } from "@/lib/acustock";
 
 /* ─── Icon SVGs ─────────────────────────────────────────────────────────────── */
@@ -271,18 +274,26 @@ export function DashboardShell({ children }: { children: ReactNode }) {
               </div>
             )}
 
-            {/* Notification bell */}
-            <Link
-              href={`${basePath}/notifications`}
-              className="relative rounded-lg border border-white/10 p-2 text-slate-400 transition hover:bg-white/5 hover:text-white"
+            {/* Global Search trigger (⌘K) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.dispatchEvent(new CustomEvent("open-command-menu"));
+                }
+              }}
+              className="hidden md:flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-400 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+              title="Search products, serials, orders... (⌘K)"
             >
-              <Icon d={icons.notifications} className="h-5 w-5" />
-              {unreadCount > 0 && (
-                <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-slate-950">
-                  {unreadCount > 9 ? "9+" : unreadCount}
-                </span>
-              )}
-            </Link>
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <span>Search...</span>
+              <kbd className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">⌘K</kbd>
+            </button>
+
+            {/* Notification Center Popover */}
+            <NotificationPopover basePath={basePath} />
 
             {/* Theme Toggle Button */}
             <button
@@ -316,6 +327,8 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       </div>
 
       <OfflineScannerCache />
+      <CommandMenu />
+      <LiveToastContainer />
     </div>
   );
 }
