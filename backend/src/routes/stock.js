@@ -438,21 +438,22 @@ router.post('/validate-serials', requireAuth, async (req, res) => {
     }
     
     if (action === 'IN') {
-      // For Stock IN: Check if any serial has ever been used in this tenant
-      const existingFilter = {
-        serial: { $in: normalizedSerials },
-        action: 'IN',
-        tenantId: req.tenantId
-      };
+      // For Stock IN: Check if any serial is currently already IN stock (last action = IN)
+      const existingAggr = await SerialAudit.aggregate([
+        { $match: { serial: { $in: normalizedSerials }, tenantId: new mongoose.Types.ObjectId(req.tenantId) } },
+        { $sort: { createdAt: 1 } },
+        { $group: { _id: '$serial', lastAction: { $last: '$action' } } },
+        { $match: { lastAction: 'IN' } }
+      ]);
 
-      const existingSerials = await SerialAudit.find(existingFilter).distinct('serial');
+      const existingSerials = existingAggr.map(a => a._id);
       
       return res.json({
         valid: existingSerials.length === 0 && internalDuplicates.length === 0,
         alreadyUsed: existingSerials,
         internalDuplicates,
         message: existingSerials.length > 0 
-          ? `Serial(s) already exist: ${existingSerials.join(', ')}` 
+          ? `Serial(s) already in stock: ${existingSerials.join(', ')}` 
           : internalDuplicates.length > 0 
             ? `Duplicate serial(s) in entry: ${internalDuplicates.join(', ')}`
             : 'All serials are valid'

@@ -42,6 +42,7 @@ export default function StockOutPage() {
   const [warrantyPeriod, setWarrantyPeriod] = useState("12 Months");
   const [condition, setCondition] = useState("New");
   const [notes, setNotes] = useState("");
+  const [serialSearchQuery, setSerialSearchQuery] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -192,40 +193,111 @@ export default function StockOutPage() {
         {/* Step 2: Available In-Stock Serial Selection */}
         {selectedProduct && serialPolicy.enableSerial && (
           <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-bold text-white">2. Select In-Stock Serial Numbers</h2>
-              <span className="text-xs font-semibold text-amber-300">
-                Selected: {selectedSerials.length} / {quantity} required
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-bold text-white">2. Select In-Stock Serial Numbers</h2>
+                <p className="text-xs text-slate-400">Scan barcodes or click to select units for dispatch</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full ${
+                  selectedSerials.length === quantity
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                }`}>
+                  Selected: {selectedSerials.length} / {quantity} required
+                </span>
+              </div>
             </div>
+
+            {/* Quick Actions & Barcode Search Filter */}
+            {availableSerials.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-y border-white/10 py-3">
+                <div className="relative flex-1 min-w-[200px]">
+                  <input
+                    type="text"
+                    value={serialSearchQuery}
+                    onChange={(e) => setSerialSearchQuery(e.target.value)}
+                    placeholder="🔍 Filter / Scan Serial Barcode..."
+                    className="w-full rounded-xl border border-white/10 bg-slate-950 px-3.5 py-2 text-xs text-white uppercase outline-none focus:border-cyan-400/40"
+                  />
+                  {serialSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSerialSearchQuery("")}
+                      className="absolute right-3 top-2 text-xs text-slate-500 hover:text-white"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const needed = availableSerials.slice(0, quantity);
+                      setSelectedSerials(needed);
+                    }}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition"
+                  >
+                    ⚡ Auto-Pick First {quantity} (FIFO)
+                  </button>
+
+                  {selectedSerials.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSerials([])}
+                      className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 transition"
+                    >
+                      Clear Selection
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {loadingSerials ? (
               <div className="p-4 text-center text-xs text-slate-400">Loading in-stock serial numbers...</div>
             ) : availableSerials.length > 0 ? (
-              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 max-h-60 overflow-y-auto pr-1">
-                {availableSerials.map((s) => {
-                  const isChecked = selectedSerials.includes(s);
-                  return (
-                    <label
-                      key={s}
-                      onClick={() => toggleSerialSelection(s)}
-                      className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-xs font-mono transition ${
-                        isChecked
-                          ? "border-emerald-400 bg-emerald-400/10 text-emerald-300 font-bold"
-                          : "border-white/10 bg-slate-950 text-slate-300 hover:bg-white/5"
-                      }`}
-                    >
-                      <span>{s}</span>
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {}}
-                        className="h-4 w-4 accent-emerald-400"
-                      />
-                    </label>
-                  );
-                })}
-              </div>
+              (() => {
+                const filteredSerials = serialSearchQuery
+                  ? availableSerials.filter(s => s.toUpperCase().includes(serialSearchQuery.trim().toUpperCase()))
+                  : availableSerials;
+
+                return (
+                  <div className="space-y-2">
+                    <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 max-h-60 overflow-y-auto pr-1">
+                      {filteredSerials.map((s) => {
+                        const isChecked = selectedSerials.includes(s);
+                        return (
+                          <label
+                            key={s}
+                            onClick={() => toggleSerialSelection(s)}
+                            className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 text-xs font-mono transition ${
+                              isChecked
+                                ? "border-emerald-400 bg-emerald-400/10 text-emerald-300 font-bold"
+                                : "border-white/10 bg-slate-950 text-slate-300 hover:bg-white/5"
+                            }`}
+                          >
+                            <span>{s}</span>
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {}}
+                              className="h-4 w-4 accent-emerald-400"
+                            />
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {filteredSerials.length === 0 && (
+                      <div className="p-4 text-center text-xs text-slate-400">
+                        No serials matching "{serialSearchQuery}"
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
             ) : (
               <div className="rounded-xl border border-rose-400/20 bg-rose-400/10 p-4 text-xs text-rose-200">
                 ⚠️ No available in-stock serial numbers found for this product. Perform Stock IN first.

@@ -107,6 +107,7 @@ async function stockIn(data, user) {
       }
 
       // 3️⃣ Ledger entry (APPEND ONLY - source of truth for stock)
+      const normalizedSupplier = typeof supplier === 'string' ? { companyName: supplier } : (supplier || {});
       await StockLedger.create([{
         productId,
         warehouseId: data.warehouseId || undefined,
@@ -114,7 +115,7 @@ async function stockIn(data, user) {
         quantity,
         serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
         condition: condition || 'new',
-        partyDetails: supplier || {},
+        partyDetails: normalizedSupplier,
         transactionDetails: transaction || {},
         createdBy: user._id,
         role: user.role,
@@ -266,6 +267,7 @@ async function stockOut(data, user) {
       }
 
       // 4️⃣ Ledger entry
+      const normalizedBuyer = typeof buyer === 'string' ? { customerName: buyer } : (buyer || {});
       await StockLedger.create([{
         productId,
         warehouseId: data.warehouseId || undefined,
@@ -273,7 +275,7 @@ async function stockOut(data, user) {
         quantity,
         serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
         condition: condition || 'new',
-        partyDetails: buyer || {},
+        partyDetails: normalizedBuyer,
         transactionDetails: transaction || {},
         createdBy: user._id,
         role: user.role,

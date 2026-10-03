@@ -61,24 +61,22 @@ const purchaseOrderSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Pre-save: compute lineTotals and totalValue
-purchaseOrderSchema.pre('save', function (next) {
+purchaseOrderSchema.pre('save', function () {
   let total = 0;
   for (const item of this.items) {
     item.lineTotal = item.quantity * item.unitPrice;
     total += item.lineTotal;
   }
   this.totalValue = parseFloat(total.toFixed(2));
-  next();
 });
 
 // Auto-generate PO number if not provided
-purchaseOrderSchema.pre('validate', async function (next) {
+purchaseOrderSchema.pre('validate', async function () {
   if (!this.poNumber) {
     const filter = this.tenantId ? { tenantId: this.tenantId } : {};
     const count = await mongoose.model('PurchaseOrder').countDocuments(filter);
     this.poNumber = `PO-${String(count + 1).padStart(6, '0')}`;
   }
-  next();
 });
 
 purchaseOrderSchema.index({ tenantId: 1, poNumber: 1 });

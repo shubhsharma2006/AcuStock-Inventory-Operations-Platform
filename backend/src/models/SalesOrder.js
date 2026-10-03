@@ -61,24 +61,22 @@ const salesOrderSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Pre-save: compute lineTotals and totalValue
-salesOrderSchema.pre('save', function (next) {
+salesOrderSchema.pre('save', function () {
   let total = 0;
   for (const item of this.items) {
     item.lineTotal = item.quantity * item.unitPrice;
     total += item.lineTotal;
   }
   this.totalValue = parseFloat(total.toFixed(2));
-  next();
 });
 
 // Auto-generate SO number
-salesOrderSchema.pre('validate', async function (next) {
+salesOrderSchema.pre('validate', async function () {
   if (!this.soNumber) {
     const filter = this.tenantId ? { tenantId: this.tenantId } : {};
     const count = await mongoose.model('SalesOrder').countDocuments(filter);
     this.soNumber = `SO-${String(count + 1).padStart(6, '0')}`;
   }
-  next();
 });
 
 salesOrderSchema.index({ tenantId: 1, soNumber: 1 });

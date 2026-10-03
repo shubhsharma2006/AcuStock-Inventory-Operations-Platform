@@ -455,10 +455,39 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
 
     products.forEach(p => { p.tenantId = req.tenantId; });
     
-    const insertedProducts = await Item.insertMany(products, { ordered: false });
+    // Chunked batch insertion for production reliability with large uploads
+    const BATCH_SIZE = 500;
+    const insertedProducts = [];
+    const insertErrors = [];
+
+    for (let i = 0; i < products.length; i += BATCH_SIZE) {
+      const chunk = products.slice(i, i + BATCH_SIZE);
+      try {
+        const result = await Item.insertMany(chunk, { ordered: false });
+        insertedProducts.push(...result);
+      } catch (chunkErr) {
+        if (chunkErr.insertedDocs && chunkErr.insertedDocs.length > 0) {
+          insertedProducts.push(...chunkErr.insertedDocs);
+        }
+        if (chunkErr.writeErrors) {
+          insertErrors.push(...chunkErr.writeErrors.map(e => e.errmsg || e.message));
+        } else {
+          insertErrors.push(chunkErr.message);
+        }
+      }
+    }
+
+    if (insertedProducts.length === 0 && insertErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to insert products',
+        details: insertErrors.slice(0, 10),
+        totalFailed: insertErrors.length
+      });
+    }
 
     // Update tenant item usage
-    if (req.tenantId) {
+    if (req.tenantId && insertedProducts.length > 0) {
       await Tenant.updateOne(
         { _id: req.tenantId },
         { $inc: { 'usage.items': insertedProducts.length } }

@@ -44,7 +44,12 @@ export default function StockInPage() {
 
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [validationResult, setValidationResult] = useState<{ valid?: boolean; message?: string; alreadyUsed?: string[] } | null>(null);
+  const [validationResult, setValidationResult] = useState<{
+    valid?: boolean;
+    message?: string;
+    alreadyUsed?: string[];
+    internalDuplicates?: string[];
+  } | null>(null);
 
   // Queries
   const { data: productsData } = useQuery<{ items: ProductItem[] }>({
@@ -272,30 +277,54 @@ export default function StockInPage() {
             </div>
 
             {serialInputMode === "individual" ? (
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 max-h-60 overflow-y-auto pr-1">
-                {individualSerials.map((s, idx) => (
-                  <div key={idx}>
-                    <label className="mb-1 block text-[11px] font-medium text-slate-400">Unit #{idx + 1} Serial</label>
-                    <input
-                      type="text"
-                      value={s}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setIndividualSerials((prev) => {
-                          const copy = [...prev];
-                          copy[idx] = val;
-                          return copy;
-                        });
-                      }}
-                      placeholder={`e.g. SN-${1000 + idx}`}
-                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-xs text-white uppercase outline-none focus:border-amber-300/40"
-                    />
-                  </div>
-                ))}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>Enter {quantity} distinct serial numbers:</span>
+                  <span className={`font-mono font-bold ${
+                    individualSerials.filter(Boolean).length === quantity ? "text-emerald-400" : "text-amber-400"
+                  }`}>
+                    {individualSerials.filter(Boolean).length} / {quantity} entered
+                  </span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 max-h-60 overflow-y-auto pr-1">
+                  {individualSerials.map((s, idx) => (
+                    <div key={idx}>
+                      <label className="mb-1 block text-[11px] font-medium text-slate-400">Unit #{idx + 1} Serial</label>
+                      <input
+                        type="text"
+                        value={s}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setIndividualSerials((prev) => {
+                            const copy = [...prev];
+                            copy[idx] = val;
+                            return copy;
+                          });
+                        }}
+                        placeholder={`e.g. SN-${1000 + idx}`}
+                        className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-xs text-white uppercase outline-none focus:border-amber-300/40"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Paste Serial Numbers (One per line or comma-separated)</label>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-medium text-slate-300">
+                    Paste / Scan Barcodes (One per line or comma-separated)
+                  </label>
+                  {(() => {
+                    const count = bulkSerials.split(/[\n,]/).map(s => s.trim()).filter(Boolean).length;
+                    return (
+                      <span className={`text-xs font-mono font-bold ${
+                        count === quantity ? "text-emerald-400" : "text-amber-400"
+                      }`}>
+                        {count} / {quantity} scanned
+                      </span>
+                    );
+                  })()}
+                </div>
                 <textarea
                   value={bulkSerials}
                   onChange={(e) => setBulkSerials(e.target.value)}
@@ -306,20 +335,53 @@ export default function StockInPage() {
               </div>
             )}
 
-            {/* Validation button */}
-            <div className="flex items-center justify-between border-t border-white/10 pt-3">
-              <button
-                type="button"
-                onClick={handleValidateSerials}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white"
-              >
-                🔍 Check Duplicates Pre-Submission
-              </button>
+            {/* Validation button & results */}
+            <div className="space-y-3 border-t border-white/10 pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleValidateSerials}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition"
+                >
+                  🔍 Pre-Validate Serials
+                </button>
 
-              {validationResult && (
-                <span className={`text-xs font-semibold ${validationResult.valid ? "text-emerald-400" : "text-rose-400"}`}>
-                  {validationResult.valid ? "✅ All Serials Valid & Available" : validationResult.message || "Validation Error"}
-                </span>
+                {validationResult && (
+                  <span className={`text-xs font-semibold ${validationResult.valid ? "text-emerald-400" : "text-rose-400"}`}>
+                    {validationResult.valid ? "✅ All Serials Valid & Ready" : validationResult.message || "Validation Error"}
+                  </span>
+                )}
+              </div>
+
+              {/* Tag display for problematic serials */}
+              {validationResult && !validationResult.valid && (
+                <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 space-y-2 text-xs">
+                  {validationResult.alreadyUsed && validationResult.alreadyUsed.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-rose-300">Already in stock: </span>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {validationResult.alreadyUsed.map((sn) => (
+                          <span key={sn} className="rounded bg-rose-950/80 px-2 py-0.5 font-mono text-[10px] text-rose-200 border border-rose-500/30">
+                            {sn}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {validationResult.internalDuplicates && validationResult.internalDuplicates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-amber-300">Duplicate entries in form: </span>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {validationResult.internalDuplicates.map((sn) => (
+                          <span key={sn} className="rounded bg-amber-950/80 px-2 py-0.5 font-mono text-[10px] text-amber-200 border border-amber-500/30">
+                            {sn}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

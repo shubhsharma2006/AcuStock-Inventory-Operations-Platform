@@ -73,8 +73,13 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       }
     }
 
+    const normalizedBuyer = { ...buyer };
+    if (typeof normalizedBuyer.address === 'object' && normalizedBuyer.address !== null) {
+      normalizedBuyer.address = Object.values(normalizedBuyer.address).filter(Boolean).join(', ');
+    }
+
     const so = new SalesOrder({
-      buyer,
+      buyer: normalizedBuyer,
       items,
       expectedDeliveryDate,
       notes,

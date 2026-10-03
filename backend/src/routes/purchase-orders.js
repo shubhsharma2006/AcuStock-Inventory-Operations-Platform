@@ -74,8 +74,13 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       }
     }
 
+    const normalizedSupplier = { ...supplier };
+    if (typeof normalizedSupplier.address === 'object' && normalizedSupplier.address !== null) {
+      normalizedSupplier.address = Object.values(normalizedSupplier.address).filter(Boolean).join(', ');
+    }
+
     const po = new PurchaseOrder({
-      supplier,
+      supplier: normalizedSupplier,
       items,
       expectedDeliveryDate,
       notes,

@@ -243,7 +243,7 @@ export function BulkImportModal({ isOpen, onClose, entityType }: BulkImportModal
             <div className="rounded-xl border border-white/10 bg-slate-950 p-3 text-[11px] font-mono text-slate-400">
               <span className="font-semibold text-slate-300">Expected Headers: </span>
               {entityType === "products"
-                ? "productName, shortName, hsnCode, salesPrice, purchasePrice, mrp, warrantyPeriod, enableSerial"
+                ? "productName, shortName, hsnCode, salesPrice, purchasePrice, mrp, warrantyPeriod, enableSerial, requireSerialOnIN, requireSerialOnOUT"
                 : "companyName, email, phone, street, city, state, zipCode, country, industry, website, taxId"}
             </div>
             <textarea
@@ -252,7 +252,7 @@ export function BulkImportModal({ isOpen, onClose, entityType }: BulkImportModal
               rows={6}
               placeholder={
                 entityType === "products"
-                  ? "productName,shortName,hsnCode,salesPrice,purchasePrice,mrp,warrantyPeriod,enableSerial\nDell XPS 15,DXPS15,8471,85000,75000,90000,12 months,true\nWireless Mouse,WMOUSE,8471,800,500,999,6 months,false"
+                  ? "productName,shortName,hsnCode,salesPrice,purchasePrice,mrp,warrantyPeriod,enableSerial,requireSerialOnIN,requireSerialOnOUT\nDell XPS 15,DXPS15,8471,85000,75000,90000,12 months,true,true,true\nWireless Mouse,WMOUSE,8471,800,500,999,6 months,false,false,false\nUSB-C Hub,USBHUB,8471,2500,1800,2999,12 months,true,true,false"
                   : "companyName,email,phone,street,city,state,zipCode,country,industry,website,taxId\nAcme Corp,contact@acme.com,+919876543210,123 MG Road,Bengaluru,Karnataka,560001,India,Technology,https://acme.com,29ABCDE1234F1Z5"
               }
               className="w-full rounded-xl border border-white/10 bg-slate-950 p-4 font-mono text-xs text-white outline-none focus:border-amber-400/50"
