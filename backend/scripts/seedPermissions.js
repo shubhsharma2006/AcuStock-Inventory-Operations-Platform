@@ -58,7 +58,23 @@ const defaultPermissions = [
         
         // System
         canAccessSettings: true,
-        canViewAuditLogs: true
+        canViewAuditLogs: true,
+
+        // Batch & Lots
+        canManageLots: true,
+        canBlockLots: true,
+
+        // Packages & Fulfillment
+        canCreatePackages: true,
+        canDispatchPackages: true,
+        canCancelPackages: true,
+        canCreatePoFromBackorder: false,
+
+        // Labels & Slip
+        canGenerateShippingLabels: true,
+
+        // Product Images
+        canManageProductImages: true
     },
     {
         role: 'MANAGER',
@@ -97,7 +113,23 @@ const defaultPermissions = [
         
         // System
         canAccessSettings: false,
-        canViewAuditLogs: false
+        canViewAuditLogs: false,
+
+        // Batch & Lots
+        canManageLots: true,
+        canBlockLots: false,
+
+        // Packages & Fulfillment
+        canCreatePackages: true,
+        canDispatchPackages: true,
+        canCancelPackages: false,
+        canCreatePoFromBackorder: false,
+
+        // Labels & Slip
+        canGenerateShippingLabels: true,
+
+        // Product Images
+        canManageProductImages: false
     },
     {
         role: 'USER',
@@ -136,7 +168,23 @@ const defaultPermissions = [
         
         // System
         canAccessSettings: false,
-        canViewAuditLogs: false
+        canViewAuditLogs: false,
+
+        // Batch & Lots
+        canManageLots: false,
+        canBlockLots: false,
+
+        // Packages & Fulfillment
+        canCreatePackages: false,
+        canDispatchPackages: false,
+        canCancelPackages: false,
+        canCreatePoFromBackorder: false,
+
+        // Labels & Slip
+        canGenerateShippingLabels: false,
+
+        // Product Images
+        canManageProductImages: false
     }
 ];
 

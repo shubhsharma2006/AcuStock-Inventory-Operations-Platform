@@ -74,7 +74,31 @@ const auditLogSchema = new mongoose.Schema({
       'USER_INVITED',
       'PLAN_UPGRADED',
       'PLAN_DOWNGRADED',
-      'WARRANTY_CLAIMED'
+      'WARRANTY_CLAIMED',
+      // Batch & Lot Events
+      'LOT_CREATED',
+      'LOT_BLOCKED',
+      'LOT_UNBLOCKED',
+      // Package & Fulfillment Events
+      'PACKAGE_CREATED',
+      'PACKAGE_DISPATCHED',
+      'PACKAGE_CANCELLED',
+      'PO_CREATED_FROM_BACKORDER',
+      // Shipping Label Events
+      'LABEL_GENERATED',
+      'LABEL_REGENERATED',
+      // Product Gallery Events
+      'IMAGE_UPLOADED',
+      'IMAGE_DELETED',
+      'IMAGE_REORDERED',
+      'IMAGE_PRIMARY_SET',
+      'IMAGES_BULK_IMPORTED',
+      // AI Operations Events
+      'AI_COPILOT_QUERY',
+      'AI_TOOL_EXECUTED',
+      'AI_DRAFT_PO_CREATED',
+      'AI_RECOMMENDATION_DISPATCHED',
+      'AI_OCR_PROCESSED'
     ],
     required: true,
     index: true
@@ -125,6 +149,10 @@ const auditLogSchema = new mongoose.Schema({
       'Tenant',
       'Permission',
       'User',
+      'InventoryLot',
+      'Package',
+      'StockReservation',
+      'ShippingLabel',
       null
     ],
     default: null,

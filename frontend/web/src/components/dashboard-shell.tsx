@@ -14,6 +14,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { CommandMenu } from "@/components/command-menu";
 import { NotificationPopover } from "@/components/notification-popover";
 import { LiveToastContainer } from "@/components/live-toast-container";
+import { CopilotDrawer } from "@/components/ai/copilot-drawer";
 import type { Role } from "@/lib/acustock";
 
 /* ─── Icon SVGs ─────────────────────────────────────────────────────────────── */
@@ -329,6 +330,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       <OfflineScannerCache />
       <CommandMenu />
       <LiveToastContainer />
+      <CopilotDrawer />
     </div>
   );
 }

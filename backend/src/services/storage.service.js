@@ -4,8 +4,17 @@ const crypto = require('crypto');
 
 let s3Client = null;
 let PutObjectCommand = null;
+let GetObjectCommand = null;
+let DeleteObjectCommand = null;
+
 if (process.env.S3_BUCKET) {
-  const { S3Client, PutObjectCommand: PutCommand } = require('@aws-sdk/client-s3');
+  const {
+    S3Client,
+    PutObjectCommand: PutCommand,
+    GetObjectCommand: GetCommand,
+    DeleteObjectCommand: DelCommand
+  } = require('@aws-sdk/client-s3');
+
   s3Client = new S3Client({
     region: process.env.S3_REGION || 'us-east-1',
     endpoint: process.env.S3_ENDPOINT || undefined,
@@ -16,6 +25,8 @@ if (process.env.S3_BUCKET) {
     } : undefined
   });
   PutObjectCommand = PutCommand;
+  GetObjectCommand = GetCommand;
+  DeleteObjectCommand = DelCommand;
 }
 
 function isS3Configured() {
@@ -45,6 +56,51 @@ async function putObject({ key, body, contentType, tenantId }) {
   return { key: filePath, provider: 'local' };
 }
 
+async function getObjectBuffer({ key, tenantId }) {
+  if (!tenantId) throw new Error('Tenant ID is required for storage operations');
+
+  if (isS3Configured() && GetObjectCommand) {
+    const response = await s3Client.send(new GetObjectCommand({
+      Bucket: process.env.S3_BUCKET,
+      Key: key
+    }));
+    const chunks = [];
+    for await (const chunk of response.Body) {
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  // Local filesystem fallback
+  const resolvedPath = path.isAbsolute(key)
+    ? key
+    : path.resolve(process.env.UPLOAD_PATH || './uploads', key);
+
+  return await fs.promises.readFile(resolvedPath);
+}
+
+async function deleteObject({ key, tenantId }) {
+  if (!tenantId) throw new Error('Tenant ID is required for storage operations');
+  if (isS3Configured() && DeleteObjectCommand) {
+    await s3Client.send(new DeleteObjectCommand({
+      Bucket: process.env.S3_BUCKET,
+      Key: key
+    }));
+    return { success: true };
+  }
+
+  const resolvedPath = path.isAbsolute(key)
+    ? key
+    : path.resolve(process.env.UPLOAD_PATH || './uploads', key);
+
+  try {
+    await fs.promises.unlink(resolvedPath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  return { success: true };
+}
+
 function validateCsvBuffer(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) return false;
   if (buffer.includes(0)) return false;
@@ -52,4 +108,10 @@ function validateCsvBuffer(buffer) {
   return !sample.includes('\uFFFD') && /[,\n\r]/.test(sample);
 }
 
-module.exports = { isS3Configured, putObject, validateCsvBuffer };
+module.exports = {
+  isS3Configured,
+  putObject,
+  getObjectBuffer,
+  deleteObject,
+  validateCsvBuffer
+};

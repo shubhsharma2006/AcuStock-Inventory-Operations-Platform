@@ -890,6 +890,7 @@ const handleAdminDashboard = async (req, res) => {
 
     // Format low stock items
     const lowStockItems = lowStockProducts.map(p => ({
+      id: p._id,
       name: p.name,
       currentStock: p.currentStock || 0,
       threshold: p.lowStockThreshold || 10

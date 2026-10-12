@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import type { NotificationTarget } from "@/lib/acustock";
+export { useRealtimeState } from "@/components/realtime-provider";
 
 export type ProductItem = {
   _id: string;
@@ -19,6 +20,8 @@ export type ProductItem = {
   brand?: string;
   description?: string;
   imageUrl?: string;
+  gallery?: Array<{ _id: string; url: string; isPrimary: boolean; sortOrder: number; altText?: string }>;
+  trackingMode?: 'NONE' | 'SERIAL' | 'BATCH';
   quantity?: number;
   currentStock?: number;
   salesPrice?: number;
@@ -129,6 +132,10 @@ export type ProfileItem = {
   phone?: string;
   role: "ADMIN" | "MANAGER" | "USER" | "SUPER_ADMIN";
   isActive?: boolean;
+  tokenVersion?: number;
+  passwordChangedAt?: string;
+  passwordChangedBy?: string;
+  forcePasswordReset?: boolean;
 };
 
 export type SerialPolicyItem = {

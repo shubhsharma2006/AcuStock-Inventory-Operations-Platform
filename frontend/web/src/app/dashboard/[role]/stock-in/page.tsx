@@ -1,16 +1,21 @@
 "use client";
 
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, useEffect, useMemo, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
+import { InvoiceOcrModal } from "@/components/ai/invoice-ocr-modal";
+import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 
 type ProductItem = {
   _id: string;
   name: string;
   shortName?: string;
   hsn?: string;
+  sku?: string;
+  currentStock?: number;
+  quantity?: number;
   serialPolicy?: {
     enableSerial?: boolean;
     requireSerialOnIN?: boolean;
@@ -22,14 +27,28 @@ type Company = {
   _id: string;
   name: string;
   type?: string;
+  city?: string;
+  gstin?: string;
+  phone?: string;
+  email?: string;
+};
+
+type WarehouseItem = {
+  _id: string;
+  name: string;
+  code?: string;
+  location?: string;
+  isPrimary?: boolean;
 };
 
 export default function StockInPage() {
   const router = useRouter();
   const { user } = useSession();
+  const queryClient = useQueryClient();
 
   // Form states
   const [productId, setProductId] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
   const [quantity, setQuantity] = useState<number>(1);
   const [serialInputMode, setSerialInputMode] = useState<"individual" | "bulk">("individual");
   const [individualSerials, setIndividualSerials] = useState<string[]>([""]);
@@ -44,6 +63,8 @@ export default function StockInPage() {
 
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isOcrModalOpen, setIsOcrModalOpen] = useState(false);
+  const [ocrNotice, setOcrNotice] = useState<string | null>(null);
   const [validationResult, setValidationResult] = useState<{
     valid?: boolean;
     message?: string;
@@ -51,21 +72,111 @@ export default function StockInPage() {
     internalDuplicates?: string[];
   } | null>(null);
 
-  // Queries
-  const { data: productsData } = useQuery<{ items: ProductItem[] }>({
+  function handleApplyOcr(prefill: {
+    productId: string;
+    quantity: number;
+    companyName: string;
+    transactionId: string;
+    serialNumbers: string[];
+    notes: string;
+  }) {
+    if (prefill.productId) setProductId(prefill.productId);
+    if (prefill.quantity) setQuantity(prefill.quantity);
+    if (prefill.companyName) {
+      setCompanyName(prefill.companyName);
+      const matched = companies.find((c: any) => (c.companyName || c.name || "").toLowerCase() === prefill.companyName.toLowerCase());
+      if (matched) setSelectedCompanyId(matched._id);
+    }
+    if (prefill.transactionId) setTransactionId(prefill.transactionId);
+    if (prefill.notes) setNotes(prefill.notes);
+    if (prefill.serialNumbers && prefill.serialNumbers.length > 0) {
+      setSerialInputMode("bulk");
+      setBulkSerials(prefill.serialNumbers.join("\n"));
+    }
+    setOcrNotice(`Pre-filled from invoice ${prefill.transactionId || 'document'}. Review and confirm all fields below.`);
+  }
+
+  // Queries with auto-refetch
+  const { data: productsData, refetch: refetchProducts, isFetching: loadingProducts } = useQuery<ProductItem[] | { items: ProductItem[] }>({
     queryKey: ["products-list"],
-    queryFn: () => apiFetch<{ items: ProductItem[] }>("/items"),
+    queryFn: () => apiFetch("/items"),
   });
 
-  const { data: companiesData } = useQuery<{ companies: Company[] }>({
+  const { data: companiesData, refetch: refetchCompanies, isFetching: loadingCompanies } = useQuery<Company[] | { companies: Company[] }>({
     queryKey: ["companies-list"],
-    queryFn: () => apiFetch<{ companies: Company[] }>("/companies"),
+    queryFn: () => apiFetch("/companies"),
   });
 
-  const products = productsData?.items || [];
-  const companies = companiesData?.companies || [];
+  const { data: warehousesData, refetch: refetchWarehouses, isFetching: loadingWarehouses } = useQuery<WarehouseItem[] | { warehouses: WarehouseItem[] }>({
+    queryKey: ["warehouses"],
+    queryFn: () => apiFetch("/warehouses"),
+  });
 
-  const selectedProduct = products.find((p) => p._id === productId);
+  const products = useMemo(() => {
+    if (Array.isArray(productsData)) return productsData;
+    return (productsData as any)?.items || [];
+  }, [productsData]);
+
+  const companies = useMemo(() => {
+    if (Array.isArray(companiesData)) return companiesData;
+    return (companiesData as any)?.companies || [];
+  }, [companiesData]);
+
+  const warehouses = useMemo(() => {
+    if (Array.isArray(warehousesData)) return warehousesData;
+    return (warehousesData as any)?.warehouses || [];
+  }, [warehousesData]);
+
+  // Auto-select primary warehouse if none selected
+  useEffect(() => {
+    if (!warehouseId && warehouses.length > 0) {
+      const primary = warehouses.find((w: WarehouseItem) => w.isPrimary || (w as any).isDefault) || warehouses[0];
+      if (primary?._id) setWarehouseId(primary._id);
+    }
+  }, [warehouses, warehouseId]);
+
+  // Options for Searchable Comboboxes
+  const productOptions: SearchableSelectOption[] = useMemo(() => {
+    return products.map((p: ProductItem) => {
+      const stock = p.currentStock ?? p.quantity ?? 0;
+      const isOut = stock <= 0;
+      return {
+        value: p._id,
+        label: p.name,
+        sublabel: p.sku || p.shortName || undefined,
+        badge: isOut ? "0 Stock" : `${stock} in stock`,
+        badgeColor: isOut ? "rose" : "emerald",
+        icon: "📦",
+        details: p.hsn ? `HSN: ${p.hsn}` : undefined,
+      };
+    });
+  }, [products]);
+
+  const companyOptions: SearchableSelectOption[] = useMemo(() => {
+    return companies.map((c: any) => ({
+      value: c.companyName || c.name,
+      label: c.companyName || c.name,
+      sublabel: c.address?.city || c.city || (c.taxId || c.gstin ? `GST: ${c.taxId || c.gstin}` : undefined),
+      badge: c.type || "Supplier",
+      badgeColor: "blue",
+      icon: "🏢",
+      details: c.email || c.phone || undefined,
+    }));
+  }, [companies]);
+
+  const warehouseOptions: SearchableSelectOption[] = useMemo(() => {
+    return warehouses.map((w: WarehouseItem) => ({
+      value: w._id,
+      label: w.name,
+      sublabel: w.code || undefined,
+      badge: w.isPrimary || (w as any).isDefault ? "Primary Hub" : "Active Branch",
+      badgeColor: "purple",
+      icon: "🏭",
+      details: (w as any).address?.city || w.location || undefined,
+    }));
+  }, [warehouses]);
+
+  const selectedProduct = products.find((p: ProductItem) => p._id === productId);
   const serialPolicy = selectedProduct?.serialPolicy || {};
   const requiresSerials = serialPolicy.enableSerial && serialPolicy.requireSerialOnIN;
 
@@ -86,7 +197,7 @@ export default function StockInPage() {
 
   function handleCompanySelect(compName: string) {
     setCompanyName(compName);
-    const comp = companies.find((c) => c.name === compName);
+    const comp = companies.find((c: any) => c.name === compName || c.companyName === compName);
     if (comp) setSelectedCompanyId(comp._id);
   }
 
@@ -153,6 +264,7 @@ export default function StockInPage() {
         method: "POST",
         body: JSON.stringify({
           productId,
+          warehouseId: warehouseId || undefined,
           quantity: Number(quantity),
           serialNumbers: finalSerials,
           supplier: companyName.trim() || undefined,
@@ -166,6 +278,9 @@ export default function StockInPage() {
           notes: notes.trim() || undefined,
         }),
       });
+
+      queryClient.invalidateQueries({ queryKey: ["products-list"] });
+      queryClient.invalidateQueries({ queryKey: ["items"] });
 
       const roleHome = `/dashboard/${
         user?.role === "SUPER_ADMIN" || user?.role === "ADMIN"
@@ -182,38 +297,74 @@ export default function StockInPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      {/* Header */}
-      <div>
-        <div className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-300">
-          📥 Stock Entry Engine
+      {/* Header with AI Invoice OCR Trigger */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <div className="inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+            📥 Stock Entry Engine
+          </div>
+          <h1 className="mt-2 text-3xl font-bold text-white">Record Stock IN (Supplier Entry)</h1>
+          <p className="text-sm text-slate-400">
+            Ingest new inventory from suppliers, assign serial numbers, and sign the immutable Stock Ledger.
+          </p>
         </div>
-        <h1 className="mt-2 text-3xl font-bold text-white">Record Stock IN (Supplier Entry)</h1>
-        <p className="text-sm text-slate-400">
-          Ingest new inventory from suppliers, assign serial numbers, and sign the immutable Stock Ledger.
-        </p>
+
+        <button
+          type="button"
+          onClick={() => setIsOcrModalOpen(true)}
+          className="inline-flex items-center gap-2.5 rounded-2xl border border-emerald-500/40 bg-gradient-to-r from-emerald-950/60 to-slate-900/80 px-5 py-3 text-sm font-bold text-emerald-300 shadow-xl shadow-emerald-950/30 hover:border-emerald-400 hover:from-emerald-900/60 hover:to-slate-800/80 transition-all cursor-pointer group"
+        >
+          <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-400/20 text-emerald-300 group-hover:scale-110 transition-transform">
+            ⚡
+          </span>
+          <span>AI Scan Invoice / Slip</span>
+          <span className="rounded-full bg-emerald-400/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-200 border border-emerald-400/30">
+            Vision OCR
+          </span>
+        </button>
       </div>
+
+      {ocrNotice && (
+        <div className="flex items-center justify-between rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-400/20 text-emerald-300 text-xs">
+              ✓
+            </span>
+            <span>{ocrNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setOcrNotice(null)}
+            className="text-xs font-bold text-emerald-400 hover:text-emerald-200"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Step 1: Product & Quantity Selection */}
         <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
           <h2 className="text-lg font-bold text-white">1. Select Product & Quantity</h2>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">Product *</label>
-              <select
-                value={productId}
-                onChange={(e) => setProductId(e.target.value)}
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="sm:col-span-2">
+              <SearchableSelect
+                label="Product"
                 required
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-300/40"
-              >
-                <option value="">Select a product...</option>
-                {products.map((p) => (
-                  <option key={p._id} value={p._id}>
-                    {p.name} {p.shortName ? `(${p.shortName})` : ""}
-                  </option>
-                ))}
-              </select>
+                options={productOptions}
+                value={productId}
+                onChange={(val) => setProductId(val)}
+                placeholder="Select or type product name, SKU..."
+                searchPlaceholder="Type initial letter or name to search products..."
+                onRefresh={() => refetchProducts()}
+                isLoading={loadingProducts}
+                onAddNew={() => {
+                  const role = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN" ? "admin" : (user?.role || "user").toLowerCase();
+                  router.push(`/dashboard/${role}/products`);
+                }}
+                addNewLabel="+ New Product in Catalog"
+              />
             </div>
 
             <div>
@@ -228,6 +379,26 @@ export default function StockInPage() {
                 className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-300/40"
               />
             </div>
+          </div>
+
+          {/* Destination Warehouse Selector */}
+          <div>
+            <SearchableSelect
+              label="Destination Warehouse Hub"
+              required
+              options={warehouseOptions}
+              value={warehouseId}
+              onChange={(val) => setWarehouseId(val)}
+              placeholder="Select target warehouse..."
+              searchPlaceholder="Type warehouse name or code..."
+              onRefresh={() => refetchWarehouses()}
+              isLoading={loadingWarehouses}
+              onAddNew={() => {
+                const role = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN" ? "admin" : (user?.role || "user").toLowerCase();
+                router.push(`/dashboard/${role}/warehouses`);
+              }}
+              addNewLabel="+ Add New Warehouse"
+            />
           </div>
 
           {/* Serial Policy Info Banner */}
@@ -393,19 +564,21 @@ export default function StockInPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">Supplier Company</label>
-              <select
+              <SearchableSelect
+                label="Supplier Company"
+                options={companyOptions}
                 value={companyName}
-                onChange={(e) => handleCompanySelect(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none"
-              >
-                <option value="">Select or type supplier...</option>
-                {companies.map((c) => (
-                  <option key={c._id} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => handleCompanySelect(val)}
+                placeholder="Select or type supplier..."
+                searchPlaceholder="Type initial letter or company name..."
+                onRefresh={() => refetchCompanies()}
+                isLoading={loadingCompanies}
+                onAddNew={() => {
+                  const role = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN" ? "admin" : (user?.role || "user").toLowerCase();
+                  router.push(`/dashboard/${role}/companies`);
+                }}
+                addNewLabel="+ Register New Company"
+              />
             </div>
 
             <div>
@@ -475,6 +648,14 @@ export default function StockInPage() {
           </button>
         </div>
       </form>
+
+      {/* Invoice OCR Vision Modal */}
+      <InvoiceOcrModal
+        isOpen={isOcrModalOpen}
+        onClose={() => setIsOcrModalOpen(false)}
+        onApply={handleApplyOcr}
+        products={products}
+      />
     </div>
   );
 }

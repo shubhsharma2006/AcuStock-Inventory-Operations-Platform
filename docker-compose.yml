@@ -2,6 +2,8 @@ services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:
@@ -14,6 +16,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
@@ -30,6 +34,7 @@ services:
       MONGODB_URI: mongodb://mongo:27017/acustock
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
+      FRONTEND_BASE_URL: http://localhost:3000
     depends_on:
       mongo:
         condition: service_healthy

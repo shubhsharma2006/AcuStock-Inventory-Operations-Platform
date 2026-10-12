@@ -13,7 +13,7 @@ interface DashboardData {
   totalStock?: number;
   totalValue?: number;
   totalItems?: number;
-  lowStockItems?: Array<{ name: string; currentStock: number; threshold: number }>;
+  lowStockItems?: Array<{ id?: string; name: string; currentStock: number; threshold: number }>;
   recentTransactions?: Array<{ date: string; in: number; out: number }>;
   topMovingItems?: Array<{ name: string; totalIn: number; totalOut: number; net: number }>;
 }
@@ -79,11 +79,11 @@ function LowStockList({ items }: { items: DashboardData["lowStockItems"] }) {
   );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {items.slice(0, 8).map((item) => {
+      {items.slice(0, 8).map((item, idx) => {
         const pct = Math.min(100, Math.round((item.currentStock / Math.max(1, item.threshold)) * 100));
         const color = pct < 30 ? "#fb7185" : pct < 60 ? "#f7c46c" : "#34d399";
         return (
-          <div key={item.name} style={{
+          <div key={`${item.name}-${idx}`} style={{
             display: "flex", alignItems: "center", gap: 12,
             padding: "8px 0", borderBottom: "1px solid rgba(148,163,184,0.1)"
           }}>

@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const quotaReservationSchema = new mongoose.Schema({
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
-  usageKey: { type: String, enum: ['users', 'items', 'companies'], required: true },
+  usageKey: { type: String, enum: ['users', 'items', 'companies', 'aiQueries', 'ocrScans'], required: true },
   status: { type: String, enum: ['ACTIVE', 'COMMITTED', 'RELEASED'], default: 'ACTIVE', index: true },
   expiresAt: { type: Date, required: true, index: true },
   releasedAt: Date,

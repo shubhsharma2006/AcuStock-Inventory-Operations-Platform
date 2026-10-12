@@ -21,12 +21,15 @@ const PLANS = {
       maxUsers: 5,
       maxItems: 100,
       maxStorage: 256, // MB
+      maxAiQueries: 50,
+      maxOcrScans: 10,
     },
     features: [
       'Up to 5 team members',
       '100 active catalog SKUs',
       'Basic Stock IN & Stock OUT',
-      'Standard barcode generation',
+      'AcuBot AI Copilot (50 queries/mo)',
+      'AI Invoice OCR (10 scans/mo)',
       'Community support'
     ]
   },
@@ -46,14 +49,17 @@ const PLANS = {
       maxUsers: 15,
       maxItems: 1000,
       maxStorage: 2048, // 2GB
+      maxAiQueries: 500,
+      maxOcrScans: 100,
     },
     features: [
       'Up to 15 team members',
       '1,000 active catalog SKUs',
       'Strict serial tracking policy',
       'Purchase & Sales Orders with PDF',
-      'Multi-warehouse stock transfers',
-      'Email & priority notifications'
+      'AcuBot AI Copilot (500 queries/mo)',
+      'AI Invoice OCR (100 scans/mo)',
+      'Multi-warehouse stock transfers'
     ]
   },
   professional: {
@@ -72,15 +78,17 @@ const PLANS = {
       maxUsers: 50,
       maxItems: 10000,
       maxStorage: 10240, // 10GB
+      maxAiQueries: 5000,
+      maxOcrScans: 1000,
     },
     features: [
       'Up to 50 team members',
       '10,000 active catalog SKUs',
+      'AcuBot AI Copilot (5,000 queries/mo)',
+      'AI WhatsApp 24/7 Operations Assistant',
+      'AI Invoice & Packing Slip OCR (1,000 scans/mo)',
       'Full compliance audit ledger',
-      'Unlimited carrier tracking',
-      'Scheduled automated reports',
-      'Custom user permissions matrix',
-      'Dedicated 24/7 account support'
+      'Scheduled automated reports'
     ]
   }
 };

@@ -8,26 +8,47 @@ import { apiFetch } from "@/lib/api";
 
 interface PermissionDoc {
   role: string;
-  canViewStock: boolean;
-  canAddStock: boolean;
-  canViewUsers: boolean;
-  canCreateUsers: boolean;
-  canEditUsers: boolean;
-  canDeleteUsers: boolean;
-  canViewReports: boolean;
-  canExportReports: boolean;
-  canViewCompanies: boolean;
-  canCreateCompanies: boolean;
-  canViewItems: boolean;
-  canCreateItems: boolean;
-  canEditItems: boolean;
-  canDeleteItems: boolean;
-  canManageNotifications: boolean;
-  canViewAuditLog: boolean;
-  // Hard-locked (read-only in UI)
+  // Stock operations
+  canStockIn: boolean;
+  canStockOut: boolean;
+  canViewStockLedger: boolean;
   canEditStock: boolean;
   canDeleteStock: boolean;
+  // Products
+  canViewProducts: boolean;
+  canViewProductDetails: boolean;
+  canAddProduct: boolean;
+  canEditProduct: boolean;
+  canDeleteProduct: boolean;
+  canChangeSerialPolicy: boolean;
+  canManageProductImages: boolean;
+  // Companies
+  canViewCompanies: boolean;
+  canAddCompany: boolean;
+  canEditCompany: boolean;
+  canDeleteCompany: boolean;
+  canManageCompanies: boolean;
+  // Warehouses & Units
+  canManageWarehouses: boolean;
+  canViewUnits: boolean;
+  canManageUnits: boolean;
+  // Users
+  canManageUsers: boolean;
+  canManageManagers: boolean;
+  canActivateDeactivateUsers: boolean;
   canManageAdmins: boolean;
+  // Reports & System
+  canViewAllReports: boolean;
+  canViewOwnReports: boolean;
+  canViewAuditLogs: boolean;
+  canExportData: boolean;
+  canAccessSettings: boolean;
+  // Lots & Fulfillment
+  canManageLots: boolean;
+  canBlockLots: boolean;
+  canCreatePackages: boolean;
+  canDispatchPackages: boolean;
+  canGenerateShippingLabels: boolean;
   [key: string]: boolean | string;
 }
 
@@ -35,52 +56,79 @@ interface PermissionDoc {
 
 const CATEGORIES: { label: string; icon: string; fields: { key: string; label: string; locked?: boolean }[] }[] = [
   {
-    label: "Stock",
+    label: "Stock & Ledger Operations",
     icon: "📦",
     fields: [
-      { key: "canViewStock",   label: "View stock levels" },
-      { key: "canAddStock",    label: "Add stock (IN/OUT)" },
-      { key: "canEditStock",   label: "Edit stock entries (locked)", locked: true },
-      { key: "canDeleteStock", label: "Delete stock entries (locked)", locked: true },
+      { key: "canStockIn", label: "Perform Stock IN (Receiving)" },
+      { key: "canStockOut", label: "Perform Stock OUT (Dispatch / Sales)" },
+      { key: "canViewStockLedger", label: "View stock transaction ledger" },
+      { key: "canEditStock", label: "Edit stock entries (hard-locked)", locked: true },
+      { key: "canDeleteStock", label: "Delete stock entries (hard-locked)", locked: true },
     ]
   },
   {
-    label: "Users",
-    icon: "👥",
-    fields: [
-      { key: "canViewUsers",   label: "View users" },
-      { key: "canCreateUsers", label: "Create users" },
-      { key: "canEditUsers",   label: "Edit users" },
-      { key: "canDeleteUsers", label: "Delete users" },
-      { key: "canManageAdmins", label: "Manage admins (locked)", locked: true },
-    ]
-  },
-  {
-    label: "Products",
+    label: "Product Master Catalog",
     icon: "🏷️",
     fields: [
-      { key: "canViewItems",   label: "View products" },
-      { key: "canCreateItems", label: "Create products" },
-      { key: "canEditItems",   label: "Edit products" },
-      { key: "canDeleteItems", label: "Delete products" },
+      { key: "canViewProducts", label: "View product catalog" },
+      { key: "canViewProductDetails", label: "View full product details & lots" },
+      { key: "canAddProduct", label: "Create / add new products" },
+      { key: "canEditProduct", label: "Edit product specifications & pricing" },
+      { key: "canDeleteProduct", label: "Archive / delete products" },
+      { key: "canChangeSerialPolicy", label: "Configure serial tracking policy" },
+      { key: "canManageProductImages", label: "Upload & manage product images" },
     ]
   },
   {
-    label: "Reports & Data",
+    label: "Companies & Stakeholders",
+    icon: "🏢",
+    fields: [
+      { key: "canViewCompanies", label: "View suppliers & customer companies" },
+      { key: "canAddCompany", label: "Create / add new company" },
+      { key: "canEditCompany", label: "Edit company details" },
+      { key: "canDeleteCompany", label: "Delete company" },
+      { key: "canManageCompanies", label: "Manage company relationships" },
+    ]
+  },
+  {
+    label: "Warehouses & Units",
+    icon: "🏬",
+    fields: [
+      { key: "canManageWarehouses", label: "Manage warehouses & branch locations" },
+      { key: "canViewUnits", label: "View Units of Measure (UoM)" },
+      { key: "canManageUnits", label: "Create & configure Units of Measure" },
+    ]
+  },
+  {
+    label: "User & Team Administration",
+    icon: "👥",
+    fields: [
+      { key: "canManageUsers", label: "Create and manage operational users" },
+      { key: "canManageManagers", label: "Manage warehouse managers" },
+      { key: "canActivateDeactivateUsers", label: "Activate / deactivate users" },
+      { key: "canManageAdmins", label: "Manage system administrators (hard-locked)", locked: true },
+    ]
+  },
+  {
+    label: "Reports, Audits & Security",
     icon: "📊",
     fields: [
-      { key: "canViewReports",    label: "View reports & analytics" },
-      { key: "canExportReports",  label: "Export CSV / reports" },
-      { key: "canViewAuditLog",   label: "View audit log" },
+      { key: "canViewAllReports", label: "View organization-wide financial reports" },
+      { key: "canViewOwnReports", label: "View personal transaction reports" },
+      { key: "canViewAuditLogs", label: "Access immutable security audit log" },
+      { key: "canExportData", label: "Export data to Excel/CSV" },
+      { key: "canAccessSettings", label: "Access organization settings" },
     ]
   },
   {
-    label: "Other",
-    icon: "⚙️",
+    label: "Lots, Orders & Logistics",
+    icon: "🚚",
     fields: [
-      { key: "canViewCompanies",   label: "View companies" },
-      { key: "canCreateCompanies", label: "Create companies" },
-      { key: "canManageNotifications", label: "Manage notifications" },
+      { key: "canManageLots", label: "Manage batches & expiration dates" },
+      { key: "canBlockLots", label: "Quarantine / block damaged batches" },
+      { key: "canCreatePackages", label: "Create shipments and packing slips" },
+      { key: "canDispatchPackages", label: "Dispatch packages & assign logistics" },
+      { key: "canGenerateShippingLabels", label: "Generate carrier shipping labels" },
     ]
   },
 ];

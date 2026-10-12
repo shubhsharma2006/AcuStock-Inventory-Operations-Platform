@@ -48,24 +48,41 @@ const tenantSchema = new mongoose.Schema({
   billingUpdatedAt:     Date,
   // Limits per plan
   limits: {
-    maxUsers:    { type: Number, default: 5 },
-    maxItems:    { type: Number, default: 100 },
-    maxStorage:  { type: Number, default: 1024 }  // MB
+    maxUsers:     { type: Number, default: 5 },
+    maxItems:     { type: Number, default: 100 },
+    maxStorage:   { type: Number, default: 1024 }, // MB
+    maxAiQueries: { type: Number, default: 50 },
+    maxOcrScans:  { type: Number, default: 10 }
   },
   usage: {
     users:      { type: Number, default: 0, min: 0 },
     items:      { type: Number, default: 0, min: 0 },
-    companies:  { type: Number, default: 0, min: 0 }
+    companies:  { type: Number, default: 0, min: 0 },
+    aiQueries:  { type: Number, default: 0, min: 0 },
+    ocrScans:   { type: Number, default: 0, min: 0 }
   },
   settings: {
-    timezone:   { type: String, default: 'UTC' },
-    currency:   { type: String, default: 'USD' },
-    dateFormat: { type: String, default: 'YYYY-MM-DD' }
+    timezone:   { type: String, default: 'Asia/Kolkata' },
+    currency:   { type: String, default: 'INR' },
+    dateFormat: { type: String, default: 'DD/MM/YYYY' },
+    valuationMethod: { type: String, enum: ['FIFO', 'WEIGHTED_AVG'], default: 'FIFO' },
+    negativeStockAllowed: { type: Boolean, default: false },
+    lowStockAlertThreshold: { type: Number, default: 10 },
+    invoicePrefix: { type: String, default: 'INV-2026-' },
+    poPrefix: { type: String, default: 'PO-2026-' },
+    transferPrefix: { type: String, default: 'TRF-' },
+    grnPrefix: { type: String, default: 'GRN-' },
+    defaultWarehouseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Warehouse' },
+    whatsappAlertsEnabled: { type: Boolean, default: false },
+    lowStockEmailAlerts: { type: Boolean, default: true },
+    dailyDigestEnabled: { type: Boolean, default: false }
   },
   branding: {
+    legalName:    { type: String, trim: true },
     taxId:        { type: String, trim: true },
     supportEmail: { type: String, trim: true },
     phone:        { type: String, trim: true },
+    website:      { type: String, trim: true },
     address: {
       street:  { type: String, trim: true },
       city:    { type: String, trim: true },

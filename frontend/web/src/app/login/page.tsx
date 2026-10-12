@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTheme } from "@/components/theme-provider";
 import { login, authenticate2fa } from "@/lib/api";
-import { getRoleHome, type Role, ACUSTOCK_API_BASE_URL } from "@/lib/acustock";
+import { getRoleHome, getRoleWelcome, type Role, ACUSTOCK_API_BASE_URL } from "@/lib/acustock";
 
 const roles: Role[] = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER"];
 
@@ -69,7 +69,9 @@ function LoginForm() {
         return;
       }
 
-      router.push(getRoleHome(response.user.role));
+      const skipWelcome = typeof window !== "undefined" && localStorage.getItem("acustock_skip_welcome") === "true";
+      const targetPath = skipWelcome ? getRoleHome(response.user.role) : getRoleWelcome(response.user.role);
+      router.push(targetPath);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
@@ -87,7 +89,9 @@ function LoginForm() {
 
     try {
       const response = await authenticate2fa(tempToken, mfaCode.trim());
-      router.push(getRoleHome(response.user.role));
+      const skipWelcome = typeof window !== "undefined" && localStorage.getItem("acustock_skip_welcome") === "true";
+      const targetPath = skipWelcome ? getRoleHome(response.user.role) : getRoleWelcome(response.user.role);
+      router.push(targetPath);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "2FA verification failed");

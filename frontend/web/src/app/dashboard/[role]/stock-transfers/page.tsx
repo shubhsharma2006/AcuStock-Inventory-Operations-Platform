@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 interface WarehouseRef {
   _id: string;
@@ -291,6 +292,7 @@ export default function StockTransfersPage() {
 }
 
 function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const queryClient = useQueryClient();
   const [fromWarehouse, setFromWarehouse] = useState("");
   const [toWarehouse, setToWarehouse] = useState("");
   const [items, setItems] = useState<{ productId: string; quantity: number }[]>([
@@ -308,6 +310,27 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
     queryKey: ["items"],
     queryFn: () => apiFetch("/items"),
   });
+
+  const warehouseOptions = warehouses.map((wh) => ({
+    value: wh._id,
+    label: wh.name,
+    subLabel: wh.code ? `Code: ${wh.code}` : undefined,
+  }));
+
+  const destWarehouseOptions = warehouses
+    .filter((wh) => wh._id !== fromWarehouse)
+    .map((wh) => ({
+      value: wh._id,
+      label: wh.name,
+      subLabel: wh.code ? `Code: ${wh.code}` : undefined,
+    }));
+
+  const productOptions = products.map((p) => ({
+    value: p._id,
+    label: p.name,
+    subLabel: p.sku ? `SKU: ${p.sku} · Stock: ${p.currentStock ?? 0} ${p.uom || "PCS"}` : `Stock: ${p.currentStock ?? 0} ${p.uom || "PCS"}`,
+    badge: p.currentStock !== undefined && p.currentStock <= 0 ? "Out of Stock" : undefined,
+  }));
 
   const mutation = useMutation({
     mutationFn: (data: object) => apiFetch("/stock-transfers", { method: "POST", body: JSON.stringify(data) }),
@@ -389,38 +412,26 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">From Warehouse (Source) *</label>
-              <select
-                required
+              <SearchableSelect
                 value={fromWarehouse}
-                onChange={(e) => setFromWarehouse(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
-              >
-                <option value="">Select source warehouse...</option>
-                {warehouses.map((wh) => (
-                  <option key={wh._id} value={wh._id}>
-                    {wh.name} ({wh.code})
-                  </option>
-                ))}
-              </select>
+                onChange={setFromWarehouse}
+                options={warehouseOptions}
+                placeholder="Search source warehouse by name or code..."
+                onRefresh={() => queryClient.invalidateQueries({ queryKey: ["warehouses"] })}
+                required
+              />
             </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">To Warehouse (Destination) *</label>
-              <select
-                required
+              <SearchableSelect
                 value={toWarehouse}
-                onChange={(e) => setToWarehouse(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
-              >
-                <option value="">Select destination warehouse...</option>
-                {warehouses
-                  .filter((wh) => wh._id !== fromWarehouse)
-                  .map((wh) => (
-                    <option key={wh._id} value={wh._id}>
-                      {wh.name} ({wh.code})
-                    </option>
-                  ))}
-              </select>
+                onChange={setToWarehouse}
+                options={destWarehouseOptions}
+                placeholder="Search destination warehouse..."
+                onRefresh={() => queryClient.invalidateQueries({ queryKey: ["warehouses"] })}
+                required
+              />
             </div>
           </div>
 
@@ -438,19 +449,16 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
 
             {items.map((row, idx) => (
               <div key={idx} className="flex items-center gap-2">
-                <select
-                  required
-                  value={row.productId}
-                  onChange={(e) => updateItemRow(idx, "productId", e.target.value)}
-                  className="flex-1 rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
-                >
-                  <option value="">Select product...</option>
-                  {products.map((p) => (
-                    <option key={p._id} value={p._id}>
-                      {p.name} {p.sku ? `[${p.sku}]` : ""} — Stock: {p.currentStock ?? 0} {p.uom || "PCS"}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex-1 min-w-0">
+                  <SearchableSelect
+                    value={row.productId}
+                    onChange={(val) => updateItemRow(idx, "productId", val)}
+                    options={productOptions}
+                    placeholder="Search product by initial letter or SKU..."
+                    onRefresh={() => queryClient.invalidateQueries({ queryKey: ["items"] })}
+                    required
+                  />
+                </div>
 
                 <input
                   required
@@ -565,18 +573,16 @@ function ShipDispatchModal({
 
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1">Shipping Partner / Transporter</label>
-            <select
+            <SearchableSelect
               value={transporterId}
-              onChange={(e) => setTransporterId(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
-            >
-              <option value="">Select Carrier (Optional)</option>
-              {transporters.map((t) => (
-                <option key={t._id} value={t._id}>
-                  {t.name} ({t.code})
-                </option>
-              ))}
-            </select>
+              onChange={setTransporterId}
+              options={transporters.map((t) => ({
+                value: t._id,
+                label: t.name,
+                subLabel: t.code ? `Carrier code: ${t.code}` : undefined,
+              }))}
+              placeholder="Search carrier by name or code..."
+            />
           </div>
 
           <div>

@@ -11,6 +11,7 @@
  */
 
 const PDFDocument = require('pdfkit');
+const QRCode = require('qrcode');
 
 // ── Color Palette ─────────────────────────────────────────────
 const COLORS = {
@@ -656,11 +657,207 @@ function generateSubscriptionInvoicePdf(tenant, transaction, planInfo, outStream
   return doc;
 }
 
+// ═══════════════════════════════════════════════════════════════
+// PUBLIC GENERATOR 5: 4x6 Thermal Shipping Label with QR Code
+// ═══════════════════════════════════════════════════════════════
+async function generateShippingLabelPdf(labelData, tenant, outStream) {
+  // Thermal 4x6 dimensions: 288 x 432 points (4in x 6in at 72dpi)
+  const doc = new PDFDocument({
+    size: [288, 432],
+    margins: { top: 14, bottom: 14, left: 14, right: 14 },
+    info: {
+      Title: `Shipping Label - ${labelData.trackingNumber || labelData.labelNumber}`,
+      Author: tenant?.name || 'AcuStock'
+    }
+  });
+
+  if (outStream) doc.pipe(outStream);
+
+  const carrier = (labelData.carrier || 'STANDARD').toUpperCase();
+  const trackingNumber = labelData.trackingNumber || 'TRK-00000000';
+  const shipFrom = labelData.shipFrom || {};
+  const shipTo = labelData.shipTo || {};
+
+  // Outer border
+  doc.lineWidth(1.5).rect(14, 14, 260, 404).stroke(COLORS.primary);
+
+  // Top Carrier Header Bar
+  doc.rect(14, 14, 260, 46).fill(COLORS.primary);
+  doc.fontSize(16).fillColor('#ffffff').font('Helvetica-Bold').text(carrier, 24, 22, { width: 140 });
+  doc.fontSize(9).font('Helvetica').text('PRIORITY DISPATCH', 24, 42, { width: 140 });
+  doc.fontSize(10).font('Helvetica-Bold').text(labelData.labelNumber || '', 160, 26, { width: 104, align: 'right' });
+
+  // Tracking barcode / QR code block
+  let currentY = 66;
+  const qrPayload = JSON.stringify({
+    carrier,
+    trackingNumber,
+    pkg: labelData.packageNumber,
+    so: labelData.soNumber
+  });
+
+  try {
+    const qrBuffer = await QRCode.toBuffer(qrPayload, {
+      width: 90,
+      margin: 1,
+      errorCorrectionLevel: 'M'
+    });
+    doc.image(qrBuffer, 22, currentY, { width: 80 });
+  } catch (err) {
+    doc.rect(22, currentY, 80, 80).stroke('#cccccc');
+    doc.fontSize(8).fillColor(COLORS.textMuted).text('QR CODE', 26, currentY + 35);
+  }
+
+  // Tracking details next to QR code
+  doc.fontSize(8).fillColor(COLORS.textMuted).font('Helvetica').text('TRACKING #:', 110, currentY + 8);
+  doc.fontSize(13).fillColor(COLORS.primary).font('Helvetica-Bold').text(trackingNumber, 110, currentY + 20, { width: 154 });
+
+  doc.fontSize(7).fillColor(COLORS.textMuted).font('Helvetica').text('PACKAGE REF:', 110, currentY + 45);
+  doc.fontSize(9).fillColor(COLORS.textDark).font('Helvetica-Bold').text(labelData.packageNumber || 'PKG', 110, currentY + 55, { width: 154 });
+
+  doc.fontSize(7).fillColor(COLORS.textMuted).font('Helvetica').text('ORDER REF:', 110, currentY + 68);
+  doc.fontSize(9).fillColor(COLORS.textDark).font('Helvetica-Bold').text(labelData.soNumber || 'SO', 110, currentY + 77, { width: 154 });
+
+  // Divider
+  currentY = 152;
+  doc.moveTo(14, currentY).lineTo(274, currentY).lineWidth(1).stroke(COLORS.borderDark);
+
+  // SHIP FROM block
+  currentY += 8;
+  doc.fontSize(7).fillColor(COLORS.textMuted).font('Helvetica-Bold').text('SHIP FROM:', 24, currentY);
+  currentY += 10;
+  doc.fontSize(8).fillColor(COLORS.textDark).font('Helvetica-Bold').text(shipFrom.company || shipFrom.name || tenant?.name || 'Sender', 24, currentY, { width: 240 });
+  currentY += 10;
+  const fromAddr = [shipFrom.address, shipFrom.city, shipFrom.state, shipFrom.pincode].filter(Boolean).join(', ');
+  doc.fontSize(8).font('Helvetica').text(fromAddr || 'Warehouse Facility', 24, currentY, { width: 240 });
+  if (shipFrom.phone) {
+    currentY += 10;
+    doc.text(`Phone: ${shipFrom.phone}`, 24, currentY, { width: 240 });
+  }
+
+  // Divider
+  currentY += 16;
+  doc.moveTo(14, currentY).lineTo(274, currentY).lineWidth(1).stroke(COLORS.borderDark);
+
+  // SHIP TO block (prominent for delivery courier)
+  currentY += 8;
+  doc.fontSize(8).fillColor(COLORS.textMuted).font('Helvetica-Bold').text('SHIP TO:', 24, currentY);
+  currentY += 12;
+  doc.fontSize(11).fillColor(COLORS.primary).font('Helvetica-Bold').text(shipTo.name || 'Recipient', 24, currentY, { width: 240 });
+  if (shipTo.company) {
+    currentY += 13;
+    doc.fontSize(9).fillColor(COLORS.textDark).font('Helvetica').text(shipTo.company, 24, currentY, { width: 240 });
+  }
+  currentY += 13;
+  const toAddr = [shipTo.address, shipTo.city, shipTo.state].filter(Boolean).join(', ');
+  doc.fontSize(9).font('Helvetica').text(toAddr || 'Delivery Address', 24, currentY, { width: 240 });
+  currentY += 12;
+  doc.fontSize(12).font('Helvetica-Bold').text(`PIN: ${shipTo.pincode || '------'}`, 24, currentY, { width: 240 });
+  if (shipTo.phone) {
+    currentY += 14;
+    doc.fontSize(9).font('Helvetica').text(`Tel: ${shipTo.phone}`, 24, currentY, { width: 240 });
+  }
+
+  // Divider
+  currentY += 18;
+  doc.moveTo(14, currentY).lineTo(274, currentY).lineWidth(1).stroke(COLORS.borderDark);
+
+  // Package Specs Bar (Weight, Items count)
+  currentY += 6;
+  const weightStr = labelData.weight ? `${labelData.weight} kg` : '--';
+  const unitsStr = labelData.totalUnits ? `${labelData.totalUnits} Units` : '--';
+  doc.rect(20, currentY, 248, 24).fill(COLORS.tableHeaderBg);
+  doc.fontSize(8).fillColor(COLORS.textDark).font('Helvetica-Bold')
+    .text(`WEIGHT: ${weightStr}`, 28, currentY + 7, { width: 110 })
+    .text(`QTY: ${unitsStr}`, 148, currentY + 7, { width: 110, align: 'right' });
+
+  // Security / Electronic Declaration Footer
+  currentY += 34;
+  doc.fontSize(6).fillColor(COLORS.textLight).font('Helvetica')
+    .text('SYSTEM-GENERATED ELECTRONIC SHIPPING LABEL — NO SIGNATURE REQUIRED', 20, currentY, { width: 248, align: 'center' });
+
+  doc.end();
+  return doc;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PUBLIC GENERATOR 6: A4 Packing Slip PDF
+// ═══════════════════════════════════════════════════════════════
+function generatePackingSlipPdf(packageData, salesOrder, tenant, outStream) {
+  const doc = createDocument();
+  if (outStream) doc.pipe(outStream);
+
+  const brand = tenant?.branding || {};
+  const afterHeaderY = drawHeader(doc, tenant, 'PACKING SLIP', packageData.packageNumber);
+
+  const metaItems = [
+    { label: 'Package #', value: packageData.packageNumber },
+    { label: 'SO Number', value: salesOrder?.soNumber || 'N/A' },
+    { label: 'Package Date', value: formatDate(packageData.createdAt) },
+    { label: 'Carrier / Trk', value: `${packageData.carrier || 'Standard'} / ${packageData.trackingNumber || '--'}` }
+  ];
+  const afterMetaY = drawMetaGrid(doc, afterHeaderY, metaItems);
+
+  const buyer = salesOrder?.buyer || {};
+  const partyA = {
+    title: 'Ship From',
+    name: tenant?.name || 'Warehouse',
+    contact: [brand.supportEmail, brand.phone].filter(Boolean).join('  •  '),
+    address: [brand.address?.street, brand.address?.city, brand.address?.state, brand.address?.pincode].filter(Boolean).join(', ') || 'Warehouse Address'
+  };
+  const partyB = {
+    title: 'Ship To',
+    name: buyer.name || 'Customer',
+    contact: [buyer.phone, buyer.email].filter(Boolean).join('  •  '),
+    address: buyer.address || 'Customer Address'
+  };
+  const afterPartyY = drawPartySection(doc, afterMetaY, partyA, partyB);
+
+  const columns = [
+    { key: 'item', header: 'Item Description', width: 200, align: 'left' },
+    { key: 'sku', header: 'SKU / Batch', width: 130, align: 'left' },
+    { key: 'qty', header: 'Packed Qty', width: 60, align: 'center' },
+    { key: 'status', header: 'Condition', width: 100, align: 'center' }
+  ];
+
+  const rows = (packageData.lineItems || []).map((line) => {
+    const itemObj = line.productId || {};
+    const name = typeof itemObj === 'object' ? itemObj.name : 'Product';
+    const sku = (typeof itemObj === 'object' ? itemObj.sku : '') || '--';
+    const lotStr = line.lotNumber ? `Lot: ${line.lotNumber}` : '';
+    const skuOrLot = [sku, lotStr].filter(Boolean).join(' | ');
+
+    return {
+      item: name,
+      sku: skuOrLot,
+      qty: line.quantity,
+      status: 'Verified New',
+      serials: line.serialNumbers || []
+    };
+  });
+
+  const afterTableY = drawTable(doc, afterPartyY, columns, rows);
+
+  // Footer notes & dispatch sign-off
+  const notesText = [
+    `Package Notes: ${packageData.notes || 'None'}`,
+    'Please inspect contents immediately upon arrival. Report discrepancies within 48 hours.',
+    `Weight: ${packageData.weight ? packageData.weight + ' kg' : 'N/A'}`
+  ].join('\n');
+
+  drawFooter(doc, afterTableY, notesText, 'Warehouse Dispatcher');
+
+  doc.end();
+  return doc;
+}
+
 module.exports = {
   formatCurrency,
   formatDate,
   generateSalesOrderInvoicePdf,
   generatePurchaseOrderPdf,
   generateShipmentChallanPdf,
-  generateSubscriptionInvoicePdf
+  generateSubscriptionInvoicePdf,
+  generateShippingLabelPdf,
+  generatePackingSlipPdf
 };

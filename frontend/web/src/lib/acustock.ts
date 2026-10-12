@@ -31,6 +31,11 @@ export function getRoleHome(role: Role) {
   return "/dashboard/user";
 }
 
+export function getRoleWelcome(role: Role) {
+  const roleSlug = role.toLowerCase().replace(/_/g, "-");
+  return `/dashboard/${roleSlug}/welcome`;
+}
+
 export function resolveNotificationRoute(notification: NotificationTarget, role: Role) {
   const roleBase = `/dashboard/${role.toLowerCase()}`;
   const directLink = notification.link?.trim();

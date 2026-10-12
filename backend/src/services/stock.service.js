@@ -2,8 +2,10 @@ const mongoose = require('mongoose');
 
 const StockLedger = require('../models/StockLedger');
 const SerialAudit = require('../models/SerialAudit');
-const Item        = require('../models/Item');
-const Warranty    = require('../models/Warranty');
+const Item         = require('../models/Item');
+const Warranty     = require('../models/Warranty');
+const InventoryLot = require('../models/InventoryLot');
+const lotService   = require('./lot.service');
 
 const MAX_STOCK_QUANTITY = 100_000;
 
@@ -106,6 +108,70 @@ async function stockIn(data, user) {
         throw new Error('Serial numbers are disabled for this product');
       }
 
+      // 2b️⃣ Batch/Lot policy enforcement & creation
+      let lotAllocations = [];
+      let createdLot = null;
+
+      if (item.trackingMode === 'BATCH') {
+        const lotInput = data.lot || data.batch || {};
+        const lotNumber = (lotInput.lotNumber || data.lotNumber || '').trim().toUpperCase();
+        const expiryDate = lotInput.expiryDate || data.expiryDate;
+
+        if (!lotNumber) {
+          throw new Error('Lot number is required for batch-tracked items');
+        }
+        if (!expiryDate) {
+          throw new Error('Expiry date is required for batch-tracked items');
+        }
+
+        if (item.lotPolicy?.requireSupplierBatch && !lotInput.supplierBatchNumber && !data.supplierBatchNumber) {
+          throw new Error('Supplier batch number is required for this product');
+        }
+
+        let lot = await InventoryLot.findOne({
+          tenantId,
+          lotNumber
+        }).session(session);
+
+        if (lot) {
+          if (String(lot.productId) !== String(productId)) {
+            throw new Error(`Lot number "${lotNumber}" is already assigned to a different product`);
+          }
+          lot.remainingQty += quantity;
+          lot.initialQty += quantity;
+          if (lot.status === 'DEPLETED') {
+            lot.status = new Date(lot.expiryDate) > new Date() ? 'ACTIVE' : 'EXPIRED';
+          }
+          await lot.save({ session });
+        } else {
+          lot = await lotService.createLot({
+            lotData: {
+              lotNumber,
+              productId,
+              initialQty: quantity,
+              remainingQty: quantity,
+              mfgDate: lotInput.mfgDate || data.mfgDate,
+              expiryDate: new Date(expiryDate),
+              supplierWarrantyExpiry: lotInput.supplierWarrantyExpiry || data.supplierWarrantyExpiry,
+              supplierBatchNumber: lotInput.supplierBatchNumber || data.supplierBatchNumber,
+              supplierId: data.supplierId || item.preferredSupplierId || undefined,
+              costPrice: lotInput.costPrice || item.purchasePrice || undefined,
+              notes: lotInput.notes || data.notes
+            },
+            tenantId,
+            session
+          });
+        }
+
+        createdLot = lot;
+        lotAllocations = [{
+          lotId: lot._id,
+          lotNumber: lot.lotNumber,
+          quantity,
+          expiryDate: lot.expiryDate
+        }];
+      }
+
       // 3️⃣ Ledger entry (APPEND ONLY - source of truth for stock)
       const normalizedSupplier = typeof supplier === 'string' ? { companyName: supplier } : (supplier || {});
       await StockLedger.create([{
@@ -114,6 +180,7 @@ async function stockIn(data, user) {
         type: 'IN',
         quantity,
         serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
+        lotAllocations,
         condition: condition || 'new',
         partyDetails: normalizedSupplier,
         transactionDetails: transaction || {},
@@ -158,6 +225,17 @@ async function stockIn(data, user) {
             { upsert: true, new: false, session }
           );
         }
+      } else if (item.trackingMode === 'BATCH' && createdLot) {
+        await Warranty.create([{
+          productId,
+          serialNumber:     null,
+          lotId:            createdLot._id,
+          supplierExpiry:   createdLot.expiryDate,
+          purchaseWarranty: purchaseData,
+          sellerWarranty:   { status: 'not-sold' },
+          createdBy:        user._id,
+          tenantId
+        }], { session });
       } else if (!policy.enableSerial && warrantyPeriod) {
         await Warranty.insertMany([{
           productId,
@@ -243,6 +321,21 @@ async function stockOut(data, user) {
         throw new Error('Serial numbers are disabled for this product');
       }
 
+      // 2b️⃣ Batch/Lot allocation
+      let lotAllocations = [];
+      if (item.trackingMode === 'BATCH') {
+        const strategy = item.lotPolicy?.allocationStrategy || 'FEFO';
+        const preferredLotId = data.lotId || data.preferredLotId || null;
+        lotAllocations = await lotService.allocateLots({
+          productId: item._id,
+          requestedQty: quantity,
+          tenantId,
+          session,
+          strategy,
+          preferredLotId
+        });
+      }
+
       // 3️⃣ Check current stock from ledger INSIDE transaction (prevents negative stock on concurrent writes)
       const stockMatch = { productId: item._id, isDeleted: { $ne: true }, tenantId: new mongoose.Types.ObjectId(tenantId) };
 
@@ -274,6 +367,7 @@ async function stockOut(data, user) {
         type: 'OUT',
         quantity,
         serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
+        lotAllocations,
         condition: condition || 'new',
         partyDetails: normalizedBuyer,
         transactionDetails: transaction || {},
@@ -331,6 +425,28 @@ async function stockOut(data, user) {
           { $set: { sellerWarranty: sellerData } },
           { session }
         );
+      } else if (sellerWarrantyPeriod && item.trackingMode === 'BATCH' && lotAllocations.length > 0) {
+        const sellerData = Warranty.buildSellerWarranty(sellerWarrantyPeriod, new Date(), buyer || {});
+        for (const alloc of lotAllocations) {
+          const coverage = Warranty.buildCustomerCoverage({
+            lot: alloc,
+            durationMonths: Warranty.parseMonths(sellerWarrantyPeriod),
+            saleDate: new Date(),
+            terms: transaction?.warrantyTerms || ''
+          });
+
+          await Warranty.create([{
+            productId: item._id,
+            serialNumber: null,
+            lotId: alloc.lotId,
+            packageId: data.packageId || null,
+            supplierExpiry: alloc.expiryDate,
+            sellerWarranty: sellerData,
+            customerCoverage: coverage,
+            createdBy: user._id,
+            tenantId
+          }], { session });
+        }
       }
     });
 

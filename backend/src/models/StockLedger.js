@@ -34,6 +34,25 @@ const stockLedgerSchema = new mongoose.Schema({
     trim: true,
     uppercase: true
   }],
+  // Batch/Lot Allocations
+  lotAllocations: [{
+    lotId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InventoryLot'
+    },
+    lotNumber: {
+      type: String,
+      trim: true,
+      uppercase: true
+    },
+    quantity: {
+      type: Number,
+      min: 1
+    },
+    expiryDate: {
+      type: Date
+    }
+  }],
   condition: {
     type: String,
     enum: ['New', 'Repair', 'Demo', 'new', 'refurbished', 'used', 'damaged'],
@@ -127,6 +146,7 @@ stockLedgerSchema.index({ productId: 1, type: 1, createdAt: -1 });
 stockLedgerSchema.index({ createdBy: 1, createdAt: -1 });
 stockLedgerSchema.index({ 'partyDetails.companyName': 1 });
 stockLedgerSchema.index({ isDeleted: 1, productId: 1 });
+stockLedgerSchema.index({ tenantId: 1, 'lotAllocations.lotId': 1 });
 
 /**
  * Immutability Guard — Schema-Level Mutation Protection

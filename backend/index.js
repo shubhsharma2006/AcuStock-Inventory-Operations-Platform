@@ -83,6 +83,10 @@ const tenantRoutes         = require('./src/routes/tenants');
 const activityRoutes       = require('./src/routes/activity');
 const searchRoutes         = require('./src/routes/search');
 const transporterRoutes    = require('./src/routes/transporters');
+const lotRoutes            = require('./src/routes/lots');
+const packageRoutes        = require('./src/routes/packages');
+const labelRoutes          = require('./src/routes/labels');
+const { aiRouter }         = require('./src/ai');
 const { resolveTenant }    = require('./src/middleware/tenancy');
 const { requireAuth, requireTenantId } = require('./src/middleware/auth');
 const { retryFailedBillingEvents } = require('./src/routes/billing');
@@ -375,6 +379,7 @@ app.use('/assets', express.static(path.join(__dirname, '../frontend/assets')));
 
 // Also serve from /frontend path for backward compatibility
 app.use('/frontend', express.static(path.join(__dirname, '../frontend')));
+app.use('/uploads', express.static(path.resolve(process.env.UPLOAD_PATH || './uploads')));
 
 // ============================================================
 // LOGGING CONFIGURATION
@@ -578,6 +583,7 @@ const UNGUARDED_PREFIXES = [
   '/api/auth',
   '/api/billing/webhook',
   '/api/setup',
+  '/api/ai/whatsapp',
 ];
 app.use('/api/', (req, res, next) => {
   const path = req.originalUrl.split('?')[0];
@@ -629,6 +635,10 @@ app.use('/api/tenants',         tenantRoutes);
 app.use('/api/activity',        activityRoutes);
 app.use('/api/search',          searchRoutes);
 app.use('/api/transporters',    transporterRoutes);
+app.use('/api/lots',            lotRoutes);
+app.use('/api/packages',        packageRoutes);
+app.use('/api/labels',          labelRoutes);
+app.use('/api/ai',              aiRouter);
 // CSV exports (mounted at root /api so paths like /api/stock/export/csv work)
 app.use('/api', csvExportRoutes);
 

@@ -19,6 +19,11 @@ import { AppShell } from "@/components/app-shell";
 import { SessionGate } from "@/components/session-gate";
 import { useRealtimeState } from "@/components/realtime-provider";
 import TwoFactorSettings from "@/components/TwoFactorSettings";
+import ProductGalleryModal, { ProductForGallery } from "@/components/product-gallery-modal";
+import { ProductDetailsModal } from "@/components/product-details-modal";
+import { EnterpriseSettingsView } from "@/components/enterprise-settings-view";
+import { NotificationsHubView } from "@/components/notifications-hub-view";
+import { useQueryClient } from "@tanstack/react-query";
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-IN").format(value);
@@ -38,10 +43,12 @@ export function ProductsView({ role }: { role: Role }) {
 }
 
 function ProductsBody({ role, userName }: { role: Role; userName: string }) {
+  const queryClient = useQueryClient();
   const { refreshToken, refresh } = useRealtimeState();
   const { items, loading, error } = useProductsData(refreshToken);
   const [query, setQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedProductForDetails, setSelectedProductForDetails] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [suppliers, setSuppliers] = useState<{ _id: string; companyName?: string; name?: string }[]>([]);
@@ -55,12 +62,15 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
       .catch(() => {});
   }, []);
 
+  const [galleryProduct, setGalleryProduct] = useState<ProductForGallery | null>(null);
+
   const [form, setForm] = useState({
     name: "",
     shortName: "",
     sku: "",
     barcode: "",
     barcodeFormat: "CODE128",
+    trackingMode: "NONE",
     category: "General",
     brand: "",
     uom: "PCS",
@@ -116,6 +126,7 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
           sku: form.sku.trim() || undefined,
           barcode: form.barcode.trim() || undefined,
           barcodeFormat: form.barcodeFormat,
+          trackingMode: form.trackingMode || "NONE",
           category: form.category.trim() || "General",
           brand: form.brand.trim() || undefined,
           uom: form.uom,
@@ -140,6 +151,7 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
         sku: "",
         barcode: "",
         barcodeFormat: "CODE128",
+        trackingMode: "NONE",
         category: "General",
         brand: "",
         uom: "PCS",
@@ -155,6 +167,8 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
         hsn: "",
         description: "",
       });
+      queryClient.invalidateQueries({ queryKey: ["products-list"] });
+      queryClient.invalidateQueries({ queryKey: ["items"] });
       refresh();
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Failed to create product");
@@ -204,9 +218,11 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
               <tr>
                 <th className="px-4 py-3 font-medium">Product / Category</th>
                 <th className="px-4 py-3 font-medium">SKU & Barcode</th>
+                <th className="px-4 py-3 font-medium">Gallery</th>
                 <th className="px-4 py-3 font-medium">UoM</th>
                 <th className="px-4 py-3 font-medium">Stock Status</th>
                 <th className="px-4 py-3 font-medium">Pricing & Tax</th>
+                <th className="px-4 py-3 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/10 bg-slate-950/50">
@@ -219,7 +235,21 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                 return (
                   <tr key={item._id} className="hover:bg-white/[0.02]">
                     <td className="px-4 py-4">
-                      <div className="font-semibold text-white">{item.name}</div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedProductForDetails(item._id)}
+                          className="font-semibold text-white text-left hover:text-amber-300 transition underline-offset-2 hover:underline"
+                          title="Click to view full product details"
+                        >
+                          {item.name}
+                        </button>
+                        {item.trackingMode && item.trackingMode !== 'NONE' ? (
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${item.trackingMode === 'BATCH' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`}>
+                            {item.trackingMode}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
                         <span className="rounded bg-white/10 px-1.5 py-0.5">{item.category || "General"}</span>
                         {item.brand ? <span>· {item.brand}</span> : null}
@@ -235,6 +265,22 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                           📟 {item.barcode}
                         </div>
                       ) : null}
+                    </td>
+                    <td className="px-4 py-4">
+                      <button
+                        type="button"
+                        onClick={() => setGalleryProduct({ _id: item._id, name: item.name, sku: item.sku || '', gallery: item.gallery })}
+                        className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:border-amber-400/40 hover:text-white"
+                        title="Manage Product Images"
+                      >
+                        {item.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={item.imageUrl} alt="" className="h-6 w-6 rounded object-cover" />
+                        ) : (
+                          <span>📷</span>
+                        )}
+                        <span>{item.gallery?.length ? `${item.gallery.length} photo${item.gallery.length === 1 ? '' : 's'}` : '+ Add'}</span>
+                      </button>
                     </td>
                     <td className="px-4 py-4 text-slate-300 font-medium">
                       {item.uom || "PCS"}
@@ -270,12 +316,22 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                         {item.taxRate ? `${item.taxType || "GST"} ${item.taxRate}%` : "No Tax"}
                       </div>
                     </td>
+                    <td className="px-4 py-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProductForDetails(item._id)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-xs font-semibold text-amber-300 hover:border-amber-400/50 hover:bg-amber-400/10 transition"
+                        title="View Comprehensive Product Details"
+                      >
+                        <span>👁️ View Details</span>
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                     No products match your search.
                   </td>
                 </tr>
@@ -332,7 +388,7 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">SKU (blank = auto)</label>
                   <input
@@ -365,6 +421,18 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
                     <option value="LTR">Liters (LTR)</option>
                     <option value="SET">Sets (SET)</option>
                     <option value="UNIT">Units (UNIT)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Tracking Mode</label>
+                  <select
+                    value={form.trackingMode}
+                    onChange={(e) => setForm({ ...form, trackingMode: e.target.value })}
+                    className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
+                  >
+                    <option value="NONE">Standard (Quantity)</option>
+                    <option value="SERIAL">Serial-Controlled</option>
+                    <option value="BATCH">Batch / Lot-Tracked</option>
                   </select>
                 </div>
               </div>
@@ -530,6 +598,22 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
           </div>
         </div>
       ) : null}
+
+      {galleryProduct ? (
+        <ProductGalleryModal
+          product={galleryProduct}
+          onClose={() => setGalleryProduct(null)}
+          onUpdated={() => refresh()}
+        />
+      ) : null}
+
+      {selectedProductForDetails ? (
+        <ProductDetailsModal
+          productId={selectedProductForDetails}
+          role={role}
+          onClose={() => setSelectedProductForDetails(null)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -573,7 +657,7 @@ function RemainingStockBody({ role, userName }: { role: Role; userName: string }
 }
 
 export function NotificationsView({ role }: { role: Role }) {
-  return <NotificationsBody role={role} userName="User" />;
+  return <NotificationsHubView role={role} />;
 }
 
 function NotificationsBody({ role, userName }: { role: Role; userName: string }) {
@@ -1068,7 +1152,7 @@ function StockLedgerBody({ role, userName }: { role: Role; userName: string }) {
 }
 
 export function SettingsView({ role }: { role: Role }) {
-  return <SettingsBody role={role} user={{ _id: "", role }} />;
+  return <EnterpriseSettingsView role={role} />;
 }
 
 function SettingsBody({ role, user }: { role: Role; user: { _id: string; name?: string; email?: string; role: Role } }) {

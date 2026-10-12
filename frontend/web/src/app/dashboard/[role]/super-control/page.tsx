@@ -41,14 +41,20 @@ type AdminUser = {
 
 const PERMISSION_KEYS = [
   { key: "canViewProducts", label: "View Products" },
+  { key: "canViewProductDetails", label: "View Product Details" },
   { key: "canAddProduct", label: "Add Product" },
   { key: "canEditProduct", label: "Edit Product" },
   { key: "canDeleteProduct", label: "Delete Product" },
   { key: "canStockIn", label: "Perform Stock IN" },
   { key: "canStockOut", label: "Perform Stock OUT" },
   { key: "canViewStockLedger", label: "View Stock Ledger" },
+  { key: "canViewCompanies", label: "View Companies" },
+  { key: "canAddCompany", label: "Add Company" },
+  { key: "canManageWarehouses", label: "Manage Warehouses" },
   { key: "canViewAllReports", label: "View All System Reports" },
   { key: "canViewOwnReports", label: "View Own Reports Only" },
+  { key: "canViewAuditLogs", label: "View Audit Logs" },
+  { key: "canExportData", label: "Export Data & Reports" },
   { key: "canAccessSettings", label: "Access System Settings" },
   { key: "canManageUsers", label: "Manage Users" },
   { key: "canManageManagers", label: "Manage Managers" },
@@ -65,6 +71,7 @@ export default function SuperAdminControlPage() {
   // Permission Builder states
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [permToggles, setPermToggles] = useState<Record<string, boolean>>({});
+  const [customKeys, setCustomKeys] = useState<string[]>([]);
   const [permMessage, setPermMessage] = useState<string | null>(null);
 
   // Ownership & Transfer states
@@ -133,6 +140,39 @@ export default function SuperAdminControlPage() {
     },
   });
 
+  const resetPermissionsMutation = useMutation({
+    mutationFn: (userId: string) =>
+      apiFetch<{ success: boolean; message: string }>(`/superadmin/users/${userId}/reset-permissions`, {
+        method: "POST",
+      }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["superadmin-users"] });
+      setPermMessage(`✅ ${data.message || "Permissions reset to defaults"}`);
+    },
+  });
+
+  const forcePasswordResetMutation = useMutation({
+    mutationFn: (userId: string) =>
+      apiFetch<{ success: boolean; message: string }>(`/superadmin/users/${userId}/force-password-reset`, {
+        method: "POST",
+      }),
+    onSuccess: (data) => {
+      alert(data.message || "User will be forced to change password on next login.");
+      queryClient.invalidateQueries({ queryKey: ["superadmin-users"] });
+    },
+  });
+
+  const reset2faMutation = useMutation({
+    mutationFn: (userId: string) =>
+      apiFetch<{ success: boolean; message: string }>(`/superadmin/users/${userId}/reset-2fa`, {
+        method: "POST",
+      }),
+    onSuccess: (data) => {
+      alert(data.message || "2FA has been disabled and reset for this user.");
+      queryClient.invalidateQueries({ queryKey: ["superadmin-users"] });
+    },
+  });
+
   const promoteMutation = useMutation({
     mutationFn: (userId: string) =>
       apiFetch("/ownership/promote-admin", {
@@ -177,11 +217,29 @@ export default function SuperAdminControlPage() {
     },
   });
 
+  async function loadUserPermissions(userId: string) {
+    try {
+      const res = await apiFetch<any>(`/superadmin/users/${userId}/permissions`);
+      if (res && res.effectivePermissions) {
+        setPermToggles(res.effectivePermissions);
+        setCustomKeys(Object.keys(res.customPermissions || {}));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // Toggle user selection for permission builder
   function toggleUserSelection(id: string) {
-    setSelectedUserIds((prev) =>
-      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
-    );
+    setSelectedUserIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id];
+      if (next.length === 1) {
+        loadUserPermissions(next[0]);
+      } else {
+        setCustomKeys([]);
+      }
+      return next;
+    });
   }
 
   function handleSavePermissions() {
@@ -329,23 +387,51 @@ export default function SuperAdminControlPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <button
-                          type="button"
-                          disabled={u.isSuperAdmin}
-                          onClick={() =>
-                            toggleStatusMutation.mutate({
-                              userId: u._id,
-                              isActive: u.isActive === false,
-                            })
-                          }
-                          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                            u.isActive !== false
-                              ? "border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/20"
-                              : "border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
-                          } disabled:opacity-40`}
-                        >
-                          {u.isActive !== false ? "Deactivate" : "Activate"}
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            title="Force user to set new password upon next login"
+                            onClick={() => {
+                              if (confirm(`Force password change for ${u.name || u.email} on next login?`)) {
+                                forcePasswordResetMutation.mutate(u._id);
+                              }
+                            }}
+                            className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-slate-300 transition hover:bg-white/10 hover:text-white"
+                          >
+                            🔑 Force Pwd
+                          </button>
+
+                          <button
+                            type="button"
+                            title="Disable and reset two-factor authentication"
+                            onClick={() => {
+                              if (confirm(`Reset and disable 2FA for ${u.name || u.email}?`)) {
+                                reset2faMutation.mutate(u._id);
+                              }
+                            }}
+                            className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-[11px] text-amber-200 transition hover:bg-amber-400/20"
+                          >
+                            🛡️ Reset 2FA
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={u.isSuperAdmin}
+                            onClick={() =>
+                              toggleStatusMutation.mutate({
+                                userId: u._id,
+                                isActive: u.isActive === false,
+                              })
+                            }
+                            className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition ${
+                              u.isActive !== false
+                                ? "border-rose-400/20 bg-rose-400/10 text-rose-300 hover:bg-rose-400/20"
+                                : "border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/20"
+                            } disabled:opacity-40`}
+                          >
+                            {u.isActive !== false ? "Deactivate" : "Activate"}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -409,12 +495,24 @@ export default function SuperAdminControlPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               {PERMISSION_KEYS.map((item) => {
                 const isChecked = permToggles[item.key] ?? true;
+                const isOverridden = customKeys.includes(item.key);
                 return (
                   <label
                     key={item.key}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/60 p-3.5 cursor-pointer hover:bg-white/5"
+                    className={`flex items-center justify-between rounded-xl border p-3.5 cursor-pointer transition ${
+                      isOverridden
+                        ? "border-amber-400/40 bg-amber-400/5 hover:bg-amber-400/10"
+                        : "border-white/10 bg-slate-950/60 hover:bg-white/5"
+                    }`}
                   >
-                    <span className="text-sm font-medium text-slate-200">{item.label}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-200">{item.label}</span>
+                      {isOverridden && (
+                        <span className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
+                          Custom
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="checkbox"
                       checked={isChecked}
@@ -434,7 +532,25 @@ export default function SuperAdminControlPage() {
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-white/5">
+              {selectedUserIds.length === 1 && customKeys.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm("Reset this user's permissions back to base role defaults?")) {
+                      resetPermissionsMutation.mutate(selectedUserIds[0]);
+                      setCustomKeys([]);
+                    }
+                  }}
+                  disabled={resetPermissionsMutation.isPending}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-50"
+                >
+                  {resetPermissionsMutation.isPending ? "Resetting..." : "Revert to Role Defaults"}
+                </button>
+              ) : (
+                <div />
+              )}
+
               <button
                 type="button"
                 onClick={handleSavePermissions}

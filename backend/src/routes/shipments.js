@@ -14,15 +14,12 @@ const router = express.Router();
 // GET /api/shipments - Get all shipments (with filters)
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const { status, type, page = 1, limit = 20, search } = req.query;
+    const { status, type, carrierType, page = 1, limit = 20, search } = req.query;
     const query = {};
     
     query.tenantId = req.tenantId;
 
     // Role-based filtering:
-    // USER → only their own shipments
-    // MANAGER → only shipments they created
-    // ADMIN / SUPER_ADMIN → all shipments
     if (req.user.role === 'USER' || req.user.role === 'MANAGER') {
       query.createdBy = req.user._id;
     }
@@ -38,13 +35,20 @@ router.get('/', requireAuth, async (req, res) => {
     if (type) {
       query.type = type.toUpperCase();
     }
+
+    if (carrierType && carrierType !== 'ALL') {
+      query.carrierType = carrierType.toUpperCase();
+    }
     
     if (search) {
       query.$or = [
         { reference: { $regex: search, $options: 'i' } },
         { customerName: { $regex: search, $options: 'i' } },
         { companyName: { $regex: search, $options: 'i' } },
-        { awb: { $regex: search, $options: 'i' } }
+        { awb: { $regex: search, $options: 'i' } },
+        { 'porterDetails.driverName': { $regex: search, $options: 'i' } },
+        { 'porterDetails.vehicleNumber': { $regex: search, $options: 'i' } },
+        { 'courierDetails.eWayBill': { $regex: search, $options: 'i' } }
       ];
     }
     
@@ -211,6 +215,12 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       pincode,
       courier,
       transporterId,
+      carrierType = 'OTHER',
+      porterDetails,
+      courierDetails,
+      warrantyDetails,
+      originWarehouse = 'Main Warehouse',
+      destinationGstin,
       trackingUrl,
       awb,
       dispatchDate,
@@ -318,6 +328,12 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
       pincode,
       courier: finalCourier,
       transporterId: transporterId || null,
+      carrierType,
+      porterDetails: porterDetails || {},
+      courierDetails: courierDetails || {},
+      warrantyDetails: warrantyDetails || {},
+      originWarehouse,
+      destinationGstin,
       trackingUrl: finalTrackingUrl,
       awb,
       dispatchDate: dispatchDate ? new Date(dispatchDate) : null,

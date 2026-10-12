@@ -163,6 +163,60 @@ const PermissionSchema = new mongoose.Schema(
       default: true // Admin & Manager can add companies
     },
 
+    // ===== BATCH & LOTS =====
+    canManageLots: {
+      type: Boolean,
+      default: false
+    },
+    canBlockLots: {
+      type: Boolean,
+      default: false
+    },
+
+    // ===== PACKAGES & FULFILLMENT =====
+    canCreatePackages: {
+      type: Boolean,
+      default: false
+    },
+    canDispatchPackages: {
+      type: Boolean,
+      default: false
+    },
+    canCancelPackages: {
+      type: Boolean,
+      default: false
+    },
+    canCreatePoFromBackorder: {
+      type: Boolean,
+      default: false
+    },
+
+    // ===== SHIPPING LABELS & PACKING SLIPS =====
+    canGenerateShippingLabels: {
+      type: Boolean,
+      default: false
+    },
+
+    // ===== PRODUCT IMAGES & GALLERY =====
+    canManageProductImages: {
+      type: Boolean,
+      default: false
+    },
+
+    // ===== WAREHOUSES & ADVANCED OPERATIONS =====
+    canManageWarehouses: {
+      type: Boolean,
+      default: false
+    },
+    canExportData: {
+      type: Boolean,
+      default: false
+    },
+    canViewProductDetails: {
+      type: Boolean,
+      default: true
+    },
+
     // Audit
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

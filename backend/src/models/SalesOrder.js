@@ -5,11 +5,15 @@ const mongoose = require('mongoose');
  * Dispatching a SO auto-creates a StockLedger OUT entry (handled in route).
  */
 const lineItemSchema = new mongoose.Schema({
-  productId:  { type: mongoose.Schema.Types.ObjectId, ref: 'Item', required: true },
-  quantity:   { type: Number, required: true, min: 1, max: 100_000 },
-  unitPrice:  { type: Number, required: true, min: 0 },
-  lineTotal:  { type: Number }  // computed
-}, { _id: false });
+  productId:      { type: mongoose.Schema.Types.ObjectId, ref: 'Item', required: true },
+  quantity:       { type: Number, required: true, min: 1, max: 100_000 },
+  unitPrice:      { type: Number, required: true, min: 0 },
+  lineTotal:      { type: Number },  // computed
+  reservedQty:    { type: Number, default: 0, min: 0 },
+  fulfilledQty:   { type: Number, default: 0, min: 0 },
+  backorderedQty: { type: Number, default: 0, min: 0 },
+  isBackordered:  { type: Boolean, default: false }
+}, { _id: true });
 
 const salesOrderSchema = new mongoose.Schema({
   soNumber: {
@@ -35,9 +39,17 @@ const salesOrderSchema = new mongoose.Schema({
 
   status: {
     type:    String,
-    enum:    ['draft', 'confirmed', 'picking', 'dispatched', 'delivered', 'cancelled'],
+    enum:    ['draft', 'confirmed', 'partially_fulfilled', 'fulfilled', 'picking', 'dispatched', 'delivered', 'cancelled'],
     default: 'draft'
   },
+
+  fulfillmentStatus: {
+    type:    String,
+    enum:    ['UNFULFILLED', 'PARTIALLY_FULFILLED', 'FULFILLED', 'BACKORDERED'],
+    default: 'UNFULFILLED'
+  },
+
+  packages: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Package' }],
 
   totalValue: { type: Number, default: 0 },
 

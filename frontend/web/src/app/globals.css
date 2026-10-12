@@ -374,3 +374,37 @@ a,
   animation: skeleton-pulse 1.5s ease-in-out infinite;
 }
 
+/* ── Low-End Laptop & Mobile GPU Performance Optimizations ── */
+
+@media (max-width: 768px), (prefers-reduced-motion: reduce) {
+  /* Eliminate GPU fill-rate thrashing caused by 50px fixed blurs */
+  .page-shell::before,
+  .page-shell::after {
+    display: none !important;
+  }
+
+  /* Swap expensive backdrop-filters with clean solid GPU-friendly backgrounds */
+  .glass-panel {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #091322 !important;
+  }
+
+  /* Prevent browser layout recalculation thrashing during scrolling */
+  table, article, .stat-grid, .glass-panel {
+    contain: content;
+  }
+
+  /* Disable expensive hover translations on mobile */
+  .hover\:-translate-y-0\.5:hover,
+  .hover\:-translate-y-1:hover {
+    transform: none !important;
+  }
+}
+
+/* Hardware isolation for smooth scrolling */
+.dashboard-content, .dashboard-sidebar {
+  -webkit-overflow-scrolling: touch;
+}
+
+

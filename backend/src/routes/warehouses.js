@@ -13,9 +13,38 @@ router.get('/', requireAuth, async (req, res) => {
     const filter = { isActive: true };
     filter.tenantId = req.tenantId;
 
-    const warehouses = await Warehouse.find(filter)
+    let warehouses = await Warehouse.find(filter)
       .populate('createdBy', 'name email')
       .sort({ isDefault: -1, name: 1 });
+
+    if (warehouses.length === 0 && req.tenantId && req.userId) {
+      try {
+        const defaultWh = await Warehouse.create({
+          name: 'Main Central Hub',
+          code: 'WH-MAIN',
+          address: {
+            street: 'Industrial Area Phase 1',
+            city: 'Central Hub',
+            state: 'State',
+            country: 'India',
+            zipCode: '110001'
+          },
+          contactPerson: 'Warehouse Manager',
+          email: 'warehouse@acustock.local',
+          phone: '+919876543210',
+          isDefault: true,
+          isActive: true,
+          tenantId: req.tenantId,
+          createdBy: req.userId
+        });
+        warehouses = [defaultWh];
+      } catch (seedErr) {
+        // In case another concurrent request created it or code exists
+        warehouses = await Warehouse.find(filter)
+          .populate('createdBy', 'name email')
+          .sort({ isDefault: -1, name: 1 });
+      }
+    }
 
     res.json(warehouses);
   } catch (error) {

@@ -283,4 +283,85 @@ router.post('/revoke-session/:userId', superAuth, async (req, res) => {
   }
 });
 
+// ── 7. POST /api/superadmin/users/:userId/reset-permissions ──
+router.post('/users/:userId/reset-permissions', superAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
+    const user = await User.findOne({ _id: userId, ...tenantFilter });
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+    user.customPermissions = new Map();
+    user.markModified('customPermissions');
+    await user.save({ validateModifiedOnly: true });
+
+    res.json({
+      success: true,
+      message: `Reset permissions for ${user.email || user.name} back to role defaults`,
+    });
+  } catch (err) {
+    logger.error('SuperAdmin reset permissions error:', err);
+    res.status(500).json({ success: false, error: 'Failed to reset permissions' });
+  }
+});
+
+// ── 8. POST /api/superadmin/users/:userId/force-password-reset ──
+router.post('/users/:userId/force-password-reset', superAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
+    const user = await User.findOne({ _id: userId, ...tenantFilter });
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+    user.forcePasswordReset = true;
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    await user.save({ validateModifiedOnly: true });
+
+    res.json({
+      success: true,
+      message: `User ${user.email || user.name} will be prompted to reset password on next login`,
+    });
+  } catch (err) {
+    logger.error('SuperAdmin force password reset error:', err);
+    res.status(500).json({ success: false, error: 'Failed to force password reset' });
+  }
+});
+
+// ── 9. POST /api/superadmin/users/:userId/reset-2fa ──
+router.post('/users/:userId/reset-2fa', superAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
+    const user = await User.findOne({ _id: userId, ...tenantFilter });
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+    user.twoFactorEnabled = false;
+    user.twoFactorSecretEncrypted = null;
+    user.twoFactorPendingSecretEncrypted = null;
+    user.twoFactorRecoveryCodes = [];
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    await user.save({ validateModifiedOnly: true });
+
+    res.json({
+      success: true,
+      message: `2FA disabled and reset for ${user.email || user.name}`,
+    });
+  } catch (err) {
+    logger.error('SuperAdmin reset 2fa error:', err);
+    res.status(500).json({ success: false, error: 'Failed to reset 2FA' });
+  }
+});
+
 module.exports = router;

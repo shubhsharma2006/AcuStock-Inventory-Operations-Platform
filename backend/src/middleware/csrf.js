@@ -9,7 +9,8 @@ const CSRF_SAFE_PATHS = [
   '/api/auth/reset-password',
   '/api/auth/verify-reset-token',
   '/api/billing/webhook',
-  '/api/setup'
+  '/api/setup',
+  '/api/ai/whatsapp'
 ];
 
 function createCsrfMiddleware({ isProduction = false, safePaths = [] } = {}) {
@@ -31,7 +32,9 @@ function createCsrfMiddleware({ isProduction = false, safePaths = [] } = {}) {
       });
     }
 
-    if (!isSafeMethod && !isSafePath) {
+    const isBearerAuth = Boolean(req.headers.authorization && req.headers.authorization.startsWith('Bearer '));
+
+    if (!isSafeMethod && !isSafePath && !isBearerAuth) {
       const submittedToken = req.headers['x-csrf-token'];
       if (!submittedToken || submittedToken !== csrfToken) {
         return res.status(403).json({

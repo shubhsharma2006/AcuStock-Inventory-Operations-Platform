@@ -7,6 +7,7 @@ const Permission = require('../models/permission');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
+const Tenant = require('../models/Tenant');
 const { logBusinessEvent } = require('../utils/auditHelper');
 
 router.use(requireTenantId);
@@ -813,6 +814,147 @@ router.get('/users/password-summary', requireAuth, requireRole(['ADMIN']), async
   } catch (err) {
     console.error('Error fetching password summary:', err);
     res.status(500).json({ message: 'Failed to fetch password summary' });
+  }
+});
+
+// ============================================================
+// ORGANIZATION & TENANT SETTINGS ROUTES
+// ============================================================
+
+/**
+ * GET /api/settings/organization
+ * Fetch organization profile, inventory preferences, document prefixes, and alerts
+ */
+router.get('/organization', requireAuth, async (req, res) => {
+  try {
+    let tenant = await Tenant.findById(req.tenantId).populate('settings.defaultWarehouseId', 'name code');
+    if (!tenant) {
+      tenant = await Tenant.create({
+        _id: req.tenantId,
+        name: 'AcuStock Enterprise',
+        slug: `tenant-${req.tenantId.toString().slice(-6)}`,
+        plan: 'enterprise',
+        status: 'ACTIVE',
+        settings: {
+          timezone: 'Asia/Kolkata',
+          currency: 'INR',
+          dateFormat: 'DD/MM/YYYY',
+          valuationMethod: 'FIFO',
+          negativeStockAllowed: false,
+          lowStockAlertThreshold: 10,
+          invoicePrefix: 'INV-2026-',
+          poPrefix: 'PO-2026-',
+          transferPrefix: 'TRF-',
+          grnPrefix: 'GRN-',
+          whatsappAlertsEnabled: false,
+          lowStockEmailAlerts: true,
+          dailyDigestEnabled: false
+        },
+        branding: {
+          legalName: 'AcuStock Technologies Pvt. Ltd.',
+          taxId: '27AABCU9603R1ZM',
+          supportEmail: 'operations@acustock.com',
+          phone: '+91 98765 43210',
+          website: 'https://acustock.com',
+          address: {
+            street: 'Unit 402, Business Bay, Central Hub',
+            city: 'Mumbai',
+            state: 'Maharashtra',
+            zipCode: '400051',
+            country: 'India'
+          },
+          invoiceTerms: 'Payment due within 30 days of invoice receipt. Standard GST rules apply.'
+        }
+      });
+    }
+
+    res.json(tenant);
+  } catch (err) {
+    console.error('Error fetching organization settings:', err);
+    res.status(500).json({ message: 'Failed to fetch organization settings' });
+  }
+});
+
+/**
+ * PUT /api/settings/organization
+ * Update organization profile, inventory preferences, prefixes, and alert configuration
+ */
+router.put('/organization', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const { name, branding, settings } = req.body;
+
+    const updates = {};
+    if (name && typeof name === 'string') {
+      updates.name = name.trim();
+    }
+
+    if (branding && typeof branding === 'object') {
+      updates.branding = {
+        legalName: branding.legalName !== undefined ? String(branding.legalName).trim() : undefined,
+        taxId: branding.taxId !== undefined ? String(branding.taxId).trim() : undefined,
+        supportEmail: branding.supportEmail !== undefined ? String(branding.supportEmail).trim() : undefined,
+        phone: branding.phone !== undefined ? String(branding.phone).trim() : undefined,
+        website: branding.website !== undefined ? String(branding.website).trim() : undefined,
+        logoUrl: branding.logoUrl !== undefined ? String(branding.logoUrl).trim() : undefined,
+        invoiceTerms: branding.invoiceTerms !== undefined ? String(branding.invoiceTerms).trim() : undefined,
+        address: branding.address ? {
+          street: branding.address.street || '',
+          city: branding.address.city || '',
+          state: branding.address.state || '',
+          zipCode: branding.address.zipCode || '',
+          country: branding.address.country || 'India'
+        } : undefined
+      };
+      // Clean undefined keys
+      Object.keys(updates.branding).forEach(k => updates.branding[k] === undefined && delete updates.branding[k]);
+    }
+
+    if (settings && typeof settings === 'object') {
+      updates.settings = {
+        timezone: settings.timezone || 'Asia/Kolkata',
+        currency: settings.currency || 'INR',
+        dateFormat: settings.dateFormat || 'DD/MM/YYYY',
+        valuationMethod: ['FIFO', 'WEIGHTED_AVG'].includes(settings.valuationMethod) ? settings.valuationMethod : 'FIFO',
+        negativeStockAllowed: typeof settings.negativeStockAllowed === 'boolean' ? settings.negativeStockAllowed : false,
+        lowStockAlertThreshold: Number.isFinite(Number(settings.lowStockAlertThreshold)) ? Number(settings.lowStockAlertThreshold) : 10,
+        invoicePrefix: settings.invoicePrefix || 'INV-2026-',
+        poPrefix: settings.poPrefix || 'PO-2026-',
+        transferPrefix: settings.transferPrefix || 'TRF-',
+        grnPrefix: settings.grnPrefix || 'GRN-',
+        whatsappAlertsEnabled: typeof settings.whatsappAlertsEnabled === 'boolean' ? settings.whatsappAlertsEnabled : false,
+        lowStockEmailAlerts: typeof settings.lowStockEmailAlerts === 'boolean' ? settings.lowStockEmailAlerts : true,
+        dailyDigestEnabled: typeof settings.dailyDigestEnabled === 'boolean' ? settings.dailyDigestEnabled : false
+      };
+      if (settings.defaultWarehouseId) {
+        updates.settings.defaultWarehouseId = settings.defaultWarehouseId;
+      }
+    }
+
+    const tenant = await Tenant.findByIdAndUpdate(
+      req.tenantId,
+      { $set: updates },
+      { new: true, runValidators: true, upsert: true }
+    ).populate('settings.defaultWarehouseId', 'name code');
+
+    // Record Immutable Business Audit Event
+    logBusinessEvent({
+      req,
+      action: 'SETTING_CHANGED',
+      entityType: 'Tenant',
+      entityId: tenant._id,
+      changes: {
+        after: updates,
+        summary: `Updated organization settings and preferences for ${tenant.name}`
+      }
+    }).catch(err => console.error('[Audit] Failed to log organization setting update:', err.message));
+
+    res.json({
+      message: 'Organization settings updated successfully',
+      tenant
+    });
+  } catch (err) {
+    console.error('Error updating organization settings:', err);
+    res.status(500).json({ message: 'Failed to update organization settings' });
   }
 });
 

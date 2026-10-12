@@ -13,9 +13,34 @@ router.get('/', requireAuth, async (req, res) => {
     const filter = { tenantId: req.tenantId };
     if (all !== 'true') filter.isActive = true;
 
-    const transporters = await Transporter.find(filter)
+    let transporters = await Transporter.find(filter)
       .populate('createdBy', 'name email')
       .sort({ name: 1 });
+
+    // Auto-seed default industry carriers if tenant has none
+    if (transporters.length === 0 && req.tenantId && req.user) {
+      const DEFAULT_TRANSPORTERS = [
+        { name: 'Porter (Hyperlocal Logistics)', code: 'PORTER', trackingUrlPattern: 'https://porter.in/track/{awb}', contactPerson: 'Porter Desk', phone: '08044114411', notes: 'Intra-city on-demand 2-wheelers, 3-wheelers & mini trucks' },
+        { name: 'Delhivery', code: 'DELHIVERY', trackingUrlPattern: 'https://www.delhivery.com/track/package/{awb}', contactPerson: 'Delhivery Desk', phone: '01246719500', notes: 'National B2B/B2C Express & Heavy Surface Cargo' },
+        { name: 'DTDC Express', code: 'DTDC', trackingUrlPattern: 'https://www.dtdc.in/tracking/shipment-tracking.asp?strCnno={awb}', contactPerson: 'DTDC Desk', phone: '08025365032', notes: 'Domestic Express & Plus Cargo' },
+        { name: 'DMRC Transit Cargo', code: 'DMRC', trackingUrlPattern: '', contactPerson: 'Metro Transit Hub', phone: '155370', notes: 'Metro parcel corridor & local transit runners' },
+        { name: 'Blue Dart', code: 'BLUEDART', trackingUrlPattern: 'https://www.bluedart.com/tracking?numbers={awb}', contactPerson: 'Blue Dart Support', phone: '18602331234', notes: 'Aviation Air Express & Priority Delivery' },
+        { name: 'In-House Company Fleet', code: 'IN_HOUSE', trackingUrlPattern: '', contactPerson: 'Dispatch Manager', phone: '', notes: 'Dedicated company vehicles & local runners' }
+      ];
+
+      try {
+        await Transporter.insertMany(
+          DEFAULT_TRANSPORTERS.map(t => ({
+            ...t,
+            createdBy: req.user._id,
+            tenantId: req.tenantId
+          }))
+        );
+        transporters = await Transporter.find(filter).populate('createdBy', 'name email').sort({ name: 1 });
+      } catch (_) {
+        // Silently continue if concurrency race
+      }
+    }
 
     res.json(transporters);
   } catch (error) {

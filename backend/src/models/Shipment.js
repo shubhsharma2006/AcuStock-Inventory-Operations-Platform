@@ -100,7 +100,7 @@ const shipmentSchema = new mongoose.Schema({
   },
   deliveryType: {
     type: String,
-    enum: ['Prepaid', 'COD'],
+    enum: ['Prepaid', 'COD', 'ToPay'],
     required: true
   },
   codAmount: {
@@ -118,6 +118,55 @@ const shipmentSchema = new mongoose.Schema({
   soldBy: {
     type: String,
     trim: true
+  },
+
+  // Carrier Classification & Transport Mode
+  carrierType: {
+    type: String,
+    enum: ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART', 'DMRC', 'IN_HOUSE', 'OTHER'],
+    default: 'OTHER'
+  },
+
+  // Porter & Hyperlocal On-Demand Logistics
+  porterDetails: {
+    vehicleType: { type: String, trim: true },
+    driverName: { type: String, trim: true },
+    driverPhone: { type: String, trim: true },
+    vehicleNumber: { type: String, trim: true, uppercase: true },
+    pickupOtp: { type: String, trim: true },
+    deliveryOtp: { type: String, trim: true },
+    estimatedFare: { type: Number, min: 0 },
+    tripId: { type: String, trim: true }
+  },
+
+  // Courier & Inter-City Cargo Logistics (Delhivery / DTDC / DMRC)
+  courierDetails: {
+    shippingMode: { type: String, enum: ['SURFACE', 'AIR', 'CARGO', 'EXPRESS'], default: 'SURFACE' },
+    eWayBill: { type: String, trim: true },
+    originHub: { type: String, trim: true },
+    destinationHub: { type: String, trim: true },
+    gatePassNo: { type: String, trim: true },
+    transitStation: { type: String, trim: true }
+  },
+
+  // Warranty & Product Transit Protection
+  warrantyDetails: {
+    status: { type: String, enum: ['STANDARD', 'EXTENDED_1YR', 'EXTENDED_2YR', 'AMC', 'NONE'], default: 'STANDARD' },
+    warrantyCardNo: { type: String, trim: true },
+    tamperSealNo: { type: String, trim: true },
+    isFragile: { type: Boolean, default: false },
+    insuranceValue: { type: Number, min: 0 }
+  },
+
+  originWarehouse: {
+    type: String,
+    trim: true,
+    default: 'Main Warehouse'
+  },
+  destinationGstin: {
+    type: String,
+    trim: true,
+    uppercase: true
   },
 
   // Additional Details

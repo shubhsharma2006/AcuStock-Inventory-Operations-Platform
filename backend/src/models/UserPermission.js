@@ -69,6 +69,27 @@ const UserPermissionSchema = new mongoose.Schema(
     canDeleteLogistics: { type: Boolean, default: null },
     canManageCompanies: { type: Boolean, default: null },
 
+    // ===== BATCH & LOTS =====
+    canManageLots: { type: Boolean, default: null },
+    canBlockLots: { type: Boolean, default: null },
+
+    // ===== PACKAGES & FULFILLMENT =====
+    canCreatePackages: { type: Boolean, default: null },
+    canDispatchPackages: { type: Boolean, default: null },
+    canCancelPackages: { type: Boolean, default: null },
+    canCreatePoFromBackorder: { type: Boolean, default: null },
+
+    // ===== SHIPPING LABELS & PACKING SLIPS =====
+    canGenerateShippingLabels: { type: Boolean, default: null },
+
+    // ===== PRODUCT IMAGES & GALLERY =====
+    canManageProductImages: { type: Boolean, default: null },
+
+    // ===== WAREHOUSES & ADVANCED OPERATIONS =====
+    canManageWarehouses: { type: Boolean, default: null },
+    canExportData: { type: Boolean, default: null },
+    canViewProductDetails: { type: Boolean, default: null },
+
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'

@@ -23,7 +23,9 @@ const QuotaReservation = require('../models/QuotaReservation');
 const LIMIT_MODEL_MAP = {
   maxItems: { usageKey: 'items', label: 'items' },
   maxUsers: { usageKey: 'users', label: 'users' },
-  maxCompanies: { usageKey: 'companies', label: 'companies' }
+  maxCompanies: { usageKey: 'companies', label: 'companies' },
+  maxAiQueries: { usageKey: 'aiQueries', label: 'AI queries' },
+  maxOcrScans: { usageKey: 'ocrScans', label: 'OCR invoice scans' }
 };
 
 /**

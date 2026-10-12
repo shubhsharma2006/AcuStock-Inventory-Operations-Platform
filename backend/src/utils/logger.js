@@ -7,6 +7,23 @@
 const winston = require('winston');
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
+const IS_TEST = process.env.NODE_ENV === 'test';
+
+const transports = [
+  new winston.transports.Console({ silent: IS_TEST })
+];
+
+if (!IS_TEST) {
+  if (IS_PRODUCTION) {
+    transports.push(
+      new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+      new winston.transports.File({ filename: 'logs/combined.log' })
+    );
+  } else {
+    transports.push(new winston.transports.File({ filename: 'server.log' }));
+  }
+}
+
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: IS_PRODUCTION
@@ -19,15 +36,7 @@ const logger = winston.createLogger({
         winston.format.colorize(),
         winston.format.printf(({ timestamp, level, message }) => `${timestamp} ${level}: ${message}`)
       ),
-  transports: [
-    new winston.transports.Console(),
-    ...(IS_PRODUCTION
-      ? [
-          new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
-          new winston.transports.File({ filename: 'logs/combined.log' })
-        ]
-      : [new winston.transports.File({ filename: 'server.log' })])
-  ]
+  transports
 });
 
 module.exports = logger;

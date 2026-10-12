@@ -16,7 +16,7 @@ test('Product Master - Item model has all required enterprise fields', () => {
   assert.ok(schema.category, 'category field must exist');
   assert.ok(schema.brand, 'brand field must exist');
   assert.ok(schema.description, 'description field must exist');
-  assert.ok(schema.imageUrl, 'imageUrl field must exist');
+  assert.ok(schema.imageUrl || Item.schema.virtuals.imageUrl, 'imageUrl field must exist');
 });
 
 test('Product Master - Default values are properly set', () => {

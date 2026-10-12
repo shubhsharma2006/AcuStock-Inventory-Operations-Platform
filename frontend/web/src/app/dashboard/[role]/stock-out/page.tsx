@@ -1,15 +1,21 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useMemo, useEffect, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSession } from "@/hooks/use-session";
+import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
 
 type ProductItem = {
   _id: string;
   name: string;
   shortName?: string;
+  sku?: string;
+  currentStock?: number;
+  quantity?: number;
+  category?: string;
+  uom?: string;
   serialPolicy?: {
     enableSerial?: boolean;
     requireSerialOnIN?: boolean;
@@ -21,6 +27,18 @@ type Company = {
   _id: string;
   name: string;
   type?: string;
+  city?: string;
+  gstin?: string;
+  phone?: string;
+  email?: string;
+};
+
+type WarehouseItem = {
+  _id: string;
+  name: string;
+  code?: string;
+  location?: string;
+  isPrimary?: boolean;
 };
 
 type AvailableSerialsResponse = {
@@ -31,9 +49,11 @@ type AvailableSerialsResponse = {
 export default function StockOutPage() {
   const router = useRouter();
   const { user } = useSession();
+  const queryClient = useQueryClient();
 
   // Form states
   const [productId, setProductId] = useState("");
+  const [warehouseId, setWarehouseId] = useState("");
   const [quantity, setQuantity] = useState<number>(1);
   const [selectedSerials, setSelectedSerials] = useState<string[]>([]);
   const [buyerName, setBuyerName] = useState("");
@@ -48,14 +68,19 @@ export default function StockOutPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   // Queries
-  const { data: productsData } = useQuery<{ items: ProductItem[] }>({
+  const { data: productsData, refetch: refetchProducts, isFetching: loadingProducts } = useQuery<ProductItem[] | { items: ProductItem[] }>({
     queryKey: ["products-list"],
-    queryFn: () => apiFetch<{ items: ProductItem[] }>("/items"),
+    queryFn: () => apiFetch("/items"),
   });
 
-  const { data: companiesData } = useQuery<{ companies: Company[] }>({
+  const { data: companiesData, refetch: refetchCompanies, isFetching: loadingCompanies } = useQuery<Company[] | { companies: Company[] }>({
     queryKey: ["companies-list"],
-    queryFn: () => apiFetch<{ companies: Company[] }>("/companies"),
+    queryFn: () => apiFetch("/companies"),
+  });
+
+  const { data: warehousesData, refetch: refetchWarehouses, isFetching: loadingWarehouses } = useQuery<WarehouseItem[] | { warehouses: WarehouseItem[] }>({
+    queryKey: ["warehouses"],
+    queryFn: () => apiFetch("/warehouses"),
   });
 
   // Query available in-stock serials when product is selected
@@ -65,11 +90,73 @@ export default function StockOutPage() {
     enabled: Boolean(productId),
   });
 
-  const products = productsData?.items || [];
-  const companies = companiesData?.companies || [];
+  const products = useMemo(() => {
+    if (Array.isArray(productsData)) return productsData;
+    return (productsData as any)?.items || [];
+  }, [productsData]);
+
+  const companies = useMemo(() => {
+    if (Array.isArray(companiesData)) return companiesData;
+    return (companiesData as any)?.companies || [];
+  }, [companiesData]);
+
+  const warehouses = useMemo(() => {
+    if (Array.isArray(warehousesData)) return warehousesData;
+    return (warehousesData as any)?.warehouses || [];
+  }, [warehousesData]);
+
   const availableSerials = availableSerialsData?.serials || [];
 
-  const selectedProduct = products.find((p) => p._id === productId);
+  // Auto-select primary warehouse if none selected
+  useEffect(() => {
+    if (!warehouseId && warehouses.length > 0) {
+      const primary = warehouses.find((w: WarehouseItem) => w.isPrimary || (w as any).isDefault) || warehouses[0];
+      if (primary?._id) setWarehouseId(primary._id);
+    }
+  }, [warehouses, warehouseId]);
+
+  // Options for Searchable Comboboxes
+  const productOptions: SearchableSelectOption[] = useMemo(() => {
+    return products.map((p: ProductItem) => {
+      const stock = p.currentStock ?? p.quantity ?? 0;
+      const isOut = stock <= 0;
+      return {
+        value: p._id,
+        label: p.name,
+        sublabel: p.sku || p.shortName || undefined,
+        badge: isOut ? "0 In Stock" : `${stock} in stock`,
+        badgeColor: isOut ? "rose" : "emerald",
+        icon: "📦",
+        details: `${p.category || "General"} · ${p.uom || "PCS"}`,
+      };
+    });
+  }, [products]);
+
+  const companyOptions: SearchableSelectOption[] = useMemo(() => {
+    return companies.map((c: any) => ({
+      value: c.companyName || c.name,
+      label: c.companyName || c.name,
+      sublabel: c.address?.city || c.city || (c.taxId || c.gstin ? `GST: ${c.taxId || c.gstin}` : undefined),
+      badge: c.type || "Customer",
+      badgeColor: "blue",
+      icon: "🏢",
+      details: c.email || c.phone || undefined,
+    }));
+  }, [companies]);
+
+  const warehouseOptions: SearchableSelectOption[] = useMemo(() => {
+    return warehouses.map((w: WarehouseItem) => ({
+      value: w._id,
+      label: w.name,
+      sublabel: w.code || undefined,
+      badge: w.isPrimary || (w as any).isDefault ? "Primary Hub" : "Active Branch",
+      badgeColor: "purple",
+      icon: "🏭",
+      details: (w as any).address?.city || w.location || undefined,
+    }));
+  }, [warehouses]);
+
+  const selectedProduct = products.find((p: ProductItem) => p._id === productId);
   const serialPolicy = selectedProduct?.serialPolicy || {};
   const requiresSerials = serialPolicy.enableSerial && serialPolicy.requireSerialOnOUT;
 
@@ -109,6 +196,7 @@ export default function StockOutPage() {
         method: "POST",
         body: JSON.stringify({
           productId,
+          warehouseId: warehouseId || undefined,
           quantity: Number(quantity),
           serialNumbers: selectedSerials,
           buyer: buyerName.trim() || undefined,
@@ -122,6 +210,10 @@ export default function StockOutPage() {
           notes: notes.trim() || undefined,
         }),
       });
+
+      queryClient.invalidateQueries({ queryKey: ["products-list"] });
+      queryClient.invalidateQueries({ queryKey: ["items"] });
+      queryClient.invalidateQueries({ queryKey: ["available-serials", productId] });
 
       const roleHome = `/dashboard/${
         user?.role === "SUPER_ADMIN" || user?.role === "ADMIN"
@@ -154,25 +246,27 @@ export default function StockOutPage() {
         <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
           <h2 className="text-lg font-bold text-white">1. Select Product & Quantity to Dispatch</h2>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">Product *</label>
-              <select
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div className="sm:col-span-2">
+              <SearchableSelect
+                label="Product to Dispatch"
+                required
+                options={productOptions}
                 value={productId}
-                onChange={(e) => {
-                  setProductId(e.target.value);
+                onChange={(val) => {
+                  setProductId(val);
                   setSelectedSerials([]);
                 }}
-                required
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-300/40"
-              >
-                <option value="">Select a product...</option>
-                {products.map((p) => (
-                  <option key={p._id} value={p._id}>
-                    {p.name} {p.shortName ? `(${p.shortName})` : ""}
-                  </option>
-                ))}
-              </select>
+                placeholder="Select product to dispatch..."
+                searchPlaceholder="Type initial letter or SKU to search..."
+                onRefresh={() => refetchProducts()}
+                isLoading={loadingProducts}
+                onAddNew={() => {
+                  const role = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN" ? "admin" : (user?.role || "user").toLowerCase();
+                  router.push(`/dashboard/${role}/products`);
+                }}
+                addNewLabel="+ New Product in Catalog"
+              />
             </div>
 
             <div>
@@ -187,6 +281,26 @@ export default function StockOutPage() {
                 className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-amber-300/40"
               />
             </div>
+          </div>
+
+          {/* Source Warehouse Selector */}
+          <div>
+            <SearchableSelect
+              label="Source Dispatch Warehouse"
+              required
+              options={warehouseOptions}
+              value={warehouseId}
+              onChange={(val) => setWarehouseId(val)}
+              placeholder="Select source warehouse..."
+              searchPlaceholder="Type warehouse name or code..."
+              onRefresh={() => refetchWarehouses()}
+              isLoading={loadingWarehouses}
+              onAddNew={() => {
+                const role = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN" ? "admin" : (user?.role || "user").toLowerCase();
+                router.push(`/dashboard/${role}/warehouses`);
+              }}
+              addNewLabel="+ Add New Warehouse"
+            />
           </div>
         </div>
 
@@ -312,19 +426,21 @@ export default function StockOutPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-slate-300">Buyer Company / Customer</label>
-              <select
+              <SearchableSelect
+                label="Buyer Company / Customer"
+                options={companyOptions}
                 value={buyerName}
-                onChange={(e) => setBuyerName(e.target.value)}
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none"
-              >
-                <option value="">Select or type customer name...</option>
-                {companies.map((c) => (
-                  <option key={c._id} value={c.name}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setBuyerName(val)}
+                placeholder="Select or type customer name..."
+                searchPlaceholder="Type initial letter or customer name..."
+                onRefresh={() => refetchCompanies()}
+                isLoading={loadingCompanies}
+                onAddNew={() => {
+                  const role = user?.role === "SUPER_ADMIN" || user?.role === "ADMIN" ? "admin" : (user?.role || "user").toLowerCase();
+                  router.push(`/dashboard/${role}/companies`);
+                }}
+                addNewLabel="+ Register New Company"
+              />
             </div>
 
             <div>

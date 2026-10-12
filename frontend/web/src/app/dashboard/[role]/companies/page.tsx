@@ -72,6 +72,7 @@ export default function CompaniesPage() {
       apiFetch("/companies", { method: "POST", body: JSON.stringify(payload) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["companies-list"] });
       closeModal();
     },
     onError: (err: Error) => setFormError(err.message || "Failed to create company"),
@@ -82,6 +83,7 @@ export default function CompaniesPage() {
       apiFetch(`/companies/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["companies-list"] });
       closeModal();
     },
     onError: (err: Error) => setFormError(err.message || "Failed to update company"),
@@ -91,6 +93,7 @@ export default function CompaniesPage() {
     mutationFn: (id: string) => apiFetch(`/companies/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["companies"] });
+      queryClient.invalidateQueries({ queryKey: ["companies-list"] });
     },
   });
 

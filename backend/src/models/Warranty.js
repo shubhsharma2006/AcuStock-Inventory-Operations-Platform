@@ -46,6 +46,22 @@ const warrantySchema = new mongoose.Schema({
   productId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Item', required: true, index: true },
   // One doc per serial (null for non-serialised batches)
   serialNumber:  { type: String, trim: true, uppercase: true, index: true, default: null },
+  lotId:         { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryLot', index: true, default: null },
+  packageId:     { type: mongoose.Schema.Types.ObjectId, ref: 'Package', index: true, default: null },
+  supplierExpiry: { type: Date },
+
+  // ── Customer coverage (for lot/package warranty) ──────────
+  customerCoverage: {
+    durationMonths: { type: Number, default: 0 },
+    startDate:      { type: Date },
+    endDate:        { type: Date, index: true },
+    terms:          { type: String, trim: true, default: '' },
+    status: {
+      type: String,
+      enum: ['active', 'expiring-soon', 'expired', 'none'],
+      default: 'none'
+    }
+  },
 
   // ── Purchase warranty (supplier → us) ─────────────────────
   purchaseWarranty: {
@@ -90,6 +106,9 @@ const warrantySchema = new mongoose.Schema({
 // Unique on (tenantId + productId + serialNumber) so a returned-and-restocked serial
 // can never produce a second Warranty document within a tenant.
 warrantySchema.index({ tenantId: 1, productId: 1, serialNumber: 1 }, { unique: true, sparse: true });
+warrantySchema.index({ tenantId: 1, lotId: 1 });
+warrantySchema.index({ tenantId: 1, packageId: 1 });
+warrantySchema.index({ tenantId: 1, 'customerCoverage.endDate': 1 });
 warrantySchema.index({ tenantId: 1, 'purchaseWarranty.expiryDate': 1 });
 warrantySchema.index({ tenantId: 1, 'sellerWarranty.expiryDate': 1 });
 warrantySchema.index({ productId: 1, serialNumber: 1 }, { sparse: true });
@@ -108,6 +127,12 @@ warrantySchema.pre('save', function (next) {
       !!this.sellerWarranty.period
     );
   }
+  if (this.customerCoverage && this.customerCoverage.endDate) {
+    this.customerCoverage.status = computeStatus(
+      this.customerCoverage.endDate,
+      true
+    );
+  }
   next();
 });
 
@@ -119,6 +144,10 @@ warrantySchema.virtual('purchaseDaysLeft').get(function () {
 warrantySchema.virtual('sellerDaysLeft').get(function () {
   if (!this.sellerWarranty.expiryDate) return null;
   return Math.ceil((this.sellerWarranty.expiryDate - new Date()) / (1000 * 60 * 60 * 24));
+});
+warrantySchema.virtual('customerCoverageDaysLeft').get(function () {
+  if (!this.customerCoverage || !this.customerCoverage.endDate) return null;
+  return Math.ceil((this.customerCoverage.endDate - new Date()) / (1000 * 60 * 60 * 24));
 });
 
 // ── Static helpers ─────────────────────────────────────────────
@@ -146,6 +175,28 @@ warrantySchema.statics.buildSellerWarranty = function (period, startDate, buyerI
     buyerEmail:  buyerInfo.buyerEmail  || buyerInfo.customerEmail || '',
     companyName: buyerInfo.companyName || '',
     status: computeStatus(expiry, true)
+  };
+};
+
+warrantySchema.statics.buildCustomerCoverage = function ({ lot, durationMonths = 0, saleDate = new Date(), terms = '' }) {
+  const months = Number(durationMonths) || 0;
+  if (months <= 0 && !lot?.expiryDate) {
+    return { durationMonths: 0, status: 'none', terms: terms || '' };
+  }
+  const start = saleDate || new Date();
+  let end = null;
+  if (months > 0) {
+    end = new Date(start);
+    end.setMonth(end.getMonth() + months);
+  } else if (lot?.expiryDate) {
+    end = new Date(lot.expiryDate);
+  }
+  return {
+    durationMonths: months,
+    startDate: start,
+    endDate: end,
+    terms: terms || '',
+    status: computeStatus(end, !!end)
   };
 };
 

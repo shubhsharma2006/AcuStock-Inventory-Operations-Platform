@@ -10,17 +10,21 @@
  * POST   /api/sales-orders/:id/cancel  — cancel (ADMIN)
  */
 
-const express     = require('express');
-const mongoose    = require('mongoose');
-const SalesOrder  = require('../models/SalesOrder');
-const Item        = require('../models/Item');
-const StockLedger = require('../models/StockLedger');
-const SerialAudit = require('../models/SerialAudit');
+const express          = require('express');
+const mongoose         = require('mongoose');
+const SalesOrder       = require('../models/SalesOrder');
+const Item             = require('../models/Item');
+const StockLedger      = require('../models/StockLedger');
+const SerialAudit      = require('../models/SerialAudit');
+const Package          = require('../models/Package');
+const StockReservation = require('../models/StockReservation');
+const InventoryLot     = require('../models/InventoryLot');
+const lotService       = require('../services/lot.service');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generateSalesOrderInvoicePdf } = require('../services/pdfGenerator');
 const { logBusinessEvent } = require('../utils/auditHelper');
 const { notifyRoles }    = require('../services/notificationHelper');
-const logger      = require('../utils/logger');
+const logger           = require('../utils/logger');
 
 const router = express.Router();
 
@@ -39,6 +43,7 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
     const [orders, total] = await Promise.all([
       SalesOrder.find(filter)
         .populate('createdBy', 'name email')
+        .populate('packages')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -50,6 +55,45 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res)
   } catch (err) {
     logger.error('SO list error:', err);
     res.status(500).json({ success: false, error: 'Failed to list sales orders' });
+  }
+});
+
+// ── Backorders list (all backordered orders / lines) ───────────
+router.get('/backorders/all', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  try {
+    const orders = await SalesOrder.find({
+      tenantId: req.tenantId,
+      status: { $in: ['confirmed', 'partially_fulfilled'] },
+      'items.isBackordered': true
+    })
+      .populate('items.productId', 'name sku uom salesPrice purchasePrice preferredSupplierId')
+      .populate('createdBy', 'name email')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const backorderItems = [];
+    for (const order of orders) {
+      for (const line of order.items) {
+        if (line.isBackordered || (line.backorderedQty && line.backorderedQty > 0)) {
+          backorderItems.push({
+            salesOrderId: order._id,
+            soNumber: order.soNumber,
+            buyer: order.buyer,
+            expectedDeliveryDate: order.expectedDeliveryDate,
+            orderLineId: line._id,
+            product: line.productId,
+            orderedQty: line.quantity,
+            fulfilledQty: line.fulfilledQty || 0,
+            backorderedQty: line.backorderedQty || (line.quantity - (line.fulfilledQty || 0))
+          });
+        }
+      }
+    }
+
+    res.json({ success: true, backorders: backorderItems });
+  } catch (err) {
+    logger.error('Fetch all backorders error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch backorders' });
   }
 });
 
@@ -117,13 +161,42 @@ router.get('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
 
     const so = await SalesOrder.findOne(filter)
       .populate('createdBy confirmedBy dispatchedBy', 'name email')
-      .populate('items.productId', 'name shortName');
+      .populate('items.productId', 'name shortName sku uom trackingMode lotPolicy')
+      .populate({
+        path: 'packages',
+        populate: { path: 'lineItems.productId', select: 'name sku uom' }
+      });
     if (!so) return res.status(404).json({ success: false, error: 'Sales order not found' });
     if (req.userRole === 'MANAGER' && so.createdBy._id.toString() !== req.userId)
       return res.status(403).json({ success: false, error: 'Access denied' });
     res.json({ success: true, salesOrder: so });
   } catch (err) {
     res.status(500).json({ success: false, error: 'Failed to fetch sales order' });
+  }
+});
+
+// ── Backorders for specific order ──────────────────────────────
+router.get('/:id/backorders', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  try {
+    const so = await SalesOrder.findOne({ _id: req.params.id, tenantId: req.tenantId })
+      .populate('items.productId', 'name sku uom salesPrice purchasePrice preferredSupplierId')
+      .lean();
+
+    if (!so) return res.status(404).json({ success: false, error: 'Sales order not found' });
+
+    const backorders = so.items
+      .filter((line) => line.isBackordered || (line.backorderedQty && line.backorderedQty > 0))
+      .map((line) => ({
+        orderLineId: line._id,
+        product: line.productId,
+        orderedQty: line.quantity,
+        fulfilledQty: line.fulfilledQty || 0,
+        backorderedQty: line.backorderedQty || (line.quantity - (line.fulfilledQty || 0))
+      }));
+
+    res.json({ success: true, soNumber: so.soNumber, backorders });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -192,6 +265,30 @@ router.post('/:id/confirm', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
     so.status      = 'confirmed';
     so.confirmedBy = req.userId;
     so.confirmedAt = new Date();
+
+    // Create stock reservations for lines with available stock
+    let hasBackorders = false;
+    for (const line of so.items) {
+      const item = await Item.findOne({ _id: line.productId, tenantId: req.tenantId });
+      if (!item) continue;
+      const atp = await item.getAvailableToPromise();
+      const qtyToReserve = Math.min(atp, line.quantity);
+      if (qtyToReserve > 0) {
+        line.reservedQty = qtyToReserve;
+        await StockReservation.create({
+          orderId: so._id,
+          orderLineId: line._id,
+          productId: line.productId,
+          reservedQty: qtyToReserve,
+          tenantId: req.tenantId
+        });
+      }
+      line.backorderedQty = Math.max(0, line.quantity - (line.fulfilledQty || 0) - (line.reservedQty || 0));
+      line.isBackordered = line.backorderedQty > 0;
+      if (line.isBackordered) hasBackorders = true;
+    }
+
+    so.fulfillmentStatus = hasBackorders ? 'BACKORDERED' : 'UNFULFILLED';
     await so.save();
 
     logBusinessEvent({
@@ -315,11 +412,24 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
           }
         }
 
+        let lotAllocations = [];
+        if (item.trackingMode === 'BATCH') {
+          const strategy = item.lotPolicy?.allocationStrategy || 'FEFO';
+          lotAllocations = await lotService.allocateLots({
+            productId: item._id,
+            requestedQty: line.quantity,
+            tenantId: req.tenantId,
+            session,
+            strategy
+          });
+        }
+
         const [ledger] = await StockLedger.create([{
           productId:    line.productId,
           type:         'OUT',
           quantity:     line.quantity,
           serialNumbers: lineSerials,
+          lotAllocations,
           condition:    'new',
           partyDetails: {
             name:    so.buyer.name,
@@ -335,6 +445,11 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
 
         ledgerIds.push(ledger._id);
 
+        line.fulfilledQty = line.quantity;
+        line.backorderedQty = 0;
+        line.isBackordered = false;
+        line.reservedQty = 0;
+
         // Record SerialAudit OUT entries
         if (lineSerials.length > 0) {
           const auditEntries = lineSerials.map(serial => ({
@@ -349,10 +464,18 @@ router.post('/:id/dispatch', requireAuth, requireRole(['ADMIN', 'MANAGER']), asy
         }
       }
 
-      so.status       = 'dispatched';
-      so.dispatchedBy = req.userId;
-      so.dispatchedAt = new Date();
-      so.ledgerEntries = ledgerIds;
+      // Fulfill any active reservations on this order
+      await StockReservation.updateMany(
+        { orderId: so._id, status: 'ACTIVE', tenantId: req.tenantId },
+        { $set: { status: 'FULFILLED', fulfilledAt: new Date() } },
+        { session }
+      );
+
+      so.status            = 'dispatched';
+      so.fulfillmentStatus = 'FULFILLED';
+      so.dispatchedBy      = req.userId;
+      so.dispatchedAt      = new Date();
+      so.ledgerEntries     = ledgerIds;
       await so.save({ session });
       result = so;
     });

@@ -10,7 +10,8 @@ const Tenant = require('../models/Tenant');
 const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
 const checkPlanLimits = require('../middleware/checkPlanLimits');
-const { validateCsvBuffer } = require('../services/storage.service');
+const storageService = require('../services/storage.service');
+const { validateCsvBuffer } = storageService;
 const { logBusinessEvent } = require('../utils/auditHelper');
 
 const router = express.Router();
@@ -58,6 +59,22 @@ const upload = multer({
   storage,
   fileFilter,
   limits: { fileSize: Number(process.env.MAX_FILE_SIZE) || 5 * 1024 * 1024, files: 1 }
+});
+
+// Multer memory storage for product gallery image uploads
+const imageStorage = multer.memoryStorage();
+const imageFileFilter = (req, file, cb) => {
+  const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only JPEG, PNG, WEBP, and GIF images are allowed'), false);
+  }
+};
+const uploadImages = multer({
+  storage: imageStorage,
+  fileFilter: imageFileFilter,
+  limits: { fileSize: 5 * 1024 * 1024, files: 10 }
 });
 
 function getUploadErrorResponse(error) {
@@ -630,7 +647,7 @@ router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
 
     const item = await Item.findOne(filter)
       .populate('createdBy', 'name email')
-      .populate('preferredSupplierId', 'companyName name');
+      .populate('preferredSupplierId', 'companyName name email phone address');
     if (!item || !item.isActive) {
       return res.status(404).json({ message: 'Item not found' });
     }
@@ -638,6 +655,41 @@ router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
     const itemObj = item.toObject();
     itemObj.quantity = stock;
     itemObj.currentStock = stock;
+
+    // Aggregate additional operational details for the Product Details View
+    const Stock = require('../models/Stock');
+    const InventoryLot = require('../models/InventoryLot');
+    const SerialAudit = require('../models/SerialAudit');
+    const StockLedger = require('../models/StockLedger');
+
+    const [warehouseStocks, activeLots, inStockSerialsCount, recentLedger] = await Promise.all([
+      Stock.find({ itemId: item._id, tenantId: req.tenantId }).populate('warehouseId', 'name code location address').lean().catch(() => []),
+      InventoryLot.find({ itemId: item._id, tenantId: req.tenantId, quantity: { $gt: 0 } }).sort({ expirationDate: 1 }).lean().catch(() => []),
+      SerialAudit.countDocuments({ itemId: item._id, tenantId: req.tenantId, status: 'IN_STOCK' }).catch(() => 0),
+      StockLedger.find({ itemId: item._id, tenantId: req.tenantId }).sort({ createdAt: -1 }).limit(5).populate('performedBy', 'name email').lean().catch(() => [])
+    ]);
+
+    itemObj.warehouseStocks = warehouseStocks.map(ws => ({
+      warehouseId: ws.warehouseId?._id || ws.warehouseId,
+      warehouseName: ws.warehouseId?.name || 'Main Warehouse',
+      warehouseCode: ws.warehouseId?.code || 'WH-01',
+      quantity: ws.quantity || 0,
+      minThreshold: ws.minThreshold || 0
+    }));
+
+    itemObj.activeLots = activeLots.map(lot => ({
+      _id: lot._id,
+      lotNumber: lot.lotNumber,
+      quantity: lot.quantity,
+      expirationDate: lot.expirationDate,
+      manufactureDate: lot.manufactureDate,
+      status: lot.status,
+      isExpired: lot.expirationDate ? new Date(lot.expirationDate) < new Date() : false
+    }));
+
+    itemObj.inStockSerialsCount = inStockSerialsCount;
+    itemObj.recentMovements = recentLedger;
+
     res.json(itemObj);
   } catch (error) {
     console.error('Error fetching item:', error);
@@ -910,7 +962,385 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), req
   }
 });
 
+// ============================================================
+// PRODUCT GALLERY & IMAGE MANAGEMENT
+// ============================================================
+
+/**
+ * POST /api/items/:id/images
+ * Upload images to product gallery (max 20 images total)
+ */
+router.post('/:id/images', requireAuth, validateObjectId, requirePermission('canManageProductImages'), (req, res, next) => {
+  uploadImages.array('images', 10)(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message || 'Image upload failed' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    const item = await Item.findOne({ _id: req.params.id, tenantId: req.tenantId });
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'At least one image file is required' });
+    }
+
+    const currentGallery = item.gallery || [];
+    if (currentGallery.length + req.files.length > 20) {
+      return res.status(400).json({
+        error: `Cannot upload ${req.files.length} images. Gallery limit is 20 images (current: ${currentGallery.length})`
+      });
+    }
+
+    let hasPrimary = currentGallery.some((img) => img.isPrimary);
+    const addedImages = [];
+
+    for (let i = 0; i < req.files.length; i++) {
+      const file = req.files[i];
+      const safeName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+      const storageKey = `items/${item._id}/${Date.now()}-${safeName}`;
+
+      const uploadResult = await storageService.putObject({
+        key: storageKey,
+        body: file.buffer,
+        contentType: file.mimetype,
+        tenantId: req.tenantId
+      });
+
+      let publicUrl;
+      if (uploadResult.provider === 's3') {
+        publicUrl = process.env.S3_PUBLIC_URL
+          ? `${process.env.S3_PUBLIC_URL}/${uploadResult.key}`
+          : `https://${process.env.S3_BUCKET}.s3.${process.env.S3_REGION || 'us-east-1'}.amazonaws.com/${uploadResult.key}`;
+      } else {
+        publicUrl = `/uploads/${req.tenantId}/${path.basename(uploadResult.key)}`;
+      }
+
+      const isPrimary = !hasPrimary && i === 0;
+      if (isPrimary) hasPrimary = true;
+
+      const galleryEntry = {
+        storageKey: uploadResult.key,
+        url: publicUrl,
+        isPrimary,
+        sortOrder: currentGallery.length + i,
+        altText: req.body.altText || item.name,
+        uploadedAt: new Date(),
+        uploadedBy: req.user._id
+      };
+
+      currentGallery.push(galleryEntry);
+      addedImages.push(galleryEntry);
+
+      if (isPrimary) {
+        item._imageUrl = publicUrl;
+      }
+    }
+
+    item.gallery = currentGallery;
+    await item.save();
+
+    await logBusinessEvent({
+      action: 'IMAGE_UPLOADED',
+      entityType: 'Item',
+      entityId: item._id,
+      tenantId: req.tenantId,
+      userId: req.user._id,
+      changes: {
+        itemSku: item.sku,
+        uploadedCount: req.files.length,
+        totalGalleryCount: item.gallery.length
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      gallery: item.gallery,
+      addedImages
+    });
+  } catch (error) {
+    console.error('Error uploading product images:', error);
+    res.status(500).json({ error: error.message || 'Failed to upload images' });
+  }
+});
+
+/**
+ * PATCH /api/items/:id/images/reorder
+ * Reorder images in product gallery
+ */
+router.patch('/:id/images/reorder', requireAuth, validateObjectId, requirePermission('canManageProductImages'), async (req, res) => {
+  try {
+    const { order } = req.body; // Array of image _ids in desired order or [{ imageId, sortOrder }]
+    if (!Array.isArray(order) || order.length === 0) {
+      return res.status(400).json({ error: 'Order must be a non-empty array of image IDs or order objects' });
+    }
+
+    const item = await Item.findOne({ _id: req.params.id, tenantId: req.tenantId });
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    const gallery = item.gallery || [];
+    const galleryMap = new Map();
+    gallery.forEach((img) => galleryMap.set(img._id.toString(), img));
+
+    if (typeof order[0] === 'string' || (order[0] && mongoose.Types.ObjectId.isValid(order[0]))) {
+      // Array of image IDs
+      const reordered = [];
+      order.forEach((id, index) => {
+        const idStr = id.toString();
+        if (galleryMap.has(idStr)) {
+          const img = galleryMap.get(idStr);
+          img.sortOrder = index;
+          reordered.push(img);
+          galleryMap.delete(idStr);
+        }
+      });
+      // Append any unreferenced images
+      galleryMap.forEach((img) => {
+        img.sortOrder = reordered.length;
+        reordered.push(img);
+      });
+      item.gallery = reordered;
+    } else if (typeof order[0] === 'object' && order[0].imageId) {
+      // Array of { imageId, sortOrder }
+      order.forEach(({ imageId, sortOrder }) => {
+        const img = galleryMap.get(String(imageId));
+        if (img && typeof sortOrder === 'number') {
+          img.sortOrder = sortOrder;
+        }
+      });
+      item.gallery.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    }
+
+    await item.save();
+
+    await logBusinessEvent({
+      action: 'IMAGE_REORDERED',
+      entityType: 'Item',
+      entityId: item._id,
+      tenantId: req.tenantId,
+      userId: req.user._id,
+      changes: { itemSku: item.sku }
+    });
+
+    res.json({ success: true, gallery: item.gallery });
+  } catch (error) {
+    console.error('Error reordering images:', error);
+    res.status(500).json({ error: 'Failed to reorder images' });
+  }
+});
+
+/**
+ * PATCH /api/items/:id/images/:imageId/primary
+ * Set an image as the primary product image
+ */
+router.patch('/:id/images/:imageId/primary', requireAuth, validateObjectId, requirePermission('canManageProductImages'), async (req, res) => {
+  try {
+    const item = await Item.findOne({ _id: req.params.id, tenantId: req.tenantId });
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    const imageIdStr = req.params.imageId;
+    const targetImage = (item.gallery || []).find((img) => img._id.toString() === imageIdStr);
+
+    if (!targetImage) {
+      return res.status(404).json({ error: 'Image not found in product gallery' });
+    }
+
+    item.gallery.forEach((img) => {
+      img.isPrimary = img._id.toString() === imageIdStr;
+    });
+
+    item._imageUrl = targetImage.url;
+    await item.save();
+
+    await logBusinessEvent({
+      action: 'IMAGE_PRIMARY_SET',
+      entityType: 'Item',
+      entityId: item._id,
+      tenantId: req.tenantId,
+      userId: req.user._id,
+      changes: {
+        itemSku: item.sku,
+        primaryImageId: imageIdStr,
+        primaryUrl: targetImage.url
+      }
+    });
+
+    res.json({ success: true, gallery: item.gallery, primaryImageUrl: item.imageUrl });
+  } catch (error) {
+    console.error('Error setting primary image:', error);
+    res.status(500).json({ error: 'Failed to set primary image' });
+  }
+});
+
+/**
+ * DELETE /api/items/:id/images/:imageId
+ * Remove an image from the product gallery and delete underlying storage
+ */
+router.delete('/:id/images/:imageId', requireAuth, validateObjectId, requirePermission('canManageProductImages'), async (req, res) => {
+  try {
+    const item = await Item.findOne({ _id: req.params.id, tenantId: req.tenantId });
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found' });
+    }
+
+    const imageIdStr = req.params.imageId;
+    const imgIndex = (item.gallery || []).findIndex((img) => img._id.toString() === imageIdStr);
+
+    if (imgIndex === -1) {
+      return res.status(404).json({ error: 'Image not found in gallery' });
+    }
+
+    const [deletedImg] = item.gallery.splice(imgIndex, 1);
+
+    // Delete storage object if stored locally or in S3
+    if (deletedImg.storageKey && !deletedImg.storageKey.startsWith('legacy') && !deletedImg.storageKey.startsWith('external')) {
+      try {
+        await storageService.deleteObject({
+          key: deletedImg.storageKey,
+          tenantId: req.tenantId
+        });
+      } catch (err) {
+        console.warn('Storage deletion warning:', err.message);
+      }
+    }
+
+    // If removed image was primary, make the first remaining image primary
+    if (deletedImg.isPrimary && item.gallery.length > 0) {
+      item.gallery[0].isPrimary = true;
+      item._imageUrl = item.gallery[0].url;
+    } else if (item.gallery.length === 0) {
+      item._imageUrl = undefined;
+    }
+
+    await item.save();
+
+    await logBusinessEvent({
+      action: 'IMAGE_DELETED',
+      entityType: 'Item',
+      entityId: item._id,
+      tenantId: req.tenantId,
+      userId: req.user._id,
+      changes: {
+        itemSku: item.sku,
+        deletedImageId: imageIdStr
+      }
+    });
+
+    res.json({ success: true, gallery: item.gallery, primaryImageUrl: item.imageUrl });
+  } catch (error) {
+    console.error('Error deleting image:', error);
+    res.status(500).json({ error: 'Failed to delete image' });
+  }
+});
+
+/**
+ * POST /api/items/images/bulk-import
+ * Bulk map external image URLs to items by SKU from CSV/Excel
+ */
+router.post('/images/bulk-import', requireAuth, requirePermission('canManageProductImages'), upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'CSV or Excel file is required' });
+    }
+
+    const filePath = req.file.path;
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    const rows = [];
+
+    if (ext === '.csv') {
+      await new Promise((resolve, reject) => {
+        fs.createReadStream(filePath)
+          .pipe(csv())
+          .on('data', (data) => rows.push(data))
+          .on('end', resolve)
+          .on('error', reject);
+      });
+    } else {
+      const workbook = XLSX.readFile(filePath);
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json(sheet);
+      rows.push(...json);
+    }
+
+    // Clean up temp file
+    fs.unlink(filePath, () => {});
+
+    let updatedCount = 0;
+    const errors = [];
+
+    for (const row of rows) {
+      const sku = (row.sku || row.SKU || '').toString().trim();
+      const imageUrl = (row.imageUrl || row.image_url || row.url || row.URL || '').toString().trim();
+      const isPrimary = String(row.isPrimary || row.is_primary || '').toLowerCase() === 'true' || row.isPrimary === true;
+      const altText = (row.altText || row.alt || '').toString().trim();
+
+      if (!sku || !imageUrl) {
+        continue;
+      }
+
+      const item = await Item.findOne({ tenantId: req.tenantId, sku });
+      if (!item) {
+        errors.push({ sku, error: 'Product not found' });
+        continue;
+      }
+
+      item.gallery = item.gallery || [];
+      if (item.gallery.length >= 20) {
+        errors.push({ sku, error: 'Gallery limit of 20 reached' });
+        continue;
+      }
+
+      const hasPrimary = item.gallery.some((img) => img.isPrimary);
+      const shouldBePrimary = isPrimary || !hasPrimary;
+
+      if (shouldBePrimary) {
+        item.gallery.forEach((img) => { img.isPrimary = false; });
+        item._imageUrl = imageUrl;
+      }
+
+      item.gallery.push({
+        storageKey: 'external',
+        url: imageUrl,
+        isPrimary: shouldBePrimary,
+        sortOrder: item.gallery.length,
+        altText: altText || item.name,
+        uploadedAt: new Date(),
+        uploadedBy: req.user._id
+      });
+
+      await item.save();
+      updatedCount++;
+    }
+
+    await logBusinessEvent({
+      action: 'IMAGES_BULK_IMPORTED',
+      entityType: 'Item',
+      tenantId: req.tenantId,
+      userId: req.user._id,
+      changes: { updatedCount, errorCount: errors.length }
+    });
+
+    res.json({
+      success: true,
+      updatedCount,
+      errors
+    });
+  } catch (error) {
+    console.error('Error bulk importing images:', error);
+    res.status(500).json({ error: error.message || 'Bulk image import failed' });
+  }
+});
+
 module.exports = router;
 module.exports.getUploadErrorResponse = getUploadErrorResponse;
 module.exports.transformRow = transformRow;
 module.exports.parseBoolean = parseBoolean;
+
