@@ -12,6 +12,7 @@ import {
 } from "@/hooks/use-feature-data";
 import { useRealtimeState } from "@/components/realtime-provider";
 import TwoFactorSettings from "@/components/TwoFactorSettings";
+import { WhatsAppSimulatorModal } from "@/components/ai/whatsapp-simulator-modal";
 
 interface WarehouseOption {
   _id: string;
@@ -113,6 +114,7 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
   const [opsSuccessMsg, setOpsSuccessMsg] = useState<string | null>(null);
   const [savingAlerts, setSavingAlerts] = useState(false);
   const [alertsSuccessMsg, setAlertsSuccessMsg] = useState<string | null>(null);
+  const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
 
   // Export states
   const [exportingType, setExportingType] = useState<string | null>(null);
@@ -1046,16 +1048,44 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
 
           <div className="space-y-6">
             <div className="glass-panel rounded-2xl border border-white/10 bg-slate-950/60 p-6 space-y-4">
-              <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-400">WhatsApp AI Agent Status</h4>
-              <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-xs text-emerald-200 space-y-2">
-                <div className="font-semibold flex items-center gap-1.5">
-                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                  Meta Webhook Engine: Active
+              <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-400">WhatsApp AI Operations Hub</h4>
+              <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-xs text-emerald-200 space-y-3">
+                <div className="font-semibold flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    Meta Cloud AI Agent: Online
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wider bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full border border-emerald-500/30 font-bold">
+                    Dual Mode
+                  </span>
                 </div>
-                <p className="text-slate-300">
-                  AcuStock WhatsApp AI agent processes natural language queries for real-time stock levels, pending purchase orders, and supplier receipts.
+                <p className="text-slate-300 text-xs leading-relaxed">
+                  AcuStock WhatsApp assistant automates stock level queries, statistical reorder recommendations, and PO generation directly via chat.
                 </p>
+                <div className="border-t border-emerald-500/20 pt-2 space-y-1.5 text-[11px] text-slate-300">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-400 font-bold">✓</span>
+                    <span>Safety stock breach alerts auto-dispatch</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-400 font-bold">✓</span>
+                    <span>Dispatched shipments trigger customer tracking</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-emerald-400 font-bold">✓</span>
+                    <span>Expiring FEFO lot warnings for warehouse staff</span>
+                  </div>
+                </div>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setIsSimulatorOpen(true)}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-emerald-500/20 transition-all hover:brightness-110 active:scale-[0.99]"
+              >
+                <span>💬</span>
+                <span>Open WhatsApp Simulator Sandbox</span>
+              </button>
             </div>
           </div>
         </div>
@@ -1154,6 +1184,12 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
           </div>
         </div>
       )}
+
+      <WhatsAppSimulatorModal
+        isOpen={isSimulatorOpen}
+        onClose={() => setIsSimulatorOpen(false)}
+        defaultPhone={phone}
+      />
     </div>
   );
 }

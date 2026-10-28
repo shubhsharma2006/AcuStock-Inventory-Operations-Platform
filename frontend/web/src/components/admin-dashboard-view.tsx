@@ -2,6 +2,7 @@
 
 import { DashboardMetrics } from "@/components/dashboard-metrics";
 import { DashboardKpiStrip } from "@/components/dashboard-kpi-strip";
+import { OnboardingWizard } from "@/components/onboarding-wizard";
 import { useAdminDashboardData } from "@/hooks/use-dashboard-data";
 import { useRealtimeState } from "@/components/realtime-provider";
 
@@ -68,6 +69,13 @@ export function AdminDashboardView() {
           </div>
         </div>
       </section>
+
+      {/* Progressive SaaS Onboarding Wizard */}
+      <OnboardingWizard
+        productCount={stats.totalProducts}
+        warehouseCount={(stats as any).totalWarehouses || 1}
+        totalInCount={charts.stockMovement.stockIn.reduce((a, b) => a + b, 0)}
+      />
 
       {/* Financial & Operational KPI Radar */}
       <DashboardKpiStrip basePath="/dashboard/admin" refreshToken={refreshToken} />

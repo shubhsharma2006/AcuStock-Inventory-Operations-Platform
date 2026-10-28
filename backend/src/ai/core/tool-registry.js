@@ -126,6 +126,19 @@ const functionDeclarations = [
       type: 'OBJECT',
       properties: {}
     }
+  },
+  {
+    name: 'queryReorderRecommendations',
+    description: 'Calculate statistical reorder point (ROP), safety stock buffers, and replenishment purchase recommendations based on historical demand velocity.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        lookbackDays: {
+          type: 'INTEGER',
+          description: 'Historical lookback window in days (default: 60, min: 14, max: 180)'
+        }
+      }
+    }
   }
 ];
 
@@ -135,6 +148,7 @@ const toolHandlers = {
   checkExpiringLots: inventoryTools.checkExpiringLots,
   listLowStockItems: inventoryTools.listLowStockItems,
   analyzeInventoryHealth: inventoryTools.analyzeInventoryHealth,
+  queryReorderRecommendations: inventoryTools.queryReorderRecommendations,
   getOrderStatus: ordersTools.getOrderStatus,
   listBackorders: ordersTools.listBackorders,
   draftPurchaseOrder: ordersTools.draftPurchaseOrder

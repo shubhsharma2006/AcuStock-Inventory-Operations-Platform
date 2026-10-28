@@ -1,10 +1,35 @@
+/**
+ * AcuStock RBAC Evaluation & Audit Script (Local Development / CI Only)
+ * 
+ * NOTE: This is a standalone test automation runner used to verify role permissions
+ * across API endpoints. It is NOT part of the production application runtime.
+ * In production, user credentials are stored exclusively in MongoDB with 12-round
+ * bcrypt hashing and are never hardcoded.
+ */
+
 const http = require('http');
 
 const ROLES = [
-  { role: 'SUPER_ADMIN', email: 'rajeshkumar@acustock.com', pass: 'SuperAdmin@123' },
-  { role: 'ADMIN',       email: 'admin@company.com',        pass: 'Admin@123' },
-  { role: 'MANAGER',     email: 'manager@test.com',         pass: 'Manager@123' },
-  { role: 'USER',        email: 'shubh4w880@gmail.com',     pass: 'User@123' },
+  {
+    role: 'SUPER_ADMIN',
+    email: process.env.EVAL_SUPERADMIN_EMAIL || 'rajeshkumar@acustock.com',
+    pass: process.env.EVAL_SUPERADMIN_PASS || 'SuperAdmin@123'
+  },
+  {
+    role: 'ADMIN',
+    email: process.env.EVAL_ADMIN_EMAIL || 'admin@company.com',
+    pass: process.env.EVAL_ADMIN_PASS || 'Admin@123'
+  },
+  {
+    role: 'MANAGER',
+    email: process.env.EVAL_MANAGER_EMAIL || 'manager@test.com',
+    pass: process.env.EVAL_MANAGER_PASS || 'Manager@123'
+  },
+  {
+    role: 'USER',
+    email: process.env.EVAL_USER_EMAIL || 'shubh4w880@gmail.com',
+    pass: process.env.EVAL_USER_PASS || 'User@123'
+  },
 ];
 
 const ENDPOINTS = [

@@ -12,14 +12,12 @@ const { notifyRoles } = require('../services/notificationHelper');
 const { checkAndTriggerAutoPo } = require('../services/reorderEngine');
 
 const stockService = require('../services/stock.service');
+const stockController = require('../controllers/stock.controller');
 const { logBusinessEvent } = require('../utils/auditHelper');
 const router = express.Router();
 router.use(requireTenantId);
 
-// Helper: escape regex special characters to prevent ReDoS / injection
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+const { escapeRegex } = require('../utils/regex');
 
 // Helper function to create stock notification via centralized helper
 async function createStockNotification(type, item, quantity, user) {
@@ -70,153 +68,7 @@ async function createStockNotification(type, item, quantity, user) {
 
 // GET /api/stock/summary - Get real-time stock summary (Total IN - Total OUT per product)
 // All authenticated users can access this (for remaining stock view)
-router.get('/summary', requireAuth, async (req, res) => {
-  try {
-    const { search, warehouseId } = req.query;
-
-    // Escape regex special characters to prevent injection / ReDoS
-    const escapedSearch = search ? escapeRegex(search) : undefined;
-
-    // Branch scoping: user assigned warehouse takes precedence for non-admins, or query param
-    let effectiveWarehouseId = null;
-    if (req.user.assignedWarehouseId) {
-      effectiveWarehouseId = req.user.assignedWarehouseId;
-    } else if (warehouseId && mongoose.Types.ObjectId.isValid(warehouseId)) {
-      effectiveWarehouseId = warehouseId;
-    }
-
-    // Build match for search
-    let productMatch = {};
-    if (escapedSearch) {
-      productMatch = {
-        $or: [
-          { 'productInfo.name': { $regex: escapedSearch, $options: 'i' } },
-          { 'productInfo.shortName': { $regex: escapedSearch, $options: 'i' } }
-        ]
-      };
-    }
-
-    // Aggregate stock ledger to get IN and OUT totals per product
-    const matchStage = { tenantId: new mongoose.Types.ObjectId(req.tenantId), isDeleted: { $ne: true } };
-    if (effectiveWarehouseId) {
-      matchStage.warehouseId = new mongoose.Types.ObjectId(effectiveWarehouseId);
-    }
-    const pipeline = [{ $match: matchStage }];
-
-    pipeline.push(
-      // Group by product and type
-      {
-        $group: {
-          _id: { productId: '$productId', type: '$type' },
-          total: { $sum: '$quantity' }
-        }
-      },
-      // Regroup by product only
-      {
-        $group: {
-          _id: '$_id.productId',
-          totals: {
-            $push: {
-              type: '$_id.type',
-              total: '$total'
-            }
-          }
-        }
-      },
-      // Lookup product details — only active products
-      {
-        $lookup: {
-          from: 'items',
-          let: { productId: '$_id' },
-          pipeline: [{ $match: { $expr: { $and: [
-            { $eq: ['$_id', '$$productId'] },
-            { $eq: ['$tenantId', new mongoose.Types.ObjectId(req.tenantId)] }
-          ] } } }],
-          as: 'productInfo'
-        }
-      },
-      { $unwind: '$productInfo' },
-      // Skip inactive/deleted products
-      { $match: { 'productInfo.isActive': { $ne: false } } },
-      // Match search if provided
-      ...(search ? [{ $match: productMatch }] : []),
-      // Project final output — include lowStockThreshold
-      {
-        $project: {
-          _id: 0,
-          productId: '$_id',
-          name: '$productInfo.name',
-          shortName: '$productInfo.shortName',
-          lowStockThreshold: { $ifNull: ['$productInfo.lowStockThreshold', 10] },
-          totalIn: {
-            $reduce: {
-              input: '$totals',
-              initialValue: 0,
-              in: {
-                $cond: [
-                  { $in: ['$$this.type', ['IN', 'TRANSFER_IN']] },
-                  { $add: ['$$value', '$$this.total'] },
-                  '$$value'
-                ]
-              }
-            }
-          },
-          totalOut: {
-            $reduce: {
-              input: '$totals',
-              initialValue: 0,
-              in: {
-                $cond: [
-                  { $in: ['$$this.type', ['OUT', 'TRANSFER_OUT']] },
-                  { $add: ['$$value', '$$this.total'] },
-                  '$$value'
-                ]
-              }
-            }
-          }
-        }
-      },
-      { $sort: { name: 1 } }
-    );
-
-    const stockSummary = await StockLedger.aggregate(pipeline);
-
-    // Also include products with no stock entries (quantity = 0)
-    const productsWithStock = stockSummary.map(s => s.productId.toString());
-    
-    const allProdFilter = { isActive: { $ne: false }, tenantId: req.tenantId };
-    if (escapedSearch) {
-      allProdFilter.$or = [
-        { name: { $regex: escapedSearch, $options: 'i' } },
-        { shortName: { $regex: escapedSearch, $options: 'i' } }
-      ];
-    }
-
-    let allProducts = await Item.find(allProdFilter).select('_id name shortName lowStockThreshold');
-
-    // Add products without ledger entries
-    const productsWithoutStock = allProducts
-      .filter(p => !productsWithStock.includes(p._id.toString()))
-      .map(p => ({
-        productId: p._id,
-        name: p.name,
-        shortName: p.shortName,
-        lowStockThreshold: p.lowStockThreshold ?? 10,
-        totalIn: 0,
-        totalOut: 0
-      }));
-
-    const items = [...stockSummary, ...productsWithoutStock].sort((a, b) => 
-      a.name.localeCompare(b.name)
-    );
-
-    res.json({ items });
-
-  } catch (error) {
-    console.error('Stock summary error:', error);
-    res.status(500).json({ message: 'Failed to load stock summary' });
-  }
-});
+router.get('/summary', requireAuth, (req, res) => stockController.getSummary(req, res));
 
 // GET /api/stock/serials/:productId - Get available serials for a product (for Stock OUT)
 // Returns serials that are currently "IN" stock (last action was IN)
@@ -261,24 +113,32 @@ router.get('/serials/:productId', requireAuth, async (req, res) => {
     
     let serials = [];
     
+    const inStockActions = ['IN', 'RETURN_RESTOCK', 'REPAIR_DONE'];
     if (status === 'available') {
-      // Only return serials where last action was 'IN' (currently in stock)
+      // Return serials where last action was IN, RETURN_RESTOCK, or REPAIR_DONE
       serials = serialsAgg
-        .filter(s => s.lastAction === 'IN')
+        .filter(s => inStockActions.includes(s.lastAction))
         .map(s => s._id);
     } else if (status === 'out') {
-      // Only return serials where last action was 'OUT' (currently out)
+      // Only return serials where last action was 'OUT'
       serials = serialsAgg
         .filter(s => s.lastAction === 'OUT')
         .map(s => s._id);
     } else {
       // Return all with their status
-      serials = serialsAgg.map(s => ({
-        serial: s._id,
-        status: s.lastAction === 'IN' ? 'available' : 'out',
-        lastAction: s.lastAction,
-        lastActionAt: s.lastActionAt
-      }));
+      serials = serialsAgg.map(s => {
+        let currentStatus = 'out';
+        if (inStockActions.includes(s.lastAction)) currentStatus = 'available';
+        else if (['INSPECTION', 'REPAIR_START'].includes(s.lastAction)) currentStatus = 'under-repair';
+        else if (s.lastAction === 'SCRAP_WRITEOFF') currentStatus = 'scrapped';
+
+        return {
+          serial: s._id,
+          status: currentStatus,
+          lastAction: s.lastAction,
+          lastActionAt: s.lastActionAt
+        };
+      });
     }
     
     res.json({
@@ -351,7 +211,16 @@ router.get('/serial/search', requireAuth, async (req, res) => {
         $project: {
           _id: 0,
           serial: '$_id',
-          status: { $cond: [{ $eq: ['$lastAction', 'IN'] }, 'in-stock', 'out-of-stock'] },
+          status: {
+            $switch: {
+              branches: [
+                { case: { $in: ['$lastAction', ['IN', 'RETURN_RESTOCK', 'REPAIR_DONE']] }, then: 'in-stock' },
+                { case: { $in: ['$lastAction', ['INSPECTION', 'REPAIR_START']] }, then: 'under-repair' },
+                { case: { $eq: ['$lastAction', 'SCRAP_WRITEOFF'] }, then: 'scrapped' }
+              ],
+              default: 'out-of-stock'
+            }
+          },
           lastAction: 1,
           lastActionAt: 1,
           productId: '$product._id',
@@ -547,7 +416,7 @@ router.get('/serial-audit/:serial', requireAuth, async (req, res) => {
 // POST /api/stock/in - Create a new 'IN' entry
 // Allowed: ADMIN, MANAGER, USER (all can perform stock operations)
 router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requirePermission('canStockIn'), validateRequest(schemas.stockIn), async (req, res) => {
-  const { productId, quantity, serialNumbers = [], supplier, condition, transaction, modelVariant } = req.body;
+  const { productId, quantity, serialNumbers = [], supplier, condition, transaction, modelVariant, lot, batch, lotNumber, expiryDate, mfgDate, supplierBatchNumber, supplierWarrantyExpiry, costPrice, notes } = req.body;
 
   if (!productId || quantity === undefined || quantity === null) {
     return res.status(400).json({ message: 'Product ID and quantity are required' });
@@ -565,13 +434,19 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
       return res.status(404).json({ message: 'Item not found' });
     }
 
-    // Branch Scoping: Non-admins can only stock-in at their assigned warehouse
+    // Facility Scoping: Non-admins can only stock-in at their assigned warehouse(s)
     let effectiveWarehouseId = req.body.warehouseId || null;
-    if (req.user.assignedWarehouseId) {
-      if (effectiveWarehouseId && String(effectiveWarehouseId) !== String(req.user.assignedWarehouseId)) {
-        return res.status(403).json({ message: 'Forbidden: You can only perform Stock IN at your assigned warehouse branch.' });
+    const allowedWarehouses = req.user.assignedWarehouses?.length 
+      ? req.user.assignedWarehouses.map(String) 
+      : (req.user.assignedWarehouseId ? [String(req.user.assignedWarehouseId)] : []);
+
+    if (allowedWarehouses.length > 0) {
+      if (effectiveWarehouseId && !allowedWarehouses.includes(String(effectiveWarehouseId))) {
+        return res.status(403).json({ message: 'Forbidden: You can only perform Stock IN at your assigned warehouse facility.' });
       }
-      effectiveWarehouseId = req.user.assignedWarehouseId;
+      if (!effectiveWarehouseId) {
+        effectiveWarehouseId = allowedWarehouses[0];
+      }
     }
 
     // Include modelVariant in transaction details
@@ -581,7 +456,25 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
     };
 
     await stockService.stockIn(
-      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, supplier, condition, transaction: transactionData, tenantId: req.tenantId, warehouseId: effectiveWarehouseId },
+      {
+        productId,
+        quantity: payload.quantity,
+        serialNumbers: payload.serialNumbers,
+        supplier,
+        condition,
+        transaction: transactionData,
+        tenantId: req.tenantId,
+        warehouseId: effectiveWarehouseId,
+        lot,
+        batch,
+        lotNumber,
+        expiryDate,
+        mfgDate,
+        supplierBatchNumber,
+        supplierWarrantyExpiry,
+        costPrice,
+        notes: notes || req.body.notes
+      },
       req.user
     );
 
@@ -632,7 +525,7 @@ router.post('/in', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requi
 // POST /api/stock/out - Create a new 'OUT' entry
 // Allowed: ADMIN, MANAGER, USER (all can perform stock operations)
 router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requirePermission('canStockOut'), validateRequest(schemas.stockOut), async (req, res) => {
-  const { productId, quantity, serialNumbers = [], buyer, condition, transaction, modelVariant } = req.body;
+  const { productId, quantity, serialNumbers = [], buyer, condition, transaction, modelVariant, lotId, preferredLotId } = req.body;
 
   if (!productId || quantity === undefined || quantity === null) {
     return res.status(400).json({ message: 'Product ID and quantity are required' });
@@ -650,13 +543,19 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
       return res.status(404).json({ message: 'Item not found' });
     }
 
-    // Branch Scoping: Non-admins can only stock-out from their assigned warehouse
+    // Facility Scoping: Non-admins can only stock-out from their assigned warehouse(s)
     let effectiveWarehouseId = req.body.warehouseId || null;
-    if (req.user.assignedWarehouseId) {
-      if (effectiveWarehouseId && String(effectiveWarehouseId) !== String(req.user.assignedWarehouseId)) {
-        return res.status(403).json({ message: 'Forbidden: You can only perform Stock OUT at your assigned warehouse branch.' });
+    const allowedWarehouses = req.user.assignedWarehouses?.length 
+      ? req.user.assignedWarehouses.map(String) 
+      : (req.user.assignedWarehouseId ? [String(req.user.assignedWarehouseId)] : []);
+
+    if (allowedWarehouses.length > 0) {
+      if (effectiveWarehouseId && !allowedWarehouses.includes(String(effectiveWarehouseId))) {
+        return res.status(403).json({ message: 'Forbidden: You can only perform Stock OUT at your assigned warehouse facility.' });
       }
-      effectiveWarehouseId = req.user.assignedWarehouseId;
+      if (!effectiveWarehouseId) {
+        effectiveWarehouseId = allowedWarehouses[0];
+      }
     }
 
     // Include modelVariant in transaction details
@@ -666,7 +565,18 @@ router.post('/out', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), requ
     };
 
     await stockService.stockOut(
-      { productId, quantity: payload.quantity, serialNumbers: payload.serialNumbers, buyer, condition, transaction: transactionData, tenantId: req.tenantId, warehouseId: effectiveWarehouseId },
+      {
+        productId,
+        quantity: payload.quantity,
+        serialNumbers: payload.serialNumbers,
+        buyer,
+        condition,
+        transaction: transactionData,
+        tenantId: req.tenantId,
+        warehouseId: effectiveWarehouseId,
+        lotId: lotId || preferredLotId,
+        preferredLotId: preferredLotId || lotId
+      },
       req.user
     );
 

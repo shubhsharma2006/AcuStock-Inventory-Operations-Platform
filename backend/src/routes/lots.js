@@ -3,8 +3,7 @@ const mongoose = require('mongoose');
 const InventoryLot = require('../models/InventoryLot');
 const Item = require('../models/Item');
 const StockLedger = require('../models/StockLedger');
-const { requireAuth, requireTenantId, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
-const requirePermission = require('../middleware/requirePermission');
+const { requireAuth, requireRole, requireTenantId, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
 const lotService = require('../services/lot.service');
 const { logBusinessEvent } = require('../utils/auditHelper');
 
@@ -15,7 +14,7 @@ router.use(requireTenantId);
  * GET /api/lots
  * List inventory lots with optional filtering and pagination
  */
-router.get('/', requireAuth, requirePermission('canViewStock'), async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const { productId, status, nearExpiry, search } = req.query;
     const { page, limit } = normalizePaginationQuery(req.query);
@@ -77,7 +76,7 @@ router.get('/', requireAuth, requirePermission('canViewStock'), async (req, res)
  * GET /api/lots/availability/:productId
  * Active lots available for allocation for a specific product
  */
-router.get('/availability/:productId', requireAuth, requirePermission('canViewStock'), validateObjectId, async (req, res) => {
+router.get('/availability/:productId', requireAuth, validateObjectId, async (req, res) => {
   try {
     const { productId } = req.params;
     const availability = await lotService.getLotAvailability({
@@ -99,7 +98,7 @@ router.get('/availability/:productId', requireAuth, requirePermission('canViewSt
  * GET /api/lots/:id
  * Get single lot detail including audit timeline
  */
-router.get('/:id', requireAuth, requirePermission('canViewStock'), validateObjectId, async (req, res) => {
+router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
     const lot = await InventoryLot.findOne({ _id: req.params.id, tenantId: req.tenantId })
       .populate('productId', 'name sku uom trackingMode category')
@@ -143,7 +142,7 @@ router.get('/:id', requireAuth, requirePermission('canViewStock'), validateObjec
  * POST /api/lots/:id/block
  * Administratively block a lot from being allocated
  */
-router.post('/:id/block', requireAuth, requirePermission('canStockAdjust'), validateObjectId, async (req, res) => {
+router.post('/:id/block', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {
     const { reason } = req.body;
     const lot = await lotService.blockLot({
@@ -179,7 +178,7 @@ router.post('/:id/block', requireAuth, requirePermission('canStockAdjust'), vali
  * POST /api/lots/:id/unblock
  * Unblock a blocked lot
  */
-router.post('/:id/unblock', requireAuth, requirePermission('canStockAdjust'), validateObjectId, async (req, res) => {
+router.post('/:id/unblock', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {
     const lot = await lotService.unblockLot({
       lotId: req.params.id,

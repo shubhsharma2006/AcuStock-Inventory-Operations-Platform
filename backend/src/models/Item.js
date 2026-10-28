@@ -241,7 +241,7 @@ itemSchema.methods.getCurrentStock = async function () {
         _id: null,
         total: {
           $sum: {
-            $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', { $multiply: ['$quantity', -1] }]
+            $cond: [{ $in: ['$type', ['IN', 'TRANSFER_IN', 'ADJUSTMENT_IN']] }, '$quantity', { $multiply: ['$quantity', -1] }]
           }
         }
       }

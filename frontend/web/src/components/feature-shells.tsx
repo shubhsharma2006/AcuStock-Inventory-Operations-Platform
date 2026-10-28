@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Role } from "@/lib/acustock";
 import { apiFetch } from "@/lib/api";
@@ -24,6 +25,9 @@ import { ProductDetailsModal } from "@/components/product-details-modal";
 import { EnterpriseSettingsView } from "@/components/enterprise-settings-view";
 import { NotificationsHubView } from "@/components/notifications-hub-view";
 import { useQueryClient } from "@tanstack/react-query";
+import { Portal } from "@/components/ui/portal";
+import { BarcodeLabelModal } from "@/components/barcode/barcode-label-modal";
+import { ResponsiveDataView, type ResponsiveColumn } from "@/components/ui/responsive-data-view";
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-IN").format(value);
@@ -63,6 +67,14 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
   }, []);
 
   const [galleryProduct, setGalleryProduct] = useState<ProductForGallery | null>(null);
+  const [barcodeProduct, setBarcodeProduct] = useState<{
+    _id: string;
+    name: string;
+    sku: string;
+    price?: number;
+    serialNumber?: string;
+    companyName?: string;
+  } | null>(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -177,6 +189,246 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
     }
   }
 
+  const productColumns: ResponsiveColumn<any>[] = [
+    {
+      key: "product",
+      header: "Product / Category",
+      render: (item) => (
+        <div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedProductForDetails(item._id)}
+              className="font-semibold text-white text-left hover:text-amber-300 transition underline-offset-2 hover:underline"
+              title="Click to view full product details"
+            >
+              {item.name}
+            </button>
+            {item.trackingMode && item.trackingMode !== 'NONE' ? (
+              <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${item.trackingMode === 'BATCH' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`}>
+                {item.trackingMode}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+            <span className="rounded bg-white/10 px-1.5 py-0.5">{item.category || "General"}</span>
+            {item.brand ? <span>· {item.brand}</span> : null}
+            {item.shortName ? <span>({item.shortName})</span> : null}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "sku",
+      header: "SKU & Barcode",
+      render: (item) => (
+        <div>
+          <div className="font-mono text-xs font-semibold text-amber-300">
+            {item.sku || "—"}
+          </div>
+          {item.barcode ? (
+            <div className="font-mono text-xs text-slate-400 mt-0.5">
+              📟 {item.barcode}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "gallery",
+      header: "Gallery",
+      render: (item) => (
+        <button
+          type="button"
+          onClick={() => setGalleryProduct({ _id: item._id, name: item.name, sku: item.sku || '', gallery: item.gallery })}
+          className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:border-amber-400/40 hover:text-white"
+          title="Manage Product Images"
+        >
+          {item.imageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={item.imageUrl} alt="" className="h-6 w-6 rounded object-cover" />
+          ) : (
+            <span>📷</span>
+          )}
+          <span>{item.gallery?.length ? `${item.gallery.length} photo${item.gallery.length === 1 ? '' : 's'}` : '+ Add'}</span>
+        </button>
+      ),
+    },
+    {
+      key: "uom",
+      header: "UoM",
+      render: (item) => <span className="text-slate-300 font-medium">{item.uom || "PCS"}</span>,
+    },
+    {
+      key: "stock",
+      header: "Stock Status",
+      render: (item) => {
+        const stock = item.currentStock ?? item.quantity ?? 0;
+        const threshold = item.lowStockThreshold ?? 10;
+        const isLow = stock <= threshold && stock > 0;
+        const isOut = stock <= 0;
+        return (
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-white text-base">
+                {formatNumber(stock)}
+              </span>
+              {isOut ? (
+                <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-xs font-semibold text-rose-300">Out</span>
+              ) : isLow ? (
+                <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-300">Low</span>
+              ) : (
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-300">Good</span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
+              <span>Alert at {threshold}</span>
+              {item.autoPoEnabled ? (
+                <span className="rounded bg-emerald-500/10 border border-emerald-500/20 px-1 py-0.2 text-[10px] font-semibold text-emerald-400">
+                  ⚡ Auto-PO ({item.reorderQuantity || 20})
+                </span>
+              ) : null}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: "price",
+      header: "Pricing & Tax",
+      render: (item) => (
+        <div>
+          <div>
+            <span className="text-white font-semibold">₹{formatNumber(item.salesPrice ?? 0)}</span>
+            <span className="text-xs text-slate-500 ml-1.5">Cost: ₹{formatNumber(item.purchasePrice ?? 0)}</span>
+          </div>
+          <div className="text-xs text-slate-400 mt-0.5">
+            {item.taxRate ? `${item.taxType || "GST"} ${item.taxRate}%` : "No Tax"}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      align: "right",
+      render: (item) => (
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              setBarcodeProduct({
+                _id: item._id,
+                name: item.name,
+                sku: item.sku || item.barcode || item._id,
+                price: item.salesPrice,
+                companyName: "AcuStock Enterprise",
+              })
+            }
+            className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 hover:border-emerald-400/50 hover:bg-emerald-500/20 transition cursor-pointer"
+            title="Generate & Print Barcode / QR Label"
+          >
+            <span>🏷️ Barcode</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedProductForDetails(item._id)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-xs font-semibold text-amber-300 hover:border-amber-400/50 hover:bg-amber-400/10 transition"
+            title="View Comprehensive Product Details"
+          >
+            <span>👁️ Details</span>
+          </button>
+        </div>
+      ),
+    },
+  ];
+
+  const renderMobileProductCard = (item: any) => {
+    const stock = item.currentStock ?? item.quantity ?? 0;
+    const threshold = item.lowStockThreshold ?? 10;
+    const isLow = stock <= threshold && stock > 0;
+    const isOut = stock <= 0;
+
+    return (
+      <div className="space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <button
+              type="button"
+              onClick={() => setSelectedProductForDetails(item._id)}
+              className="text-base font-semibold text-white hover:text-amber-300 text-left line-clamp-1"
+            >
+              {item.name}
+            </button>
+            <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+              <span className="rounded bg-white/10 px-1.5 py-0.5">{item.category || "General"}</span>
+              {item.brand ? <span>· {item.brand}</span> : null}
+            </div>
+          </div>
+          {isOut ? (
+            <span className="rounded-full bg-rose-500/20 px-2.5 py-1 text-xs font-semibold text-rose-300">Out</span>
+          ) : isLow ? (
+            <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-xs font-semibold text-amber-300">Low</span>
+          ) : (
+            <span className="rounded-full bg-emerald-500/20 px-2.5 py-1 text-xs font-semibold text-emerald-300">Good</span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 text-xs py-2 border-y border-white/5">
+          <div>
+            <span className="text-slate-400">SKU: </span>
+            <span className="font-mono font-medium text-amber-300">{item.sku || "—"}</span>
+          </div>
+          <div className="text-right">
+            <span className="text-slate-400">Stock: </span>
+            <span className="font-bold text-white">{formatNumber(stock)} {item.uom || "PCS"}</span>
+          </div>
+          <div>
+            <span className="text-slate-400">Price: </span>
+            <span className="font-semibold text-white">₹{formatNumber(item.salesPrice ?? 0)}</span>
+          </div>
+          <div className="text-right">
+            <span className="text-slate-400">Barcode: </span>
+            <span className="font-mono text-slate-300">{item.barcode || item.sku || "—"}</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            onClick={() =>
+              setBarcodeProduct({
+                _id: item._id,
+                name: item.name,
+                sku: item.sku || item.barcode || item._id,
+                price: item.salesPrice,
+                companyName: "AcuStock Enterprise",
+              })
+            }
+            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 py-2 text-xs font-semibold text-emerald-300 active:scale-95 transition cursor-pointer"
+          >
+            <span>🏷️ Label</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedProductForDetails(item._id)}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 py-2 text-xs font-semibold text-amber-300 active:scale-95 transition"
+          >
+            <span>👁️ Details</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setGalleryProduct({ _id: item._id, name: item.name, sku: item.sku || '', gallery: item.gallery })}
+            className="rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-2 text-xs text-slate-300 hover:text-white"
+            title="Photos"
+          >
+            <span>📷</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <section className="glass-panel rounded-[1.75rem] p-6 lg:p-8">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -212,139 +464,24 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
       {error ? <div className="mt-6 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div> : null}
 
       {!loading && !error ? (
-        <div className="mt-6 overflow-x-auto rounded-[1.5rem] border border-white/10">
-          <table className="min-w-full divide-y divide-white/10 text-left text-sm">
-            <thead className="bg-slate-950/70 text-slate-300">
-              <tr>
-                <th className="px-4 py-3 font-medium">Product / Category</th>
-                <th className="px-4 py-3 font-medium">SKU & Barcode</th>
-                <th className="px-4 py-3 font-medium">Gallery</th>
-                <th className="px-4 py-3 font-medium">UoM</th>
-                <th className="px-4 py-3 font-medium">Stock Status</th>
-                <th className="px-4 py-3 font-medium">Pricing & Tax</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/10 bg-slate-950/50">
-              {filteredItems.map((item) => {
-                const stock = item.currentStock ?? item.quantity ?? 0;
-                const threshold = item.lowStockThreshold ?? 10;
-                const isLow = stock <= threshold && stock > 0;
-                const isOut = stock <= 0;
-
-                return (
-                  <tr key={item._id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedProductForDetails(item._id)}
-                          className="font-semibold text-white text-left hover:text-amber-300 transition underline-offset-2 hover:underline"
-                          title="Click to view full product details"
-                        >
-                          {item.name}
-                        </button>
-                        {item.trackingMode && item.trackingMode !== 'NONE' ? (
-                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${item.trackingMode === 'BATCH' ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'}`}>
-                            {item.trackingMode}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
-                        <span className="rounded bg-white/10 px-1.5 py-0.5">{item.category || "General"}</span>
-                        {item.brand ? <span>· {item.brand}</span> : null}
-                        {item.shortName ? <span>({item.shortName})</span> : null}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="font-mono text-xs font-semibold text-amber-300">
-                        {item.sku || "—"}
-                      </div>
-                      {item.barcode ? (
-                        <div className="font-mono text-xs text-slate-400 mt-0.5">
-                          📟 {item.barcode}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="px-4 py-4">
-                      <button
-                        type="button"
-                        onClick={() => setGalleryProduct({ _id: item._id, name: item.name, sku: item.sku || '', gallery: item.gallery })}
-                        className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-xs font-semibold text-slate-300 hover:border-amber-400/40 hover:text-white"
-                        title="Manage Product Images"
-                      >
-                        {item.imageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={item.imageUrl} alt="" className="h-6 w-6 rounded object-cover" />
-                        ) : (
-                          <span>📷</span>
-                        )}
-                        <span>{item.gallery?.length ? `${item.gallery.length} photo${item.gallery.length === 1 ? '' : 's'}` : '+ Add'}</span>
-                      </button>
-                    </td>
-                    <td className="px-4 py-4 text-slate-300 font-medium">
-                      {item.uom || "PCS"}
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-white text-base">
-                          {formatNumber(stock)}
-                        </span>
-                        {isOut ? (
-                          <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-xs font-semibold text-rose-300">Out</span>
-                        ) : isLow ? (
-                          <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-300">Low</span>
-                        ) : (
-                          <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-xs font-semibold text-emerald-300">Good</span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-0.5">
-                        <span>Alert at {threshold}</span>
-                        {item.autoPoEnabled ? (
-                          <span className="rounded bg-emerald-500/10 border border-emerald-500/20 px-1 py-0.2 text-[10px] font-semibold text-emerald-400">
-                            ⚡ Auto-PO ({item.reorderQuantity || 20})
-                          </span>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-slate-300">
-                      <div>
-                        <span className="text-white font-semibold">₹{formatNumber(item.salesPrice ?? 0)}</span>
-                        <span className="text-xs text-slate-500 ml-1.5">Cost: ₹{formatNumber(item.purchasePrice ?? 0)}</span>
-                      </div>
-                      <div className="text-xs text-slate-400 mt-0.5">
-                        {item.taxRate ? `${item.taxType || "GST"} ${item.taxRate}%` : "No Tax"}
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedProductForDetails(item._id)}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-xs font-semibold text-amber-300 hover:border-amber-400/50 hover:bg-amber-400/10 transition"
-                        title="View Comprehensive Product Details"
-                      >
-                        <span>👁️ View Details</span>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {filteredItems.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
-                    No products match your search.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div className="mt-6">
+          <ResponsiveDataView
+            columns={productColumns}
+            data={filteredItems}
+            keyExtractor={(item) => item._id}
+            renderMobileCard={renderMobileProductCard}
+            isLoading={loading}
+            emptyMessage="No products match your search."
+            emptyIcon="📦"
+          />
         </div>
       ) : null}
 
       {/* Add Product Modal */}
       {showAddModal ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
-          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
+        <Portal>
+          <div className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overflow-y-auto bg-black/80 p-4 sm:p-6 backdrop-blur-md">
+            <div className="my-auto w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
               <div>
                 <h3 className="text-xl font-bold text-white">Create New Product</h3>
@@ -597,21 +734,34 @@ function ProductsBody({ role, userName }: { role: Role; userName: string }) {
             </form>
           </div>
         </div>
+      </Portal>
       ) : null}
 
       {galleryProduct ? (
-        <ProductGalleryModal
-          product={galleryProduct}
-          onClose={() => setGalleryProduct(null)}
-          onUpdated={() => refresh()}
-        />
+        <Portal>
+          <ProductGalleryModal
+            product={galleryProduct}
+            onClose={() => setGalleryProduct(null)}
+            onUpdated={() => refresh()}
+          />
+        </Portal>
       ) : null}
 
       {selectedProductForDetails ? (
-        <ProductDetailsModal
-          productId={selectedProductForDetails}
-          role={role}
-          onClose={() => setSelectedProductForDetails(null)}
+        <Portal>
+          <ProductDetailsModal
+            productId={selectedProductForDetails}
+            role={role}
+            onClose={() => setSelectedProductForDetails(null)}
+          />
+        </Portal>
+      ) : null}
+
+      {barcodeProduct ? (
+        <BarcodeLabelModal
+          isOpen={Boolean(barcodeProduct)}
+          onClose={() => setBarcodeProduct(null)}
+          product={barcodeProduct}
         />
       ) : null}
     </section>
@@ -628,9 +778,20 @@ function RemainingStockBody({ role, userName }: { role: Role; userName: string }
 
   return (
     <section className="glass-panel rounded-[1.75rem] p-6 lg:p-8">
-      <div className="text-xs uppercase tracking-[0.28em] text-amber-200/80">Live stock summary</div>
-      <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Remaining stock</h2>
-      <p className="mt-2 text-sm leading-6 text-slate-300">Calculated from the stock ledger by the backend, with low-stock thresholds included.</p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="text-xs uppercase tracking-[0.28em] text-amber-200/80">Live stock summary</div>
+          <h2 className="mt-2 text-3xl font-semibold tracking-tight text-white">Remaining stock</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-300">Calculated from the stock ledger by the backend, with low-stock thresholds included.</p>
+        </div>
+        <Link
+          href={`/dashboard/${role.toLowerCase()}/analytics/forecasting`}
+          className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-4 py-2.5 text-xs font-bold text-slate-950 shadow-md shadow-amber-400/20 transition hover:bg-amber-300 active:scale-95"
+        >
+          <span>📈 Demand Forecasting & ROP</span>
+          <span>↗</span>
+        </Link>
+      </div>
 
       {loading ? <div className="mt-6 text-slate-300">Loading stock summary…</div> : null}
       {error ? <div className="mt-6 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">{error}</div> : null}

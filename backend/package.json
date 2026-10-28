@@ -18,7 +18,11 @@
     "reconcile-billing": "node scripts/reconcile-billing.js",
     "verify": "node scripts/verify_fixes.js",
     "lint": "echo 'Add ESLint configuration for linting'",
-    "test": "node --test"
+    "test": "node --test",
+    "test:coverage": "npx c8 --reporter=text --reporter=lcov node --test",
+    "backup": "bash scripts/backup-mongodb.sh",
+    "db:index": "node scripts/create-indexes.js",
+    "preflight": "node scripts/preflight-check.js"
   },
   "keywords": [
     "inventory",

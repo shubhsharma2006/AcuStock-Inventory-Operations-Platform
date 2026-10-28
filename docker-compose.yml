@@ -2,15 +2,28 @@ services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
+      test: >
+        mongosh --quiet --eval "
+          try {
+            if (rs.status().ok === 1) quit(0);
+          } catch(e) {}
+          try {
+            rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] });
+            quit(0);
+          } catch(e) {
+            quit(1);
+          }
+        "
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
@@ -27,36 +40,53 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     restart: unless-stopped
     env_file: ./backend/.env
     environment:
-      MONGODB_URI: mongodb://mongo:27017/acustock
+      MONGODB_URI: mongodb://mongo:27017/acustock?replicaSet=rs0
       REDIS_URL: redis://redis:6379
       NODE_ENV: production
-      FRONTEND_BASE_URL: http://localhost:3000
+      FRONTEND_BASE_URL: http://localhost
+      PORT: 5001
     depends_on:
       mongo:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "5001:5001"
+      - "127.0.0.1:5001:5001"
     volumes:
       - backend-uploads:/app/uploads
       - backend-logs:/app/logs
       - backend-backups:/app/backups
 
   frontend:
-    build: ./frontend/web
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       BACKEND_URL: http://backend:5001
       NEXT_PUBLIC_ACUSTOCK_API_URL: /api
+      PORT: 3000
     depends_on:
       - backend
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
+
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - backend
+      - frontend
 
 volumes:
   mongo-data:

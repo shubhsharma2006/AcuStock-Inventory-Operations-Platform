@@ -9,13 +9,17 @@ import { useRealtimeState } from "@/components/realtime-provider";
 import { UserMenu } from "@/components/user-menu";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { useTheme } from "@/components/theme-provider";
-import { OfflineScannerCache } from "@/components/offline-scanner-cache";
 import { useWorkspace } from "@/hooks/use-workspace";
-import { CommandMenu } from "@/components/command-menu";
 import { NotificationPopover } from "@/components/notification-popover";
-import { LiveToastContainer } from "@/components/live-toast-container";
-import { CopilotDrawer } from "@/components/ai/copilot-drawer";
+import { MobileBottomNav } from "@/components/mobile-bottom-nav";
+import dynamic from "next/dynamic";
 import type { Role } from "@/lib/acustock";
+
+const CommandMenu = dynamic(() => import("@/components/command-menu").then((m) => m.CommandMenu), { ssr: false });
+const CopilotDrawer = dynamic(() => import("@/components/ai/copilot-drawer").then((m) => m.CopilotDrawer), { ssr: false });
+const OfflineScannerCache = dynamic(() => import("@/components/offline-scanner-cache").then((m) => m.OfflineScannerCache), { ssr: false });
+const LiveToastContainer = dynamic(() => import("@/components/live-toast-container").then((m) => m.LiveToastContainer), { ssr: false });
+const GlobalBarcodeScanner = dynamic(() => import("@/components/barcode/global-barcode-scanner").then((m) => m.GlobalBarcodeScanner), { ssr: false });
 
 /* ─── Icon SVGs ─────────────────────────────────────────────────────────────── */
 
@@ -44,6 +48,9 @@ const icons = {
   permissions: "M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z",
   privacy:     "M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z",
   billing:     "M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z",
+  developer:   "M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5",
+  backups:     "M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z",
+  reservations:"M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z",
   menu:        "M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5",
   close:       "M6 18L18 6M6 6l12 12",
 };
@@ -72,6 +79,10 @@ function buildNavGroups(basePath: string, role: Role, unread: number): NavGroup[
       label: "Inventory",
       items: [
         { label: "Products", href: `${basePath}/products`, icon: "products" },
+        { label: "Batches & Lots", href: `${basePath}/lots`, icon: "ledger" },
+        { label: "Cycle Counts & Audits", href: `${basePath}/cycle-counts`, icon: "ledger" },
+        { label: "Reorder Hub", href: `${basePath}/reorder-hub`, icon: "po" },
+        { label: "Stock Holds & Soft Locks", href: `${basePath}/reservations`, icon: "reservations" },
         { label: "Warehouses", href: `${basePath}/warehouses`, icon: "companies" },
         { label: "Stock Transfers", href: `${basePath}/stock-transfers`, icon: "so" },
         { label: "Units of Measure", href: `${basePath}/units`, icon: "products" },
@@ -116,6 +127,8 @@ function buildNavGroups(basePath: string, role: Role, unread: number): NavGroup[
           {
             label: "System",
             items: [
+              { label: "Developer & API", href: `${basePath}/developer`, icon: "developer" },
+              { label: "Backups & Recovery", href: `${basePath}/backups`, icon: "backups" },
               { label: "SuperAdmin Control", href: `${basePath}/super-control`, icon: "permissions" },
               { label: "Audit Logs", href: `${basePath}/audit-logs`, icon: "ledger" },
               { label: "Permissions", href: `${basePath}/settings/permissions`, icon: "permissions" },
@@ -293,6 +306,24 @@ export function DashboardShell({ children }: { children: ReactNode }) {
               <kbd className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">⌘K</kbd>
             </button>
 
+            {/* Quick Barcode Scanner Trigger (Alt+B) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.dispatchEvent(new CustomEvent("open-barcode-scanner"));
+                }
+              }}
+              className="hidden sm:flex items-center gap-1.5 rounded-xl border border-amber-400/20 bg-amber-400/5 px-2.5 py-1.5 text-xs text-amber-300 transition hover:border-amber-400/40 hover:bg-amber-400/10 cursor-pointer"
+              title="Quick scan barcode or serial number (Alt+B / ⌥B)"
+            >
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+              </svg>
+              <span className="font-semibold hidden lg:inline">Scan</span>
+              <kbd className="rounded border border-amber-400/30 bg-amber-400/10 px-1 py-0.2 font-mono text-[9px] text-amber-200">⌥B</kbd>
+            </button>
+
             {/* Notification Center Popover */}
             <NotificationPopover basePath={basePath} />
 
@@ -322,15 +353,21 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8">
           <div className="mx-auto max-w-7xl">{children}</div>
         </main>
       </div>
 
+      <MobileBottomNav
+        basePath={basePath}
+        onOpenSidebar={() => setSidebarOpen(true)}
+        unreadCount={unreadCount}
+      />
       <OfflineScannerCache />
       <CommandMenu />
       <LiveToastContainer />
       <CopilotDrawer />
+      <GlobalBarcodeScanner role={roleSlug} />
     </div>
   );
 }

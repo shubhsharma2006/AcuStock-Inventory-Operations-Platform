@@ -8,6 +8,9 @@ const rateLimit = require('express-rate-limit');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const User = require('../models/User');
 const Tenant = require('../models/Tenant');
+const Item = require('../models/Item');
+const Warehouse = require('../models/Warehouse');
+const StockReservation = require('../models/StockReservation');
 const PaymentTransaction = require('../models/PaymentTransaction');
 const paymentService = require('../services/payment/PaymentService');
 const subscriptionService = require('../services/payment/SubscriptionService');
@@ -54,19 +57,7 @@ async function getOrResolveTenant(req) {
   }
 
   if (!tenant) {
-    tenant = await Tenant.findOne({ isActive: true });
-  }
-
-  if (!tenant) {
-    tenant = await Tenant.create({
-      name: 'Default Organization',
-      slug: 'default-org',
-      plan: 'enterprise',
-      status: 'ACTIVE',
-      subscriptionStatus: 'TRIALING',
-      ownerId: req.userId || undefined,
-      limits: { maxUsers: 100, maxItems: 100000, maxStorage: 10240 }
-    });
+    return null;
   }
 
   if (tenant && req.user && !req.user.tenantId) {
@@ -99,7 +90,11 @@ router.get('/status', requireAuth, async (req, res) => {
     let tenant = await getOrResolveTenant(req);
 
     if (!tenant) {
-      return res.status(404).json({ success: false, error: 'Tenant record not found' });
+      return res.status(403).json({
+        success: false,
+        error: 'No organization found. Please complete onboarding first.',
+        code: 'TENANT_REQUIRED'
+      });
     }
 
     // Check if subscription has expired
@@ -124,6 +119,78 @@ router.get('/status', requireAuth, async (req, res) => {
   } catch (err) {
     logger.error('Error fetching billing status:', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/billing/usage — Live utilization metering against plan limits
+ */
+router.get('/usage', requireAuth, async (req, res) => {
+  try {
+    const tenant = await getOrResolveTenant(req);
+    if (!tenant) {
+      return res.status(403).json({
+        success: false,
+        error: 'No organization found',
+        code: 'TENANT_REQUIRED'
+      });
+    }
+
+    const tenantId = tenant._id;
+    const limits = tenant.limits || { maxUsers: 5, maxItems: 100, maxStorage: 500 };
+
+    const [activeUsers, totalItems, activeWarehouses, activeReservations] = await Promise.all([
+      User.countDocuments({ tenantId, isDeleted: { $ne: true } }),
+      Item.countDocuments({ tenantId, isDeleted: { $ne: true } }),
+      Warehouse.countDocuments({ tenantId, isActive: true }),
+      StockReservation.countDocuments({ tenantId, status: 'ACTIVE' })
+    ]);
+
+    const maxUsers = limits.maxUsers || 10;
+    const maxItems = limits.maxItems || 500;
+    const maxStorage = limits.maxStorage || 500; // in MB
+    const currentStorage = tenant.usage?.storage || 0;
+
+    const usersPct = Math.min(100, Math.round((activeUsers / maxUsers) * 100));
+    const itemsPct = Math.min(100, Math.round((totalItems / maxItems) * 100));
+    const storagePct = Math.min(100, Math.round((currentStorage / maxStorage) * 100));
+
+    const isNearLimit = usersPct >= 80 || itemsPct >= 80 || storagePct >= 80;
+    const isExceeded = usersPct >= 100 || itemsPct >= 100 || storagePct >= 100;
+
+    return res.json({
+      success: true,
+      tenantId: tenant._id,
+      plan: tenant.plan || 'free',
+      status: tenant.status || 'ACTIVE',
+      subscriptionStatus: tenant.subscriptionStatus || 'TRIALING',
+      metrics: {
+        users: {
+          current: activeUsers,
+          max: maxUsers,
+          percent: usersPct,
+          status: usersPct >= 100 ? 'EXCEEDED' : usersPct >= 80 ? 'WARNING' : 'HEALTHY'
+        },
+        items: {
+          current: totalItems,
+          max: maxItems,
+          percent: itemsPct,
+          status: itemsPct >= 100 ? 'EXCEEDED' : itemsPct >= 80 ? 'WARNING' : 'HEALTHY'
+        },
+        storage: {
+          currentMb: currentStorage,
+          maxMb: maxStorage,
+          percent: storagePct,
+          status: storagePct >= 100 ? 'EXCEEDED' : storagePct >= 80 ? 'WARNING' : 'HEALTHY'
+        },
+        activeWarehouses,
+        activeReservations
+      },
+      quotaStatus: isExceeded ? 'EXCEEDED' : isNearLimit ? 'WARNING' : 'HEALTHY'
+    });
+  } catch (err) {
+    logger.error('Error fetching live billing usage:', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

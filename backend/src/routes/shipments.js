@@ -8,6 +8,7 @@ const Transporter = require('../models/Transporter');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generateShipmentChallanPdf } = require('../services/pdfGenerator');
 const logger = require('../utils/logger');
+const { validateRequest, schemas, escapeRegex } = require('../middleware/validateRequest');
 
 const router = express.Router();
 
@@ -41,14 +42,15 @@ router.get('/', requireAuth, async (req, res) => {
     }
     
     if (search) {
+      const s = escapeRegex(search);
       query.$or = [
-        { reference: { $regex: search, $options: 'i' } },
-        { customerName: { $regex: search, $options: 'i' } },
-        { companyName: { $regex: search, $options: 'i' } },
-        { awb: { $regex: search, $options: 'i' } },
-        { 'porterDetails.driverName': { $regex: search, $options: 'i' } },
-        { 'porterDetails.vehicleNumber': { $regex: search, $options: 'i' } },
-        { 'courierDetails.eWayBill': { $regex: search, $options: 'i' } }
+        { reference: { $regex: s, $options: 'i' } },
+        { customerName: { $regex: s, $options: 'i' } },
+        { companyName: { $regex: s, $options: 'i' } },
+        { awb: { $regex: s, $options: 'i' } },
+        { 'porterDetails.driverName': { $regex: s, $options: 'i' } },
+        { 'porterDetails.vehicleNumber': { $regex: s, $options: 'i' } },
+        { 'courierDetails.eWayBill': { $regex: s, $options: 'i' } }
       ];
     }
     
@@ -75,7 +77,7 @@ router.get('/', requireAuth, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Get shipments error:', error);
+    logger.error('Get shipments error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -92,7 +94,7 @@ router.get('/pending', requireAuth, async (req, res) => {
 
     res.json({ shipments, count });
   } catch (error) {
-    console.error('Get pending deliveries error:', error);
+    logger.error('Get pending deliveries error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -130,7 +132,7 @@ router.get('/stats', requireAuth, async (req, res) => {
       deliveredCount
     });
   } catch (error) {
-    console.error('Get shipment stats error:', error);
+    logger.error('Get shipment stats error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -157,7 +159,7 @@ router.get('/:id', requireAuth, async (req, res) => {
     
     res.json(shipment);
   } catch (error) {
-    console.error('Get shipment error:', error);
+    logger.error('Get shipment error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -194,7 +196,7 @@ router.get('/:id/pdf', requireAuth, async (req, res) => {
 });
 
 // POST /api/shipments - Create new shipment (OUT) or supply (IN)
-router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest(schemas.createShipment), async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   
@@ -417,7 +419,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
     });
   } catch (error) {
     await session.abortTransaction();
-    console.error('Create shipment error:', error);
+    logger.error('Create shipment error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   } finally {
     session.endSession();
@@ -425,7 +427,7 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res
 });
 
 // PATCH /api/shipments/:id/status - Update shipment status
-router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest(schemas.updateShipmentStatus), async (req, res) => {
   try {
     const { status, notes, receivedBy } = req.body;
     
@@ -463,13 +465,34 @@ router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
     }
     
     await shipment.save();
+
+    // Trigger WhatsApp notification on dispatch (non-blocking)
+    if (status === 'DISPATCHED' && shipment.phone) {
+      setImmediate(async () => {
+        try {
+          const Tenant = require('../models/Tenant');
+          const tenant = await Tenant.findById(req.tenantId).select('settings').lean();
+          if (tenant?.settings?.whatsappAlertsEnabled) {
+            const whatsAppNotifier = require('../ai/whatsapp/whatsapp-notifier');
+            await whatsAppNotifier.notifyShipmentDispatched({
+              tenantId: req.tenantId,
+              shipment,
+              recipientPhone: shipment.phone,
+              trackingUrl: shipment.trackingUrl
+            });
+          }
+        } catch (dispatchAlertErr) {
+          logger.error('Failed to trigger shipment dispatch WhatsApp notification:', dispatchAlertErr.message);
+        }
+      });
+    }
     
     res.json({
       message: 'Status updated successfully',
       shipment
     });
   } catch (error) {
-    console.error('Update status error:', error);
+    logger.error('Update status error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -520,7 +543,7 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
       shipment
     });
   } catch (error) {
-    console.error('Update shipment error:', error);
+    logger.error('Update shipment error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -544,7 +567,7 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
     
     res.json({ message: 'Shipment deleted successfully' });
   } catch (error) {
-    console.error('Delete shipment error:', error);
+    logger.error('Delete shipment error:', { error: error.message, stack: error.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Server error' });
   }
 });

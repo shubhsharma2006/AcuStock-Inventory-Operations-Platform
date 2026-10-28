@@ -4,6 +4,8 @@ import { useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Role } from "@/lib/acustock";
+import { ImpersonateModal } from "@/components/impersonate-modal";
+import { OffboardingModal } from "@/components/offboarding-modal";
 
 type SystemUser = {
   _id: string;
@@ -12,6 +14,7 @@ type SystemUser = {
   phone?: string;
   role: Role;
   isActive?: boolean;
+  employmentStatus?: "ACTIVE" | "ON_LEAVE" | "SUSPENDED" | "TERMINATED";
   isSuperAdmin?: boolean;
   lastLogin?: string;
   isOnline?: boolean;
@@ -80,6 +83,12 @@ export default function SuperAdminControlPage() {
   const [transferPassword, setTransferPassword] = useState("");
   const [transferReason, setTransferReason] = useState("");
   const [transferError, setTransferError] = useState<string | null>(null);
+
+  // Impersonation & Offboarding states
+  const [impersonateModalOpen, setImpersonateModalOpen] = useState(false);
+  const [impersonateTargetUser, setImpersonateTargetUser] = useState<SystemUser | null>(null);
+  const [offboardModalOpen, setOffboardModalOpen] = useState(false);
+  const [offboardTargetUser, setOffboardTargetUser] = useState<SystemUser | null>(null);
 
   // Queries
   const { data: usersData, isLoading: loadingUsers } = useQuery<{ success: boolean; users: SystemUser[] }>({
@@ -377,17 +386,58 @@ export default function SuperAdminControlPage() {
                         {u.lastLogin ? new Date(u.lastLogin).toLocaleString() : "Never"}
                       </td>
                       <td className="px-6 py-4">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
-                            u.isActive !== false ? "bg-emerald-400/10 text-emerald-400" : "bg-rose-400/10 text-rose-400"
-                          }`}
-                        >
-                          <span className={`h-1.5 w-1.5 rounded-full ${u.isActive !== false ? "bg-emerald-400" : "bg-rose-400"}`} />
-                          {u.isActive !== false ? "Active" : "Inactive"}
-                        </span>
+                        {u.employmentStatus === "TERMINATED" ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />
+                            Terminated
+                          </span>
+                        ) : u.isActive !== false ? (
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-emerald-400/10 text-emerald-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                            Active
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-amber-400/10 text-amber-400">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                            Inactive
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            disabled={u.isSuperAdmin || u.employmentStatus === "TERMINATED" || u.isActive === false}
+                            onClick={() => {
+                              setImpersonateTargetUser(u);
+                              setImpersonateModalOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg border border-purple-400/30 bg-purple-500/10 px-2.5 py-1 text-[11px] font-medium text-purple-300 transition hover:bg-purple-500/20 disabled:opacity-40 cursor-pointer"
+                            title="Inspect dashboards and test user scope via Shadow Session"
+                          >
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                            </svg>
+                            View As
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={u.isSuperAdmin || u.employmentStatus === "TERMINATED"}
+                            onClick={() => {
+                              setOffboardTargetUser(u);
+                              setOffboardModalOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-400/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition hover:bg-rose-500/20 disabled:opacity-40 cursor-pointer"
+                            title="Offboard employee, reassign pending workflows, and kill all sessions"
+                          >
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7a4 4 0 11-8 0 4 4 0 018 0zM9 14a6 6 0 00-6 6v1h12v-1a6 6 0 00-6-6zM21 12h-6" />
+                            </svg>
+                            Offboard
+                          </button>
+
                           <button
                             type="button"
                             title="Force user to set new password upon next login"
@@ -416,7 +466,7 @@ export default function SuperAdminControlPage() {
 
                           <button
                             type="button"
-                            disabled={u.isSuperAdmin}
+                            disabled={u.isSuperAdmin || u.employmentStatus === "TERMINATED"}
                             onClick={() =>
                               toggleStatusMutation.mutate({
                                 userId: u._id,
@@ -824,6 +874,30 @@ export default function SuperAdminControlPage() {
           </div>
         </div>
       )}
+
+      {/* Impersonation / Shadow Session Modal */}
+      <ImpersonateModal
+        isOpen={impersonateModalOpen}
+        onClose={() => {
+          setImpersonateModalOpen(false);
+          setImpersonateTargetUser(null);
+        }}
+        targetUser={impersonateTargetUser}
+      />
+
+      {/* Offboarding & Access Revocation Wizard Modal */}
+      <OffboardingModal
+        isOpen={offboardModalOpen}
+        onClose={() => {
+          setOffboardModalOpen(false);
+          setOffboardTargetUser(null);
+        }}
+        targetUser={offboardTargetUser}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: ["superadmin-users"] });
+          queryClient.invalidateQueries({ queryKey: ["superadmin-sessions"] });
+        }}
+      />
     </div>
   );
 }

@@ -248,6 +248,15 @@ async function stockIn(data, user) {
       }
     });
 
+    // Dispatch outbound webhook (non-blocking)
+    const webhookDispatcher = require('./webhookDispatcher.service');
+    webhookDispatcher.dispatchWebhookEvent(tenantId, 'stock.in', {
+      productId,
+      quantity,
+      serialNumbers: serialNumbers.map(s => s.trim().toUpperCase()),
+      warehouseId: data.warehouseId || null
+    }).catch(() => {});
+
     return { success: true };
 
   } finally {
@@ -267,6 +276,9 @@ async function stockOut(data, user) {
   if (!tenantId) {
     throw new Error('Tenant ID is required for stock operations');
   }
+
+  let postStockBalance = null;
+  let alertItem = null;
 
   try {
     await session.withTransaction(async () => {
@@ -355,6 +367,35 @@ async function stockOut(data, user) {
 
       const currentStock = stockResult.length > 0 ? stockResult[0].total : 0;
 
+      // Check reservation or Available-To-Promise
+      if (data.reservationId) {
+        const reservationService = require('./reservation.service');
+        await reservationService.fulfillReservation(data.reservationId, { tenantId, session });
+      } else {
+        const StockReservation = require('../models/StockReservation');
+        const now = new Date();
+        const resAgg = await StockReservation.aggregate([
+          {
+            $match: {
+              tenantId: new mongoose.Types.ObjectId(tenantId),
+              productId: item._id,
+              status: 'ACTIVE',
+              expiresAt: { $gt: now }
+            }
+          },
+          { $group: { _id: null, total: { $sum: '$reservedQty' } } }
+        ]).session(session);
+
+        const activeReserved = resAgg.length > 0 ? resAgg[0].total : 0;
+        const availableToPromise = Math.max(0, currentStock - activeReserved);
+
+        if (availableToPromise < quantity) {
+          throw new Error(
+            `Insufficient unreserved stock. Physical: ${currentStock}, Reserved: ${activeReserved}, Available: ${availableToPromise}, Requested: ${quantity}`
+          );
+        }
+      }
+
       if (currentStock < quantity) {
         throw new Error(`Insufficient stock. Available: ${currentStock}, Requested: ${quantity}`);
       }
@@ -395,6 +436,9 @@ async function stockOut(data, user) {
       if (finalStock < 0) {
         throw new Error('Insufficient stock. Another transaction updated inventory concurrently. Please retry.');
       }
+
+      postStockBalance = finalStock;
+      alertItem = item;
 
       // 5️⃣ Serial audit
       if (policy.enableSerial && serialNumbers.length > 0) {
@@ -449,6 +493,48 @@ async function stockOut(data, user) {
         }
       }
     });
+
+    // Dispatch outbound webhooks (non-blocking)
+    const webhookDispatcher = require('./webhookDispatcher.service');
+    webhookDispatcher.dispatchWebhookEvent(tenantId, 'stock.out', {
+      productId: validated.productId,
+      quantity: validated.quantity,
+      serialNumbers: validated.serialNumbers,
+      warehouseId: data.warehouseId || null,
+      remainingStock: postStockBalance
+    }).catch(() => {});
+
+    // Proactive AI/WhatsApp low-stock notification (non-blocking, fire-and-forget)
+    if (postStockBalance !== null && alertItem) {
+      const minThreshold = alertItem.minStockThreshold ?? 10;
+      if (postStockBalance <= minThreshold) {
+        webhookDispatcher.dispatchWebhookEvent(tenantId, 'stock.low', {
+          productId: alertItem._id,
+          productName: alertItem.name,
+          currentStock: postStockBalance,
+          minStockThreshold: minThreshold
+        }).catch(() => {});
+
+        setImmediate(async () => {
+          try {
+            const Tenant = require('../models/Tenant');
+            const tenant = await Tenant.findById(tenantId).select('settings').lean();
+            if (tenant?.settings?.whatsappAlertsEnabled) {
+              const whatsAppNotifier = require('../ai/whatsapp/whatsapp-notifier');
+              await whatsAppNotifier.notifyLowStockAlert({
+                tenantId,
+                item: alertItem,
+                currentStock: postStockBalance,
+                minStockThreshold
+              });
+            }
+          } catch (notifyErr) {
+            const logger = require('../utils/logger');
+            logger.error('Failed to trigger post-stockOut WhatsApp alert:', notifyErr.message);
+          }
+        });
+      }
+    }
 
     return { success: true };
 

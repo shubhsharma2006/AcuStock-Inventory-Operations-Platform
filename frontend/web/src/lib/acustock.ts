@@ -11,11 +11,18 @@ export type Role = "SUPER_ADMIN" | "ADMIN" | "MANAGER" | "USER";
 
 export type AuthUser = {
   _id: string;
+  id?: string;
+  tenantId?: string;
   name?: string;
   email?: string;
   phone?: string;
   role: Role;
   isActive?: boolean;
+  employmentStatus?: "ACTIVE" | "ON_LEAVE" | "SUSPENDED" | "TERMINATED";
+  isImpersonated?: boolean;
+  impersonationMode?: "FULL" | "READ_ONLY";
+  originalUserId?: string;
+  originalUserRole?: Role;
 };
 
 export type NotificationTarget = {

@@ -16,6 +16,8 @@ const PurchaseOrder = require('../models/PurchaseOrder');
 const Item          = require('../models/Item');
 const StockLedger   = require('../models/StockLedger');
 const SerialAudit   = require('../models/SerialAudit');
+const InventoryLot  = require('../models/InventoryLot');
+const lotService    = require('../services/lot.service');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { generatePurchaseOrderPdf } = require('../services/pdfGenerator');
 const { logBusinessEvent } = require('../utils/auditHelper');
@@ -252,7 +254,9 @@ router.post('/:id/receive', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
         }
       }
 
-      // Create one StockLedger IN entry per line item with serial validation
+      let isPartial = false;
+
+      // Create one StockLedger IN entry per line item with serial & batch validation
       for (const line of po.items) {
         const itemFilter = { _id: line.productId, tenantId: req.tenantId };
 
@@ -260,6 +264,16 @@ router.post('/:id/receive', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
         if (!item) throw new Error(`Product ${line.productId} not found`);
 
         const rItem = receivedItemsMap.get(line.productId.toString()) || {};
+        const recQty = rItem.receivedQuantity !== undefined ? Number(rItem.receivedQuantity) : line.quantity;
+
+        if (recQty < line.quantity) {
+          isPartial = true;
+        }
+
+        if (recQty <= 0) {
+          continue; // Skip lines where 0 was received in this partial batch
+        }
+
         let lineSerials = Array.isArray(rItem.serialNumbers)
           ? rItem.serialNumbers.map(s => String(s).trim().toUpperCase()).filter(Boolean)
           : [];
@@ -272,8 +286,8 @@ router.post('/:id/receive', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
           if (lineSerials.length === 0) {
             throw new Error(`Serial numbers are required for "${item.name}" upon receiving`);
           }
-          if (lineSerials.length !== line.quantity) {
-            throw new Error(`Expected ${line.quantity} serial number(s) for "${item.name}", received ${lineSerials.length}`);
+          if (lineSerials.length !== recQty) {
+            throw new Error(`Expected ${recQty} serial number(s) for "${item.name}", received ${lineSerials.length}`);
           }
         }
 
@@ -294,11 +308,58 @@ router.post('/:id/receive', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
           }
         }
 
+        // Handle batch / lot creation if batch-tracked item
+        let lotAllocations = [];
+        if (item.trackingMode === 'BATCH') {
+          const lotNum = (rItem.lotNumber || rItem.lot || '').trim().toUpperCase();
+          const expDate = rItem.expiryDate;
+
+          if (lotNum && expDate) {
+            let lot = await InventoryLot.findOne({
+              tenantId: req.tenantId,
+              lotNumber: lotNum
+            }).session(session);
+
+            if (lot) {
+              lot.remainingQty += recQty;
+              lot.initialQty += recQty;
+              if (lot.status === 'DEPLETED') {
+                lot.status = new Date(lot.expiryDate) > new Date() ? 'ACTIVE' : 'EXPIRED';
+              }
+              await lot.save({ session });
+            } else {
+              lot = await lotService.createLot({
+                lotData: {
+                  lotNumber: lotNum,
+                  productId: item._id,
+                  initialQty: recQty,
+                  remainingQty: recQty,
+                  expiryDate: new Date(expDate),
+                  supplierBatchNumber: rItem.supplierBatchNumber || undefined,
+                  supplierId: po.supplier?._id || undefined,
+                  costPrice: line.unitPrice || item.purchasePrice || undefined
+                },
+                tenantId: req.tenantId,
+                session
+              });
+            }
+
+            lotAllocations = [{
+              lotId: lot._id,
+              lotNumber: lot.lotNumber,
+              quantity: recQty,
+              expiryDate: lot.expiryDate
+            }];
+          }
+        }
+
         const [ledger] = await StockLedger.create([{
           productId:    line.productId,
+          warehouseId:  req.body.warehouseId || undefined,
           type:         'IN',
-          quantity:     line.quantity,
+          quantity:     recQty,
           serialNumbers: lineSerials,
+          lotAllocations,
           condition:    rItem.condition || 'new',
           partyDetails: {
             name:    po.supplier.name,
@@ -306,7 +367,7 @@ router.post('/:id/receive', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
             phone:   po.supplier.phone,
             address: po.supplier.address
           },
-          transactionDetails: { reference: po.poNumber, notes: `Received from PO ${po.poNumber}` },
+          transactionDetails: { reference: po.poNumber, notes: `Received from PO ${po.poNumber}${req.body.dockNotes ? ` - Dock Notes: ${req.body.dockNotes}` : ''}` },
           createdBy: req.userId,
           role:      req.userRole,
           tenantId:  req.tenantId,
@@ -328,10 +389,10 @@ router.post('/:id/receive', requireAuth, requireRole(['ADMIN', 'MANAGER']), asyn
         }
       }
 
-      po.status     = 'received';
+      po.status     = isPartial ? 'partially_received' : 'received';
       po.receivedBy = req.userId;
       po.receivedAt = new Date();
-      po.ledgerEntries = ledgerIds;
+      po.ledgerEntries = (po.ledgerEntries || []).concat(ledgerIds);
       await po.save({ session });
 
       result = po;

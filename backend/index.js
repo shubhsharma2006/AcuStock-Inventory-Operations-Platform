@@ -12,6 +12,13 @@ const { Server } = require('socket.io');
 const { createAdapter, setupPrimary } = require('@socket.io/cluster-adapter');
 const { authenticateSocketConnection, canJoinRoleRoom, canJoinUserRoom } = require('./src/utils/socketAuth');
 const { createCsrfMiddleware } = require('./src/middleware/csrf');
+const fs = require('fs');
+
+// Ensure logs directory exists (first-boot and PM2 cluster safety)
+const logsDir = path.join(__dirname, 'logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
 
 // ============================================================
 // SENTRY — Initialize before any other code (env-gated)
@@ -59,6 +66,7 @@ const reportScheduledRoutes = require('./src/routes/reports-scheduled');
 const unitRoutes           = require('./src/routes/units');
 const logisticsRoutes      = require('./src/routes/logistics');
 const shipmentRoutes       = require('./src/routes/shipments');
+const trackingRoutes       = require('./src/routes/tracking');
 const settingsRoutes       = require('./src/routes/settings');
 const notificationRoutes   = require('./src/routes/notifications');
 const warrantyRoutes       = require('./src/routes/warranty');
@@ -81,11 +89,21 @@ const stockTransferRoutes  = require('./src/routes/stock-transfers');
 const forecastRoutes       = require('./src/routes/forecasts');
 const tenantRoutes         = require('./src/routes/tenants');
 const activityRoutes       = require('./src/routes/activity');
+const dashboardRoutes     = require('./src/routes/dashboard');
 const searchRoutes         = require('./src/routes/search');
 const transporterRoutes    = require('./src/routes/transporters');
 const lotRoutes            = require('./src/routes/lots');
+const cycleCountRoutes     = require('./src/routes/cycle-counts');
+const reorderRoutes        = require('./src/routes/reorder');
 const packageRoutes        = require('./src/routes/packages');
 const labelRoutes          = require('./src/routes/labels');
+const rmaRoutes            = require('./src/routes/rma');
+const sessionRoutes        = require('./src/routes/sessions');
+const backupRoutes         = require('./src/routes/backups');
+const apiKeyRoutes         = require('./src/routes/apiKeys');
+const webhookRoutes        = require('./src/routes/webhooks');
+const reservationRoutes     = require('./src/routes/reservations');
+const docsRoutes            = require('./src/routes/docs');
 const { aiRouter }         = require('./src/ai');
 const { resolveTenant }    = require('./src/middleware/tenancy');
 const { requireAuth, requireTenantId } = require('./src/middleware/auth');
@@ -126,8 +144,8 @@ app.use(helmet({
   contentSecurityPolicy: IS_PRODUCTION ? {
     directives: {
       defaultSrc:     ["'self'"],
-      scriptSrc:      ["'self'", "'unsafe-inline'"],   // dashboards use inline scripts
-      styleSrc:       ["'self'", "'unsafe-inline'"],   // inline styles used throughout
+      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
+      styleSrc:       ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
       imgSrc:         ["'self'", 'data:', 'blob:'],
       connectSrc:     ["'self'", 'ws:', 'wss:'],       // Socket.IO WebSocket
       fontSrc:        ["'self'", 'data:'],
@@ -368,17 +386,34 @@ const mfaLimiter = rateLimit({
 });
 app.use('/api/auth/2fa/authenticate', mfaLimiter);
 
-// Serve static frontend files from specific paths
-app.use('/admin-css', express.static(path.join(__dirname, '../frontend/admin-dashboard/admin-css')));
-app.use('/admin-js', express.static(path.join(__dirname, '../frontend/admin-dashboard/admin-js')));
-app.use('/admin-html', express.static(path.join(__dirname, '../frontend/admin-dashboard/admin-html')));
-app.use('/shared', express.static(path.join(__dirname, '../frontend/shared')));
-app.use('/manager-dashboard', express.static(path.join(__dirname, '../frontend/manager-dashboard')));
-app.use('/user-dashboard', express.static(path.join(__dirname, '../frontend/user-dashboard')));
-app.use('/assets', express.static(path.join(__dirname, '../frontend/assets')));
+// Per-user write rate limiter for mutation endpoints (60 writes/min)
+const jwt = require('jsonwebtoken');
+const userWriteLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 60,
+  message: { success: false, error: 'Write rate limit exceeded. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { keyGeneratorIpFallback: false },
+  ...(rateLimitStore ? { store: rateLimitStore } : {}),
+  keyGenerator: (req) => {
+    if (req.userId) return `user:${req.userId}`;
+    const token = req.cookies?.authToken || (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+    if (token) {
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded?.id || decoded?._id) return `user:${decoded.id || decoded._id}`;
+      } catch {}
+    }
+    return req.ip;
+  },
+  skip: (req) => {
+    return ['GET', 'HEAD', 'OPTIONS'].includes(req.method) || process.env.NODE_ENV === 'development';
+  }
+});
+app.use('/api/', userWriteLimiter);
 
-// Also serve from /frontend path for backward compatibility
-app.use('/frontend', express.static(path.join(__dirname, '../frontend')));
+// Serve upload files
 app.use('/uploads', express.static(path.resolve(process.env.UPLOAD_PATH || './uploads')));
 
 // ============================================================
@@ -402,10 +437,14 @@ const sendError = (res, statusCode = 500, message = 'Internal Server Error', det
   });
 };
 
-// Use Morgan for HTTP request logging (skip in test environment)
+// Use Morgan for HTTP request logging (skip in test environment, skip health checks)
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan(IS_PRODUCTION ? 'combined' : 'dev', { 
-    stream: { write: message => logger.info(message.trim()) }
+    stream: { write: message => logger.info(message.trim()) },
+    skip: (req) =>
+      req.path === '/api/health' ||
+      req.path === '/api/health/live' ||
+      req.path === '/api/ready'
   }));
 }
 
@@ -477,6 +516,10 @@ const connectWithRetry = async (attempt = 1) => {
     logger.info('✅ MongoDB connected');
     logger.info(`📊 Database: ${mongoose.connection.name}`);
 
+    // Verify replica set is available (required for transactions)
+    const { checkReplicaSet } = require('./src/utils/checkReplicaSet');
+    await checkReplicaSet();
+
     // Warranty notifications: run on startup + every 24 h
     // Wrapped in try/catch so a crash never kills the interval
     // Guard: only PM2 worker 0 (or non-cluster / dev) runs the cron.
@@ -545,6 +588,10 @@ const connectWithRetry = async (attempt = 1) => {
       };
       retryBilling();
       setInterval(retryBilling, 60 * 1000);
+
+      // Delivery tracking background poller (leader only)
+      const { startTrackingPoller } = require('./src/services/tracking/trackingPoller');
+      startTrackingPoller();
     } else {
       logger.info(`⏰ Warranty notification cron skipped (worker ${process.env.NODE_APP_INSTANCE})`);
     }
@@ -584,6 +631,9 @@ const UNGUARDED_PREFIXES = [
   '/api/billing/webhook',
   '/api/setup',
   '/api/ai/whatsapp',
+  '/api/docs',
+  '/api/v1/docs',
+  '/api/health',
 ];
 app.use('/api/', (req, res, next) => {
   const path = req.originalUrl.split('?')[0];
@@ -611,11 +661,13 @@ app.use('/api/managers', managerRoutes);
 app.use('/api/companies', companyRoutes);
 app.use('/api/items', itemRoutes);
 app.use('/api/stock', stockRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/reports/scheduled', reportScheduledRoutes);
 app.use('/api/units', unitRoutes);
 app.use('/api/logistics', logisticsRoutes);
 app.use('/api/shipments', shipmentRoutes);
+app.use('/api/tracking', trackingRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/warranty',      warrantyRoutes);
@@ -636,11 +688,67 @@ app.use('/api/activity',        activityRoutes);
 app.use('/api/search',          searchRoutes);
 app.use('/api/transporters',    transporterRoutes);
 app.use('/api/lots',            lotRoutes);
+app.use('/api/cycle-counts',    cycleCountRoutes);
+app.use('/api/reorder',         reorderRoutes);
 app.use('/api/packages',        packageRoutes);
 app.use('/api/labels',          labelRoutes);
+app.use('/api/rma',             rmaRoutes);
+app.use('/api/sessions',        sessionRoutes);
+app.use('/api/backups',         backupRoutes);
+app.use('/api/api-keys',        apiKeyRoutes);
+app.use('/api/webhooks',        webhookRoutes);
+app.use('/api/reservations',    reservationRoutes);
+app.use('/api/docs',            docsRoutes);
 app.use('/api/ai',              aiRouter);
 // CSV exports (mounted at root /api so paths like /api/stock/export/csv work)
 app.use('/api', csvExportRoutes);
+
+// ============================================================
+// API VERSIONING (/api/v1/ Aliases)
+// ============================================================
+const v1Routes = [
+  ['auth', authRoutes],
+  ['users', userRoutes],
+  ['managers', managerRoutes],
+  ['companies', companyRoutes],
+  ['items', itemRoutes],
+  ['stock', stockRoutes],
+  ['dashboard', dashboardRoutes],
+  ['reports', reportRoutes],
+  ['units', unitRoutes],
+  ['logistics', logisticsRoutes],
+  ['shipments', shipmentRoutes],
+  ['tracking', trackingRoutes],
+  ['settings', settingsRoutes],
+  ['notifications', notificationRoutes],
+  ['warranty', warrantyRoutes],
+  ['purchase-orders', purchaseOrderRoutes],
+  ['sales-orders', salesOrderRoutes],
+  ['warehouses', warehouseRoutes],
+  ['stock-transfers', stockTransferRoutes],
+  ['billing', billingRoutes],
+  ['forecasts', forecastRoutes],
+  ['tenants', tenantRoutes],
+  ['activity', activityRoutes],
+  ['search', searchRoutes],
+  ['transporters', transporterRoutes],
+  ['lots', lotRoutes],
+  ['cycle-counts', cycleCountRoutes],
+  ['reorder', reorderRoutes],
+  ['packages', packageRoutes],
+  ['labels', labelRoutes],
+  ['rma', rmaRoutes],
+  ['sessions', sessionRoutes],
+  ['backups', backupRoutes],
+  ['api-keys', apiKeyRoutes],
+  ['webhooks', webhookRoutes],
+  ['reservations', reservationRoutes],
+  ['docs', docsRoutes],
+  ['ai', aiRouter]
+];
+for (const [prefix, handler] of v1Routes) {
+  app.use(`/api/v1/${prefix}`, handler);
+}
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -651,7 +759,8 @@ app.get('/api/health', async (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     version: require('./package.json').version,
     requestId: req.requestId,
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    redis: 'unchecked'
   };
 
   if (mongoose.connection.readyState === 1) {
@@ -665,6 +774,25 @@ app.get('/api/health', async (req, res) => {
       healthcheck.database = 'unreachable';
       healthcheck.databaseError = error.message;
     }
+  }
+
+  // Redis health check
+  const redisService = require('./src/services/redis.service');
+  if (redisService.isRedisConnected && redisService.client) {
+    try {
+      const rStart = Date.now();
+      await redisService.client.ping();
+      healthcheck.redis = 'connected';
+      healthcheck.redisLatencyMs = Date.now() - rStart;
+    } catch {
+      healthcheck.redis = 'unreachable';
+      healthcheck.status = 'DEGRADED';
+    }
+  } else if (process.env.REDIS_URL) {
+    healthcheck.redis = 'disconnected';
+    healthcheck.status = 'DEGRADED';
+  } else {
+    healthcheck.redis = 'not_configured';
   }
   
   // Include memory usage in development
@@ -702,34 +830,22 @@ app.get('/api/health/ready', (req, res) => {
 });
 
 // Serve frontend HTML pages (must come after API routes)
-// Root redirect to login
+// Root redirect to modern frontend web dashboard
 app.get('/', (req, res) => {
-  res.redirect('/admin-html/login.html');
+  res.redirect(process.env.FRONTEND_BASE_URL || 'http://localhost:3000');
 });
 
-// Serve login page
+// Serve login page redirect
 app.get('/login', (req, res) => {
-  res.redirect('/admin-html/login.html');
+  res.redirect(`${process.env.FRONTEND_BASE_URL || 'http://localhost:3000'}/login`);
 });
 
-// Serve password reset page (linked from email)
-app.get('/reset-password/:token', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/admin-dashboard/admin-html/reset-password.html'));
-});
-
-// Serve accept-invite page (linked from invite email)
-app.get('/accept-invite', (req, res) => {
-  res.redirect(`/admin-html/accept-invite.html${req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : ''}`);
-});
-
-// 404 handler - for API routes only, serve index.html for other routes
+// 404 handler
 app.use((req, res) => {
-  // If it's an API request, return JSON 404
   if (req.path.startsWith('/api/')) {
     return sendError(res, 404, 'API route not found');
   }
-  // For other requests, try to serve the file or redirect to login
-  res.redirect('/admin-html/login.html');
+  res.redirect(process.env.FRONTEND_BASE_URL || 'http://localhost:3000');
 });
 
 // Sentry error handler — must come before any other error middleware

@@ -22,8 +22,18 @@ const stockLedgerSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT'],
+    enum: ['IN', 'OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT'],
     required: true
+  },
+  cycleCountId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CycleCount',
+    index: true
+  },
+  adjustmentReason: {
+    type: String,
+    trim: true,
+    maxlength: 200
   },
   quantity: {
     type: Number,

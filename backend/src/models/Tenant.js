@@ -75,7 +75,12 @@ const tenantSchema = new mongoose.Schema({
     defaultWarehouseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Warehouse' },
     whatsappAlertsEnabled: { type: Boolean, default: false },
     lowStockEmailAlerts: { type: Boolean, default: true },
-    dailyDigestEnabled: { type: Boolean, default: false }
+    dailyDigestEnabled: { type: Boolean, default: false },
+    // Delivery Tracking Feature Flags & Configuration
+    trackingModuleEnabled: { type: Boolean, default: true },
+    trackingEnabled:       { type: Boolean, default: true },
+    trackingCarriers:      { type: [String], default: ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART'] },
+    trackingPollInterval:  { type: Number, default: 15 }
   },
   branding: {
     legalName:    { type: String, trim: true },

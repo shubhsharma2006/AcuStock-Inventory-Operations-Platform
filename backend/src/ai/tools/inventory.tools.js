@@ -291,9 +291,116 @@ async function analyzeInventoryHealth(context) {
   };
 }
 
+/**
+ * Tool: Evaluate reorder recommendations across items using statistical demand velocity
+ */
+async function queryReorderRecommendations(context, { lookbackDays = 60 }) {
+  const tenantObjectId = new mongoose.Types.ObjectId(context.tenantId);
+  const lookback = Math.min(180, Math.max(14, Number(lookbackDays) || 60));
+  const zScore95 = 1.65;
+  const leadTimeDays = 7;
+
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - lookback);
+
+  const items = await Item.find({
+    tenantId: context.tenantId,
+    isDeleted: { $ne: true }
+  }).select('name shortName sku lowStockThreshold').lean();
+
+  if (!items.length) {
+    return { recommendations: [], message: 'No items found in your catalog.' };
+  }
+
+  const itemIds = items.map(i => i._id);
+
+  // Stock balances
+  const stockBalances = await StockLedger.aggregate([
+    { $match: { tenantId: tenantObjectId, productId: { $in: itemIds } } },
+    { $group: { _id: '$productId', total: { $sum: '$quantity' } } }
+  ]);
+  const stockMap = new Map(stockBalances.map(b => [String(b._id), b.total]));
+
+  // Daily demand velocity
+  const dailyDemands = await StockLedger.aggregate([
+    {
+      $match: {
+        tenantId: tenantObjectId,
+        productId: { $in: itemIds },
+        type: { $in: ['STOCK_OUT', 'SALES_ORDER', 'TRANSFER_OUT'] },
+        createdAt: { $gte: startDate }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          productId: '$productId',
+          day: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }
+        },
+        dailyTotal: { $sum: { $abs: '$quantity' } }
+      }
+    }
+  ]);
+
+  const demandMap = new Map();
+  dailyDemands.forEach(d => {
+    const pid = String(d._id.productId);
+    if (!demandMap.has(pid)) demandMap.set(pid, []);
+    demandMap.get(pid).push(d.dailyTotal);
+  });
+
+  const recommendations = [];
+
+  for (const item of items) {
+    const pid = String(item._id);
+    const currentStock = Math.max(0, stockMap.get(pid) || 0);
+    const dayOuts = demandMap.get(pid) || [];
+    const totalOut = dayOuts.reduce((a, b) => a + b, 0);
+    const add = totalOut / lookback;
+
+    // Safety Stock & Reorder Point
+    const variance = dayOuts.length > 0
+      ? dayOuts.reduce((sum, v) => sum + Math.pow(v - add, 2), 0) / lookback
+      : 0;
+    const stdDev = Math.sqrt(variance);
+    const safetyStock = Math.ceil(zScore95 * stdDev * Math.sqrt(leadTimeDays));
+    const reorderPoint = Math.ceil((leadTimeDays * add) + safetyStock);
+
+    if (currentStock <= reorderPoint || currentStock <= (item.lowStockThreshold || 10)) {
+      const daysOfSupply = add > 0 ? (currentStock / add).toFixed(1) : '99+';
+      const recommendedOrderQty = Math.max(reorderPoint * 2 - currentStock, 20);
+
+      recommendations.push({
+        id: pid,
+        name: item.name,
+        sku: item.sku,
+        currentStock,
+        reorderPoint,
+        safetyStock,
+        averageDailyDemand: add.toFixed(2),
+        daysOfSupply,
+        recommendedOrderQty,
+        urgency: currentStock <= safetyStock ? 'CRITICAL' : 'REORDER_NOW'
+      });
+    }
+  }
+
+  recommendations.sort((a, b) => (a.urgency === 'CRITICAL' ? -1 : 1));
+
+  return {
+    evaluatedCount: items.length,
+    criticalCount: recommendations.filter(r => r.urgency === 'CRITICAL').length,
+    recommendations: recommendations.slice(0, 10),
+    message: recommendations.length > 0
+      ? `Found ${recommendations.length} items requiring replenishment.`
+      : 'All stock levels are currently healthy and above reorder thresholds.'
+  };
+}
+
 module.exports = {
   queryStockLevel,
   checkExpiringLots,
   listLowStockItems,
-  analyzeInventoryHealth
+  analyzeInventoryHealth,
+  queryReorderRecommendations
 };

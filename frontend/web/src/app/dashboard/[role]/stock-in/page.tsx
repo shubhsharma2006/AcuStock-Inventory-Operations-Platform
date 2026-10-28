@@ -16,6 +16,12 @@ type ProductItem = {
   sku?: string;
   currentStock?: number;
   quantity?: number;
+  trackingMode?: "NONE" | "SERIAL" | "BATCH";
+  lotPolicy?: {
+    requireSupplierBatch?: boolean;
+    minShelfLifeDays?: number;
+    allocationStrategy?: "FEFO" | "FIFO";
+  };
   serialPolicy?: {
     enableSerial?: boolean;
     requireSerialOnIN?: boolean;
@@ -60,6 +66,12 @@ export default function StockInPage() {
   const [warrantyPeriod, setWarrantyPeriod] = useState("12 Months");
   const [condition, setCondition] = useState("New");
   const [notes, setNotes] = useState("");
+
+  // Batch / Lot states
+  const [lotNumber, setLotNumber] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [mfgDate, setMfgDate] = useState("");
+  const [supplierBatchNumber, setSupplierBatchNumber] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -230,6 +242,13 @@ export default function StockInPage() {
     }
   }
 
+  function handleAutoGenerateLotNumber() {
+    const prefix = selectedProduct?.sku || selectedProduct?.shortName || "BATCH";
+    const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const randomPart = Math.floor(1000 + Math.random() * 9000);
+    setLotNumber(`${prefix.toUpperCase()}-${datePart}-${randomPart}`);
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!productId) {
@@ -256,6 +275,22 @@ export default function StockInPage() {
       }
     }
 
+    // Process batch / lot if batch-tracked
+    if (selectedProduct?.trackingMode === "BATCH") {
+      if (!lotNumber.trim()) {
+        setFormError("Batch / Lot Number is required for this product.");
+        return;
+      }
+      if (!expiryDate) {
+        setFormError("Batch Expiration Date is required.");
+        return;
+      }
+      if (selectedProduct.lotPolicy?.requireSupplierBatch && !supplierBatchNumber.trim()) {
+        setFormError("Supplier batch number is required by policy for this product.");
+        return;
+      }
+    }
+
     setLoading(true);
     setFormError(null);
 
@@ -269,6 +304,10 @@ export default function StockInPage() {
           serialNumbers: finalSerials,
           supplier: companyName.trim() || undefined,
           condition,
+          lotNumber: selectedProduct?.trackingMode === "BATCH" ? lotNumber.trim().toUpperCase() : undefined,
+          expiryDate: selectedProduct?.trackingMode === "BATCH" && expiryDate ? new Date(expiryDate).toISOString() : undefined,
+          mfgDate: selectedProduct?.trackingMode === "BATCH" && mfgDate ? new Date(mfgDate).toISOString() : undefined,
+          supplierBatchNumber: selectedProduct?.trackingMode === "BATCH" && supplierBatchNumber.trim() ? supplierBatchNumber.trim() : undefined,
           transaction: {
             supplierType: "SUPPLIER",
             paymentMethod,
@@ -281,6 +320,7 @@ export default function StockInPage() {
 
       queryClient.invalidateQueries({ queryKey: ["products-list"] });
       queryClient.invalidateQueries({ queryKey: ["items"] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-lots"] });
 
       const roleHome = `/dashboard/${
         user?.role === "SUPER_ADMIN" || user?.role === "ADMIN"
@@ -344,7 +384,7 @@ export default function StockInPage() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Step 1: Product & Quantity Selection */}
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
+        <div className="relative z-30 rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
           <h2 className="text-lg font-bold text-white">1. Select Product & Quantity</h2>
 
           <div className="grid gap-4 sm:grid-cols-3">
@@ -401,28 +441,115 @@ export default function StockInPage() {
             />
           </div>
 
-          {/* Serial Policy Info Banner */}
+          {/* Tracking Policy Info Banner */}
           {selectedProduct && (
             <div className={`rounded-xl border p-4 text-xs ${
-              serialPolicy.enableSerial
+              selectedProduct.trackingMode === "BATCH"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                : serialPolicy.enableSerial
                 ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
                 : "border-white/10 bg-slate-950/60 text-slate-400"
             }`}>
-              {serialPolicy.enableSerial ? (
+              {selectedProduct.trackingMode === "BATCH" ? (
+                <div className="flex items-center gap-2 font-medium">
+                  <span>🧪 Batch & Lot Tracking Active:</span>
+                  <span>Requires Lot Number and Expiry Date (FEFO Allocation enabled)</span>
+                </div>
+              ) : serialPolicy.enableSerial ? (
                 <div className="flex items-center gap-2 font-medium">
                   <span>⚡ Enterprise Serial Policy Active:</span>
                   <span>{requiresSerials ? "Serials REQUIRED on Stock IN" : "Serials OPTIONAL on Stock IN"}</span>
                 </div>
               ) : (
-                <div>Batch tracking product (Serial numbers not required).</div>
+                <div>Standard inventory item (Continuous quantity tracking).</div>
               )}
             </div>
           )}
         </div>
 
+        {/* Step 2A: Batch / Lot Traceability (If Batch-Tracked) */}
+        {selectedProduct?.trackingMode === "BATCH" && (
+          <div className="relative z-20 rounded-2xl border border-emerald-500/20 bg-slate-900/60 p-6 backdrop-blur-xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span>2. Batch & Lot Traceability</span>
+                  <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">
+                    FEFO Enabled
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Assign lot code and shelf-life metrics for automated FEFO/FIFO dispatch.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAutoGenerateLotNumber}
+                className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/20 transition flex items-center gap-1.5"
+              >
+                <span>⚡ Auto-Generate Batch #</span>
+              </button>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                  Lot / Batch Number <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={lotNumber}
+                  onChange={(e) => setLotNumber(e.target.value.toUpperCase())}
+                  placeholder="e.g. BATCH-2026-001"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 font-mono text-sm text-white uppercase outline-none focus:border-emerald-400/40"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                  Expiration Date <span className="text-rose-400">*</span>
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={expiryDate}
+                  onChange={(e) => setExpiryDate(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-emerald-400/40"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                  Manufacturing Date (Optional)
+                </label>
+                <input
+                  type="date"
+                  value={mfgDate}
+                  onChange={(e) => setMfgDate(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-emerald-400/40"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-slate-300">
+                  Supplier Batch Reference {selectedProduct.lotPolicy?.requireSupplierBatch && <span className="text-rose-400">*</span>}
+                </label>
+                <input
+                  type="text"
+                  value={supplierBatchNumber}
+                  onChange={(e) => setSupplierBatchNumber(e.target.value)}
+                  placeholder="e.g. SUP-LOT-9821"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-sm text-white outline-none focus:border-emerald-400/40"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Step 2: Serial Numbers (If Enabled) */}
         {serialPolicy.enableSerial && (
-          <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
+          <div className="relative z-20 rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-white">2. Serial Number Ingestion</h2>
               <div className="flex rounded-xl border border-white/10 bg-slate-950/60 p-1">
@@ -559,7 +686,7 @@ export default function StockInPage() {
         )}
 
         {/* Step 3: Supplier & Transaction Metadata */}
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
+        <div className="relative z-10 rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
           <h2 className="text-lg font-bold text-white">3. Supplier & Receipt Details</h2>
 
           <div className="grid gap-4 sm:grid-cols-2">

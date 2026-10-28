@@ -18,8 +18,30 @@ const serialAuditSchema = new mongoose.Schema({
   },
   action: {
     type: String,
-    enum: ['IN', 'OUT'],
+    enum: ['IN', 'OUT', 'RETURN_RESTOCK', 'INSPECTION', 'REPAIR_START', 'REPAIR_DONE', 'SCRAP_WRITEOFF'],
     required: true
+  },
+  dispositionNotes: {
+    type: String,
+    trim: true,
+    maxlength: 1000
+  },
+  warehouseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Warehouse'
+  },
+  salesOrderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SalesOrder'
+  },
+  purchaseOrderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseOrder'
+  },
+  returnReason: {
+    type: String,
+    trim: true,
+    maxlength: 250
   },
   performedBy: {
     type: mongoose.Schema.Types.ObjectId,

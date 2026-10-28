@@ -10,6 +10,7 @@ const { validateRequest, schemas } = require('../middleware/validateRequest');
 const { sendPasswordResetEmail } = require('../services/email.service');
 const { notify } = require('../services/notificationHelper');
 const logger = require('../utils/logger');
+const { validatePasswordStrength } = require('../utils/passwordValidator');
 
 const router = express.Router();
 
@@ -202,6 +203,9 @@ router.post('/login', validateRequest(schemas.login), async (req, res) => {
       user = await User.findOne(userQuery).select('+password +failedLoginAttempts +lockUntil');
     } else if (role === 'SUPER_ADMIN' || role === 'ADMIN' || role === 'MANAGER') {
       user = await User.findOne({ email: identifier.toLowerCase(), role }).select('+password +failedLoginAttempts +lockUntil');
+      if (!user) {
+        user = await User.findOne({ email: identifier.toLowerCase() }).select('+password +failedLoginAttempts +lockUntil');
+      }
     } else {
       return res.status(400).json({ message: 'Invalid role specified' });
     }
@@ -448,6 +452,11 @@ router.get('/me', requireAuth, async (req, res) => {
       phone: user.phone,
       role: user.role,
       isActive: user.isActive,
+      employmentStatus: user.employmentStatus || (user.isActive ? 'ACTIVE' : 'SUSPENDED'),
+      isImpersonated: Boolean(req.isImpersonated),
+      impersonationMode: req.impersonationMode || null,
+      originalUserId: req.impersonator?.id || null,
+      originalUserRole: req.impersonator?.role || null,
       lastLogin: user.lastLogin
     });
   } catch (error) {
@@ -486,8 +495,9 @@ router.post('/register-manager', requireAuth, requireTenantId, requireRole(['ADM
     return res.status(400).json({ message: 'Invalid email format' });
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+  const pwdError = validatePasswordStrength(password);
+  if (pwdError) {
+    return res.status(400).json({ message: pwdError });
   }
 
   try {
@@ -572,8 +582,9 @@ router.post('/register-user', requireAuth, requireTenantId, requireRole(['ADMIN'
     }
   }
 
-  if (password.length < 8) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters long' });
+  const pwdError = validatePasswordStrength(password);
+  if (pwdError) {
+    return res.status(400).json({ message: pwdError });
   }
 
   try {
@@ -742,8 +753,9 @@ router.post('/change-password', requireAuth, async (req, res) => {
       }
     }
 
-    if (newPassword.length < 8) {
-      return res.status(400).json({ message: 'New password must be at least 8 characters' });
+    const pwdError = validatePasswordStrength(newPassword);
+    if (pwdError) {
+      return res.status(400).json({ message: pwdError });
     }
 
     // Hash new password
@@ -890,8 +902,9 @@ router.post('/reset-password/:token', async (req, res) => {
     const { newPassword } = req.body;
     const { token } = req.params;
     
-    if (!newPassword || newPassword.length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters' });
+    const pwdError = validatePasswordStrength(newPassword);
+    if (pwdError) {
+      return res.status(400).json({ message: pwdError });
     }
     
     // Hash the token to compare with stored hash

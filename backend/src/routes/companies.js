@@ -11,6 +11,8 @@ const requirePermission = require('../middleware/requirePermission');
 const { validateCsvBuffer } = require('../services/storage.service');
 const { logBusinessEvent } = require('../utils/auditHelper');
 const logger = require('../utils/logger');
+const { escapeRegex } = require('../utils/regex');
+const { validateUpload } = require('../middleware/uploadValidation');
 
 const router = express.Router();
 router.use(requireTenantId);
@@ -88,7 +90,7 @@ const handleCompanyUpload = (req, res, next) => {
       req.file = (req.files['csvFile'] && req.files['csvFile'][0]) || (req.files['file'] && req.files['file'][0]);
     }
 
-    next();
+    validateUpload(req, res, next);
   });
 };
 
@@ -162,9 +164,10 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), async (r
     const query = { isActive: true, tenantId: req.tenantId };
 
     if (search) {
+      const s = escapeRegex(search);
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { name: { $regex: s, $options: 'i' } },
+        { email: { $regex: s, $options: 'i' } }
       ];
     }
     if (industry) query.industry = industry;

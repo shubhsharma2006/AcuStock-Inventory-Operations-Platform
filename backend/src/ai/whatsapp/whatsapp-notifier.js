@@ -102,6 +102,50 @@ Prioritize dispatch under FEFO or initiate discount/re-allocation.`;
       logger.error('Failed to dispatch expiring lot WhatsApp notification:', err.message);
     }
   }
+
+  /**
+   * Dispatch shipment dispatch alert to customer/recipient
+   */
+  async notifyShipmentDispatched({ tenantId, shipment, recipientPhone, trackingUrl }) {
+    try {
+      if (!tenantId || !recipientPhone) return;
+
+      const carrier = shipment.courier || shipment.carrierType || 'Courier Partner';
+      const awb = shipment.awb ? `\n🏷️ AWB / Tracking No: *${shipment.awb}*` : '';
+      const trackingLink = trackingUrl ? `\n🔗 Live Tracking: ${trackingUrl}` : '';
+
+      const alertMessage =
+`🚚 *AcuStock Dispatch Notification*
+
+Hello *${shipment.customerDetails?.customerName || shipment.customerName || 'Customer'}*,
+Your shipment (*${shipment.shipmentNumber || 'Shipment'}*) has been dispatched!
+
+📦 Items: *${shipment.quantity} units* (${shipment.productName || 'Order Items'})
+🏢 Carrier: *${carrier}*${awb}${trackingLink}
+
+Thank you for your business!`;
+
+      await whatsAppClient.sendTextMessage(recipientPhone, alertMessage);
+
+      await logAiEvent({
+        action: 'AI_RECOMMENDATION_DISPATCHED',
+        context: {
+          tenantId,
+          role: 'SYSTEM',
+          source: 'whatsapp'
+        },
+        summary: `Dispatched shipment dispatched WhatsApp notification to ${recipientPhone} for shipment ${shipment.shipmentNumber || shipment._id}`,
+        metadata: {
+          shipmentId: shipment._id,
+          recipientPhone,
+          carrier
+        }
+      });
+    } catch (err) {
+      logger.error('Failed to dispatch shipment dispatched WhatsApp notification:', err.message);
+    }
+  }
 }
 
 module.exports = new WhatsAppNotifier();
+

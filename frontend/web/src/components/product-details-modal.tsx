@@ -168,8 +168,8 @@ export function ProductDetailsModal({
   const rolePrefix = `/dashboard/${role.toLowerCase()}`;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-[2rem] border border-white/15 bg-slate-950 p-6 sm:p-8 shadow-2xl custom-scrollbar">
+    <div className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overflow-y-auto bg-black/80 p-4 sm:p-6 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative my-auto w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-[2rem] border border-white/15 bg-slate-950 p-6 sm:p-8 shadow-2xl custom-scrollbar">
         {/* Close Button */}
         <button
           type="button"

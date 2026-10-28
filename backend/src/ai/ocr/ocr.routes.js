@@ -9,6 +9,7 @@ const express = require('express');
 const multer = require('multer');
 const { requireAuth, requireTenantId } = require('../../middleware/auth');
 const checkPlanLimits = require('../../middleware/checkPlanLimits');
+const { validateUpload } = require('../../middleware/uploadValidation');
 const ocrController = require('./ocr.controller');
 
 const router = express.Router();
@@ -36,6 +37,7 @@ router.post(
   requireTenantId,
   checkPlanLimits('maxOcrScans'),
   upload.single('invoiceFile'),
+  validateUpload,
   ocrController.extractInvoice
 );
 

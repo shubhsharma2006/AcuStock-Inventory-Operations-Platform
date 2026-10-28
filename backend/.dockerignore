@@ -3,9 +3,14 @@ npm-debug.log*
 *.log
 logs/
 uploads/
+backups/
 .DS_Store
 .git
+.gitignore
+.github/
 .env
 .env.*
 !.env.example
 coverage/
+tests/
+*.md

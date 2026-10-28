@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Portal } from "@/components/ui/portal";
 
 interface WarehouseRef {
   _id: string;
@@ -390,8 +391,9 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
+    <Portal>
+      <div className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overflow-y-auto bg-black/80 p-4 sm:p-6 backdrop-blur-md">
+        <div className="my-auto w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/10 pb-4">
           <div>
             <h3 className="text-xl font-bold text-white">Create Stock Transfer</h3>
@@ -513,6 +515,7 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
         </form>
       </div>
     </div>
+    </Portal>
   );
 }
 
@@ -546,8 +549,9 @@ function ShipDispatchModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
-      <div className="w-full max-w-lg rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
+    <Portal>
+      <div className="fixed inset-0 z-[100] flex min-h-screen items-center justify-center overflow-y-auto bg-black/80 p-4 sm:p-6 backdrop-blur-md">
+        <div className="my-auto w-full max-w-lg rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
         <div className="flex items-center justify-between border-b border-white/10 pb-4">
           <div>
             <h3 className="text-xl font-bold text-white">Dispatch Transfer</h3>
@@ -624,6 +628,7 @@ function ShipDispatchModal({
         </form>
       </div>
     </div>
+    </Portal>
   );
 }
 

@@ -4,9 +4,17 @@
  * In a PM2 cluster every worker gets its own process, but they all write
  * to the same files — Node.js single-threaded I/O keeps the writes safe.
  */
+const fs = require('fs');
+const path = require('path');
 const winston = require('winston');
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
+// Ensure logs directory exists (first-boot and PM2 cluster safety)
+const logsDir = path.join(__dirname, '../../logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const IS_TEST = process.env.NODE_ENV === 'test';
 
 const transports = [

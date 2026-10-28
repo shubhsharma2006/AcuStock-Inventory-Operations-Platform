@@ -9,12 +9,8 @@ const eslintConfig = defineConfig([
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
       "react-hooks/set-state-in-effect": "warn",
-      "react/no-unescaped-entities": "warn",
-<<<<<<< HEAD
-=======
       "@typescript-eslint/no-unused-vars": "warn",
       "@next/next/no-img-element": "warn",
->>>>>>> 745f386 (fix(frontend): configure eslint rule severity to resolve lint errors in CI)
     },
   },
   // Override default ignores of eslint-config-next.

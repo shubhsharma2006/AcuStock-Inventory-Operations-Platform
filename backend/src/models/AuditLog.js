@@ -36,6 +36,15 @@ const auditLogSchema = new mongoose.Schema({
       // Role Events
       'ROLE_CHANGED',
       
+      // Impersonation & Offboarding Events
+      'IMPERSONATION_STARTED',
+      'IMPERSONATION_ENDED',
+      'EMPLOYEE_OFFBOARDED',
+      'USER_OFFBOARDED',
+      'USER_ACTIVATED',
+      'USER_DEACTIVATED',
+      'CUSTOM_PERMISSIONS_UPDATE',
+
       // Session Events
       'SESSION_INVALIDATED',
       'ALL_SESSIONS_INVALIDATED',
@@ -98,7 +107,23 @@ const auditLogSchema = new mongoose.Schema({
       'AI_TOOL_EXECUTED',
       'AI_DRAFT_PO_CREATED',
       'AI_RECOMMENDATION_DISPATCHED',
-      'AI_OCR_PROCESSED'
+      'AI_OCR_PROCESSED',
+      // API Key Events
+      'API_KEY_CREATED',
+      'API_KEY_REVOKED',
+      'API_KEY_DELETED',
+      // Webhook Events
+      'WEBHOOK_SUBSCRIPTION_CREATED',
+      'WEBHOOK_SUBSCRIPTION_DELETED',
+      // Backup Events
+      'BACKUP_CREATED',
+      'BACKUP_DOWNLOADED',
+      'BACKUP_RESTORED',
+      'BACKUP_DELETED',
+      'BACKUP_PRUNED',
+      // Stock Reservation Events
+      'STOCK_RESERVED',
+      'STOCK_RESERVATION_RELEASED'
     ],
     required: true,
     index: true
@@ -134,6 +159,19 @@ const auditLogSchema = new mongoose.Schema({
     type: String
   },
 
+  // Impersonation Tracking
+  isImpersonated: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  impersonatorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true
+  },
+
   // Polymorphic entity reference — links the log to its business source record
   entityType: {
     type: String,
@@ -153,6 +191,9 @@ const auditLogSchema = new mongoose.Schema({
       'Package',
       'StockReservation',
       'ShippingLabel',
+      'ApiKey',
+      'WebhookSubscription',
+      'Backup',
       null
     ],
     default: null,

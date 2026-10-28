@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
+import { BarcodeRmaModal } from "@/components/barcode/barcode-rma-modal";
 
 type SerialSearchResult = {
   serial: string;
@@ -34,7 +35,7 @@ export default function SerialManagementPage() {
   const [query, setQuery] = useState("");
   const [selectedSerial, setSelectedSerial] = useState<string | null>(null);
 
-  const { data, isLoading, error } = useQuery<SerialSearchResponse>({
+  const { data, isLoading, error, refetch } = useQuery<SerialSearchResponse>({
     queryKey: ["serial-search", query],
     queryFn: () =>
       apiFetch<SerialSearchResponse>(`/stock/serial/search?q=${encodeURIComponent(query || "A")}`),
@@ -57,6 +58,21 @@ export default function SerialManagementPage() {
             Search serial numbers, verify global uniqueness, and inspect full lifecycle audit histories.
           </p>
         </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("open-barcode-scanner"));
+            }
+          }}
+          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-xs font-bold text-slate-950 shadow-lg hover:from-amber-300 hover:to-orange-400 transition cursor-pointer"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+          </svg>
+          <span>📷 Scan Barcode / RMA (Alt+B)</span>
+        </button>
       </div>
 
       {/* Summary KPI Banner */}
@@ -168,9 +184,9 @@ export default function SerialManagementPage() {
                       <button
                         type="button"
                         onClick={() => setSelectedSerial(r.serial)}
-                        className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10 hover:text-white"
+                        className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-400/20 transition cursor-pointer"
                       >
-                        Inspect History
+                        🔍 Inspect & RMA
                       </button>
                     </td>
                   </tr>
@@ -188,36 +204,14 @@ export default function SerialManagementPage() {
         </div>
       )}
 
-      {/* Serial History Modal */}
+      {/* Barcode RMA Lifecycle Modal */}
       {selectedSerial && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-white">Serial Lifecycle Audit</h2>
-              <button type="button" onClick={() => setSelectedSerial(null)} className="text-slate-400 hover:text-white">✕</button>
-            </div>
-            <p className="mt-1 font-mono text-sm font-bold text-amber-300">{selectedSerial}</p>
-
-            <div className="mt-6 space-y-3">
-              <div className="rounded-xl border border-white/10 bg-slate-950 p-4 text-xs text-slate-300">
-                <div className="font-semibold text-white">Immutable Ledger Audit Trail</div>
-                <p className="mt-1 text-slate-400">
-                  This serial number was tracked via AcuStock Ledger Engine. Every IN and OUT action is signed and permanently recorded.
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setSelectedSerial(null)}
-                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-300 hover:bg-white/10"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <BarcodeRmaModal
+          isOpen={Boolean(selectedSerial)}
+          initialCode={selectedSerial}
+          onClose={() => setSelectedSerial(null)}
+          onActionComplete={() => refetch()}
+        />
       )}
     </div>
   );

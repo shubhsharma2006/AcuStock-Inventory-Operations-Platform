@@ -261,7 +261,7 @@ shipmentSchema.index({ dispatchDate: -1 });
 shipmentSchema.index({ customerName: 'text', companyName: 'text', awb: 'text' });
 
 // Auto-generate reference number
-shipmentSchema.pre('save', async function(next) {
+shipmentSchema.pre('save', async function() {
   if (this.isNew && !this.reference) {
     const prefix = this.type === 'OUT' ? 'SHP' : 'SUP';
     const date = new Date();
@@ -279,8 +279,6 @@ shipmentSchema.pre('save', async function(next) {
       updatedBy: this.createdBy
     }];
   }
-  
-  next();
 });
 
 // Method to update status

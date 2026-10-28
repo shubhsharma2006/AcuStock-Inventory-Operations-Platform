@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo, useId } from "react";
+import React, { useState, useRef, useEffect, useMemo, useId, useCallback } from "react";
+import { Portal } from "@/components/ui/portal";
 
 export interface SearchableSelectOption {
   value: string;
@@ -46,10 +47,64 @@ export function SearchableSelect({
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [dropdownPos, setDropdownPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+    placement: "bottom" | "top";
+  } | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const id = useId();
+
+  const updatePosition = useCallback(() => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const placeAbove = spaceBelow < 260 && spaceAbove > spaceBelow;
+
+    const targetWidth = Math.min(Math.max(rect.width, 240), window.innerWidth - 16);
+    let targetLeft = rect.left;
+    if (targetLeft + targetWidth > window.innerWidth - 8) {
+      targetLeft = window.innerWidth - targetWidth - 8;
+    }
+    if (targetLeft < 8) targetLeft = 8;
+
+    if (placeAbove) {
+      setDropdownPos({
+        bottom: window.innerHeight - rect.top + 6,
+        left: targetLeft,
+        width: targetWidth,
+        maxHeight: Math.min(spaceAbove - 16, 320),
+        placement: "top",
+      });
+    } else {
+      setDropdownPos({
+        top: rect.bottom + 6,
+        left: targetLeft,
+        width: targetWidth,
+        maxHeight: Math.min(spaceBelow - 16, 320),
+        placement: "bottom",
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, { passive: true });
+    window.addEventListener("resize", updatePosition, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", updatePosition);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [isOpen, updatePosition]);
 
   const selectedOption = useMemo(
     () => options.find((opt) => opt.value === value),
@@ -61,9 +116,6 @@ export function SearchableSelect({
     if (!search.trim()) return options;
     const query = search.trim().toLowerCase();
 
-    // Priority 1: Prefix match on label (type initial letter)
-    // Priority 2: Prefix match on sublabel (SKU, code)
-    // Priority 3: Substring match anywhere
     const prefixLabel: SearchableSelectOption[] = [];
     const prefixSublabel: SearchableSelectOption[] = [];
     const contains: SearchableSelectOption[] = [];
@@ -88,9 +140,12 @@ export function SearchableSelect({
   // Click outside listener
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      const target = event.target as Node;
       if (
         containerRef.current &&
-        !containerRef.current.contains(event.target as Node)
+        !containerRef.current.contains(target) &&
+        menuRef.current &&
+        !menuRef.current.contains(target)
       ) {
         setIsOpen(false);
       }
@@ -199,7 +254,7 @@ export function SearchableSelect({
   };
 
   return (
-    <div ref={containerRef} className={`relative ${isOpen ? "z-40" : "z-10"} ${className}`}>
+    <div ref={containerRef} className={`relative ${isOpen ? "z-50" : "z-10"} ${className}`}>
       {label && (
         <label
           htmlFor={id}
@@ -270,152 +325,166 @@ export function SearchableSelect({
         </div>
       </div>
 
-      {/* Dropdown Menu */}
+      {/* Dropdown Menu via Portal to prevent clipping */}
       {isOpen && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1.5 rounded-2xl border border-white/15 bg-slate-950/95 p-2 shadow-2xl backdrop-blur-2xl ring-1 ring-black/50 animate-in fade-in zoom-in-95 duration-100">
-          {/* Search Header */}
-          <div className="flex items-center gap-2 border-b border-white/10 pb-2 px-1">
-            <span className="text-slate-400 text-xs">🔍</span>
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setActiveIndex(0);
-              }}
-              onKeyDown={handleKeyDown}
-              placeholder={searchPlaceholder}
-              className="w-full bg-transparent text-xs text-white outline-none placeholder:text-slate-500"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                className="text-xs text-slate-500 hover:text-white px-1"
-              >
-                ✕
-              </button>
-            )}
-            {onRefresh && (
-              <button
-                type="button"
-                onClick={onRefresh}
-                title="Refresh options list"
-                disabled={isLoading}
-                className="text-xs text-slate-400 hover:text-amber-300 p-1 rounded hover:bg-white/5 transition"
-              >
-                {isLoading ? "⏳" : "🔄"}
-              </button>
-            )}
-          </div>
-
-          {/* Options List */}
-          <ul
-            ref={listRef}
-            role="listbox"
-            className="mt-1 max-h-60 overflow-y-auto space-y-1 py-1 pr-1 text-sm custom-scrollbar"
+        <Portal>
+          <div
+            ref={menuRef}
+            style={{
+              position: "fixed",
+              top: dropdownPos?.top,
+              bottom: dropdownPos?.bottom,
+              left: dropdownPos?.left ?? 8,
+              width: dropdownPos?.width ?? 320,
+              maxHeight: dropdownPos?.maxHeight ?? 320,
+              zIndex: 99999,
+            }}
+            className="rounded-2xl border border-white/15 bg-slate-950/98 p-2 shadow-2xl backdrop-blur-2xl ring-1 ring-black/80 animate-in fade-in zoom-in-95 duration-100 flex flex-col"
           >
-            {filteredOptions.length > 0 ? (
-              filteredOptions.map((opt, idx) => {
-                const isSelected = opt.value === value;
-                const isActive = idx === activeIndex;
+            {/* Search Header */}
+            <div className="flex items-center gap-2 border-b border-white/10 pb-2 px-1 shrink-0">
+              <span className="text-slate-400 text-xs">🔍</span>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setActiveIndex(0);
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder={searchPlaceholder}
+                className="w-full bg-transparent text-xs text-white outline-none placeholder:text-slate-500"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  className="text-xs text-slate-500 hover:text-white px-1"
+                >
+                  ✕
+                </button>
+              )}
+              {onRefresh && (
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  title="Refresh options list"
+                  disabled={isLoading}
+                  className="text-xs text-slate-400 hover:text-amber-300 p-1 rounded hover:bg-white/5 transition"
+                >
+                  {isLoading ? "⏳" : "🔄"}
+                </button>
+              )}
+            </div>
 
-                return (
-                  <li
-                    key={opt.value}
-                    role="option"
-                    aria-selected={isSelected}
-                    data-active={isActive}
-                    onClick={() => selectOption(opt)}
-                    onMouseEnter={() => setActiveIndex(idx)}
-                    className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 cursor-pointer transition ${
-                      isActive || isSelected
-                        ? "bg-amber-400/15 text-white"
-                        : "text-slate-300 hover:bg-white/5"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      {opt.icon && <span className="text-base shrink-0">{opt.icon}</span>}
-                      <div className="truncate">
-                        <div className="font-medium text-white truncate">
-                          {highlightMatch(opt.label, search)}
+            {/* Options List */}
+            <ul
+              ref={listRef}
+              role="listbox"
+              className="mt-1 overflow-y-auto space-y-1 py-1 pr-1 text-sm custom-scrollbar flex-1"
+            >
+              {filteredOptions.length > 0 ? (
+                filteredOptions.map((opt, idx) => {
+                  const isSelected = opt.value === value;
+                  const isActive = idx === activeIndex;
+
+                  return (
+                    <li
+                      key={opt.value}
+                      role="option"
+                      aria-selected={isSelected}
+                      data-active={isActive}
+                      onClick={() => selectOption(opt)}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 cursor-pointer transition ${
+                        isActive || isSelected
+                          ? "bg-amber-400/15 text-white"
+                          : "text-slate-300 hover:bg-white/5"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        {opt.icon && <span className="text-base shrink-0">{opt.icon}</span>}
+                        <div className="truncate">
+                          <div className="font-medium text-white truncate">
+                            {highlightMatch(opt.label, search)}
+                          </div>
+                          {opt.sublabel && (
+                            <div className="font-mono text-xs text-slate-400 truncate mt-0.5">
+                              {highlightMatch(opt.sublabel, search)}
+                            </div>
+                          )}
+                          {opt.details && (
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {opt.details}
+                            </div>
+                          )}
                         </div>
-                        {opt.sublabel && (
-                          <div className="font-mono text-xs text-slate-400 truncate mt-0.5">
-                            {highlightMatch(opt.sublabel, search)}
-                          </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {opt.badge && (
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              badgeStyles[opt.badgeColor || "slate"]
+                            }`}
+                          >
+                            {opt.badge}
+                          </span>
                         )}
-                        {opt.details && (
-                          <div className="text-[11px] text-slate-500 truncate">
-                            {opt.details}
-                          </div>
+                        {isSelected && (
+                          <span className="text-amber-400 font-bold text-xs">✓</span>
                         )}
                       </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                      {opt.badge && (
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                            badgeStyles[opt.badgeColor || "slate"]
-                          }`}
-                        >
-                          {opt.badge}
-                        </span>
-                      )}
-                      {isSelected && (
-                        <span className="text-amber-400 font-bold text-xs">✓</span>
-                      )}
-                    </div>
-                  </li>
-                );
-              })
-            ) : (
-              <div className="p-4 text-center">
-                <div className="text-xs text-slate-400">
-                  {search.trim() ? (
-                    <>
-                      No matches found for{" "}
-                      <span className="text-white font-semibold">&quot;{search}&quot;</span>
-                    </>
-                  ) : (
-                    <span>No options available</span>
+                    </li>
+                  );
+                })
+              ) : (
+                <div className="p-4 text-center">
+                  <div className="text-xs text-slate-400">
+                    {search.trim() ? (
+                      <>
+                        No matches found for{" "}
+                        <span className="text-white font-semibold">&quot;{search}&quot;</span>
+                      </>
+                    ) : (
+                      <span>No options available</span>
+                    )}
+                  </div>
+                  {onAddNew && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsOpen(false);
+                        onAddNew();
+                      }}
+                      className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-amber-400/10 border border-amber-400/20 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-400/20 transition"
+                    >
+                      {addNewLabel}
+                    </button>
                   )}
                 </div>
-                {onAddNew && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsOpen(false);
-                      onAddNew();
-                    }}
-                    className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-amber-400/10 border border-amber-400/20 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-400/20 transition"
-                  >
-                    {addNewLabel}
-                  </button>
-                )}
+              )}
+            </ul>
+
+            {/* Quick Footer if onAddNew is supplied */}
+            {onAddNew && filteredOptions.length > 0 && (
+              <div className="border-t border-white/10 pt-1.5 mt-1 px-1 flex justify-between items-center text-[11px] text-slate-400 shrink-0">
+                <span>{filteredOptions.length} available</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onAddNew();
+                  }}
+                  className="text-amber-300 hover:text-amber-200 font-semibold transition"
+                >
+                  {addNewLabel}
+                </button>
               </div>
             )}
-          </ul>
-
-          {/* Quick Footer if onAddNew is supplied */}
-          {onAddNew && filteredOptions.length > 0 && (
-            <div className="border-t border-white/10 pt-1.5 mt-1 px-1 flex justify-between items-center text-[11px] text-slate-400">
-              <span>{filteredOptions.length} available</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsOpen(false);
-                  onAddNew();
-                }}
-                className="text-amber-300 hover:text-amber-200 font-semibold transition"
-              >
-                {addNewLabel}
-              </button>
-            </div>
-          )}
-        </div>
+          </div>
+        </Portal>
       )}
     </div>
   );

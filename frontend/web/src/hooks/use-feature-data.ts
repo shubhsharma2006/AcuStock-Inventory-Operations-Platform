@@ -479,3 +479,69 @@ export function useNotificationsData(page = 1, limit = 10, refreshToken = 0) {
     error,
   };
 }
+
+export type DashboardBootstrapPayload = {
+  success: boolean;
+  user: {
+    _id: string;
+    name: string;
+    email: string;
+    role: string;
+    isSuperAdmin: boolean;
+    isImpersonated: boolean;
+    impersonationMode: string | null;
+    impersonator: any | null;
+    tenantId: string | null;
+  };
+  tenant: {
+    _id: string;
+    name: string;
+    slug: string;
+    currency: string;
+    status: string;
+  } | null;
+  kpiSummary: {
+    valuationAtCost: number;
+    totalProducts: number;
+    totalStockUnits: number;
+    criticalStockouts: number;
+    pendingPOsCount: number;
+    pendingSOsCount: number;
+  };
+  unreadNotificationsCount: number;
+  serverTime: string;
+};
+
+export function useDashboardBootstrap(refreshToken = 0) {
+  const [data, setData] = useState<DashboardBootstrapPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const response = await apiFetch<DashboardBootstrapPayload>("/dashboard/bootstrap");
+        if (!cancelled) setData(response);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : "Failed to bootstrap dashboard");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshToken]);
+
+  return { data, loading, error };
+}

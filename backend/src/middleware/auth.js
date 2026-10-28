@@ -78,17 +78,45 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
-    const user = await User.findById(decoded._id || decoded.id || decoded.userId).select('_id role isActive tokenVersion tenantId');
+    const user = await User.findById(decoded._id || decoded.id || decoded.userId).select('_id role isActive employmentStatus tokenVersion tenantId');
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
 
-    if (!user.isActive) {
+    if (!user.isActive || user.employmentStatus === 'TERMINATED') {
       return res.status(403).json({ 
-        message: 'Account inactive. Contact admin.',
+        message: 'Account inactive or terminated. Contact admin.',
         code: 'ACCOUNT_INACTIVE'
       });
+    }
+
+    const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+
+    // Attach impersonation context if present in token
+    if (decoded.isImpersonated) {
+      req.isImpersonated = true;
+      req.impersonator = {
+        id: decoded.originalUserId,
+        role: decoded.originalRole || 'SUPER_ADMIN',
+        mode: decoded.impersonationMode || 'FULL'
+      };
+      req.impersonationMode = decoded.impersonationMode || 'FULL';
+
+      // Read-Only Watch State Guard:
+      // Prevent state changes when SuperAdmin is observing in read-only mode
+      if (req.impersonationMode === 'READ_ONLY') {
+        const fullUrl = req.originalUrl || req.url || req.path;
+        const isExitEndpoint = fullUrl.includes('/impersonate/exit') || fullUrl.includes('/auth/logout');
+        if (isMutation && !isExitEndpoint) {
+          return res.status(403).json({
+            message: 'Action blocked: You are currently inspecting this account in Read-Only Watch Mode.',
+            code: 'VIEW_AS_READ_ONLY_GUARD'
+          });
+        }
+      }
+    } else {
+      req.isImpersonated = false;
     }
 
     if (decoded.tenantId && user.tenantId && String(decoded.tenantId) !== String(user.tenantId)) {
@@ -126,7 +154,6 @@ const requireAuth = async (req, res, next) => {
       req.tenant = tenant;
       req.tenantId = user.tenantId;
 
-      const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
       const isBillingOrAuthRecovery = req.path.startsWith('/billing') ||
         req.path.startsWith('/auth/logout') || req.path.startsWith('/auth/refresh');
       const subscriptionStatus = tenant.subscriptionStatus || tenant.status;
@@ -137,21 +164,30 @@ const requireAuth = async (req, res, next) => {
           code: 'SUBSCRIPTION_PAST_DUE'
         });
       }
-    } else if (user.role === 'SUPER_ADMIN' && requestedTenantId && req.tenant) {
-      // Super-admin tenant access must be explicitly selected by a trusted
-      // system operation or tenant-qualified request context.
-      if (!req.tenant.isActive || ['SUSPENDED', 'CANCELED'].includes(req.tenant.status)) {
+    } else if (process.env.NODE_ENV === 'production' && !user.tenantId && user.role !== 'SUPER_ADMIN') {
+      const isSystemRequest = (req.path || '').startsWith('/superadmin') || (req.path || '').startsWith('/setup');
+      if (!isSystemRequest) {
         return res.status(403).json({
-          message: 'Organization account is suspended or inactive. Contact support.',
-          code: 'TENANT_INACTIVE'
+          message: 'No organization found. Please complete onboarding first.',
+          code: 'TENANT_REQUIRED'
         });
       }
-      req.tenantId = requestedTenantId;
-    } else if (!isSystemRequest && (process.env.NODE_ENV === 'production' || process.env.REQUIRE_TENANT_CONTEXT === 'true')) {
-      return res.status(403).json({
-        message: 'A tenant workspace is required for this account.',
-        code: 'TENANT_REQUIRED'
-      });
+    } else if (user.role === 'SUPER_ADMIN' || !user.tenantId) {
+      if (requestedTenantId && req.tenant) {
+        if (!req.tenant.isActive || ['SUSPENDED', 'CANCELED'].includes(req.tenant.status)) {
+          return res.status(403).json({
+            message: 'Organization account is suspended or inactive. Contact support.',
+            code: 'TENANT_INACTIVE'
+          });
+        }
+        req.tenantId = requestedTenantId;
+      } else {
+        const defaultTenant = await Tenant.findOne({ isActive: true });
+        if (defaultTenant) {
+          req.tenant = defaultTenant;
+          req.tenantId = defaultTenant._id;
+        }
+      }
     }
 
     // Check token version for force logout / password change
@@ -255,8 +291,24 @@ const checkForcePasswordReset = async (req, res, next) => {
  *
  * Usage: router.get('/', requireAuth, requireTenantId, handler)
  */
-const requireTenantId = (req, res, next) => {
+const requireTenantId = async (req, res, next) => {
   if (!req.tenantId) {
+    if (req.user?.tenantId) {
+      req.tenantId = req.user.tenantId;
+      return next();
+    }
+    if (req.userRole === 'SUPER_ADMIN' || req.user?.role === 'SUPER_ADMIN') {
+      try {
+        const Tenant = require('../models/Tenant');
+        const defaultTenant = await Tenant.findOne({ isActive: true });
+        if (defaultTenant) {
+          req.tenant = defaultTenant;
+          req.tenantId = defaultTenant._id;
+          return next();
+        }
+      } catch (err) {}
+      return next();
+    }
     return res.status(403).json({
       success: false,
       error: 'Tenant context required',

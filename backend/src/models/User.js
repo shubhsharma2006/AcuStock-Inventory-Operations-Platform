@@ -58,6 +58,25 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  employmentStatus: {
+    type: String,
+    enum: ['ACTIVE', 'ON_LEAVE', 'SUSPENDED', 'TERMINATED'],
+    default: 'ACTIVE',
+    index: true
+  },
+  offboardedAt: {
+    type: Date,
+    default: null
+  },
+  offboardedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  offboardingReason: {
+    type: String,
+    default: null
+  },
   tokenVersion: {
     type: Number,
     default: 0
@@ -154,6 +173,10 @@ const userSchema = new mongoose.Schema({
     default: null,
     index: true
   },
+  assignedWarehouses: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Warehouse'
+  }],
   customPermissions: {
     type: Map,
     of: Boolean,

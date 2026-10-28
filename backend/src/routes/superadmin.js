@@ -11,9 +11,13 @@
  */
 
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Permission = require('../models/permission');
 const AuditLog = require('../models/AuditLog');
+const Warehouse = require('../models/Warehouse');
+const StockTransfer = require('../models/StockTransfer');
+const PurchaseOrder = require('../models/PurchaseOrder');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -361,6 +365,327 @@ router.post('/users/:userId/reset-2fa', superAuth, async (req, res) => {
   } catch (err) {
     logger.error('SuperAdmin reset 2fa error:', err);
     res.status(500).json({ success: false, error: 'Failed to reset 2FA' });
+  }
+});
+
+// ── 10. POST /api/superadmin/impersonate/exit — Exit Shadow Session (Static route must precede :userId) ──
+router.post('/impersonate/exit', requireAuth, async (req, res) => {
+  try {
+    const backupToken = req.cookies?.originalAdminToken;
+    const isProduction = process.env.NODE_ENV === 'production';
+    const cookieOpts = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'strict' : 'lax',
+      path: '/'
+    };
+
+    if (backupToken) {
+      try {
+        const decoded = jwt.verify(backupToken, process.env.JWT_SECRET);
+        res.cookie('authToken', backupToken, {
+          ...cookieOpts,
+          maxAge: 15 * 60 * 1000 // 15 mins (standard access token)
+        });
+        res.clearCookie('originalAdminToken', cookieOpts);
+
+        // Audit Log
+        try {
+          const auditDoc = new AuditLog({
+            action: 'IMPERSONATION_ENDED',
+            performedBy: decoded._id || req.impersonator?.id || req.userId,
+            targetUser: req.userId,
+            details: { message: 'SuperAdmin exited shadow session' },
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'],
+            ...(req.tenantId ? { tenantId: req.tenantId } : {})
+          });
+          if (!req.tenantId) {
+            auditDoc.$locals = { skipTenantIsolation: true };
+          }
+          await auditDoc.save();
+        } catch (_) {}
+
+        return res.json({
+          success: true,
+          message: 'Exited shadow session successfully',
+          role: 'SUPER_ADMIN'
+        });
+      } catch (tokenErr) {
+        logger.warn('Original admin token invalid or expired on exit:', tokenErr);
+      }
+    }
+
+    // If no valid backup token, verify if caller has SuperAdmin or fallback
+    if (req.user && req.user.role === 'SUPER_ADMIN') {
+      res.clearCookie('originalAdminToken', cookieOpts);
+      return res.json({
+        success: true,
+        message: 'Exited impersonation mode',
+        role: 'SUPER_ADMIN'
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: 'No active shadow session found to restore'
+    });
+  } catch (err) {
+    logger.error('SuperAdmin exit shadow session error:', err);
+    res.status(500).json({ success: false, error: 'Failed to exit shadow session' });
+  }
+});
+
+// ── 11. POST /api/superadmin/impersonate/:userId — SuperAdmin View As / Shadow Session ──
+router.post('/impersonate/:userId', [requireAuth, requireRole(['SUPER_ADMIN'])], async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { mode = 'FULL' } = req.body;
+    const selectedMode = mode === 'READ_ONLY' ? 'READ_ONLY' : 'FULL';
+
+    const targetUser = await User.findById(userId);
+    if (!targetUser || targetUser.isDeleted) {
+      return res.status(404).json({ success: false, error: 'User not found or deleted' });
+    }
+
+    if (!targetUser.isActive || targetUser.employmentStatus === 'TERMINATED') {
+      return res.status(400).json({ success: false, error: 'Cannot impersonate an inactive or terminated user' });
+    }
+
+    if (targetUser.role === 'SUPER_ADMIN' && targetUser._id.toString() !== req.userId.toString()) {
+      return res.status(403).json({ success: false, error: 'Cannot impersonate another Super Admin' });
+    }
+
+    // Save current SuperAdmin access token into backup cookie if not already set
+    const currentToken = req.cookies?.authToken || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+    const isProduction = process.env.NODE_ENV === 'production';
+    const cookieOpts = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'strict' : 'lax',
+      path: '/'
+    };
+
+    if (!req.cookies?.originalAdminToken && currentToken) {
+      res.cookie('originalAdminToken', currentToken, {
+        ...cookieOpts,
+        maxAge: 4 * 60 * 60 * 1000 // 4 hours
+      });
+    }
+
+    // Issue Delegated Impersonation JWT
+    const impersonationToken = jwt.sign({
+      _id: targetUser._id,
+      role: targetUser.role,
+      tokenVersion: targetUser.tokenVersion,
+      tenantId: targetUser.tenantId || req.tenantId,
+      isImpersonated: true,
+      impersonationMode: selectedMode,
+      originalUserId: req.userId,
+      originalRole: req.userRole,
+      type: 'access'
+    }, process.env.JWT_SECRET, {
+      expiresIn: '2h'
+    });
+
+    res.cookie('authToken', impersonationToken, {
+      ...cookieOpts,
+      maxAge: 2 * 60 * 60 * 1000 // 2 hours
+    });
+
+    // Enterprise Audit Log
+    try {
+      const effectiveTenantId = targetUser.tenantId || req.tenantId;
+      const auditDoc = new AuditLog({
+        action: 'IMPERSONATION_STARTED',
+        performedBy: req.userId,
+        targetUser: targetUser._id,
+        isImpersonated: true,
+        impersonatorId: req.userId,
+        details: {
+          mode: selectedMode,
+          targetRole: targetUser.role,
+          targetName: targetUser.name,
+          targetEmail: targetUser.email,
+          impersonatorRole: req.userRole
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {})
+      });
+      if (!effectiveTenantId) {
+        auditDoc.$locals = { skipTenantIsolation: true };
+      }
+      await auditDoc.save();
+    } catch (auditErr) {
+      logger.warn('Failed to save impersonation audit log:', auditErr);
+    }
+
+    res.json({
+      success: true,
+      message: `Now viewing as ${targetUser.name} (${targetUser.role}) in ${selectedMode} mode`,
+      token: impersonationToken,
+      targetUser: {
+        id: targetUser._id,
+        name: targetUser.name,
+        email: targetUser.email,
+        role: targetUser.role
+      },
+      mode: selectedMode
+    });
+  } catch (err) {
+    logger.error('SuperAdmin impersonate error:', err);
+    res.status(500).json({ success: false, error: 'Failed to start shadow session' });
+  }
+});
+
+// ── 12. GET /api/superadmin/users/:userId/offboarding-impact — Pre-Offboarding Impact Analysis ──
+router.get('/users/:userId/offboarding-impact', superAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
+    const targetUser = await User.findOne({ _id: userId, ...tenantFilter }).select('name email role isActive employmentStatus assignedWarehouseId tenantId').lean();
+    if (!targetUser) return res.status(404).json({ success: false, error: 'User not found' });
+
+    // Managed Warehouses
+    const warehouses = await Warehouse.find({
+      $or: [{ managerId: userId }, { _id: targetUser.assignedWarehouseId }],
+      isDeleted: { $ne: true }
+    }).select('name code managerId').lean();
+
+    // Open Stock Transfers
+    const pendingTransfers = await StockTransfer.countDocuments({
+      requestedBy: userId,
+      status: { $in: ['PENDING', 'DRAFT', 'IN_TRANSIT'] }
+    });
+
+    // Open Purchase Orders
+    const pendingPOs = await PurchaseOrder.countDocuments({
+      createdBy: userId,
+      status: { $in: ['DRAFT', 'ORDERED'] }
+    });
+
+    // Potential Reassignment Custodians (Active Admins or Managers in same tenant)
+    const eligibleCustodians = await User.find({
+      _id: { $ne: userId },
+      role: { $in: ['ADMIN', 'MANAGER'] },
+      isActive: true,
+      isDeleted: { $ne: true },
+      ...(targetUser.tenantId ? { tenantId: targetUser.tenantId } : {})
+    }).select('name email role').lean();
+
+    res.json({
+      success: true,
+      impact: {
+        user: targetUser,
+        warehouses,
+        pendingTransfersCount: pendingTransfers,
+        pendingPOsCount: pendingPOs,
+        eligibleCustodians
+      }
+    });
+  } catch (err) {
+    logger.error('SuperAdmin offboarding impact error:', err);
+    res.status(500).json({ success: false, error: 'Failed to assess offboarding impact' });
+  }
+});
+
+// ── 13. POST /api/superadmin/users/:userId/offboard — Enterprise Offboarding & Revocation ──
+router.post('/users/:userId/offboard', superAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reassignToUserId, reason = 'RESIGNATION' } = req.body;
+
+    if (req.userId.toString() === userId) {
+      return res.status(400).json({ success: false, error: 'Self-offboarding is prohibited' });
+    }
+
+    const isSuperAdmin = req.user && req.user.role === 'SUPER_ADMIN';
+    if (!isSuperAdmin && !req.tenantId) {
+      return res.status(403).json({ success: false, error: 'Tenant context required' });
+    }
+    const tenantFilter = isSuperAdmin ? {} : { tenantId: req.tenantId };
+    const targetUser = await User.findOne({ _id: userId, ...tenantFilter });
+    if (!targetUser) return res.status(404).json({ success: false, error: 'User not found' });
+
+    if (targetUser.role === 'SUPER_ADMIN') {
+      return res.status(403).json({ success: false, error: 'Super Admin accounts cannot be offboarded' });
+    }
+
+    // Verify and execute workload reassignment if a replacement custodian was provided
+    let reassignee = null;
+    if (reassignToUserId) {
+      reassignee = await User.findOne({ _id: reassignToUserId, isActive: true, isDeleted: { $ne: true } });
+      if (reassignee) {
+        // Reassign warehouse management
+        await Warehouse.updateMany({ managerId: targetUser._id }, { managerId: reassignee._id });
+        // Reassign pending stock transfers
+        await StockTransfer.updateMany(
+          { requestedBy: targetUser._id, status: { $in: ['PENDING', 'DRAFT'] } },
+          { requestedBy: reassignee._id }
+        );
+        // Reassign pending purchase orders
+        await PurchaseOrder.updateMany(
+          { createdBy: targetUser._id, status: { $in: ['DRAFT', 'ORDERED'] } },
+          { createdBy: reassignee._id }
+        );
+      }
+    }
+
+    // Terminate user and bump tokenVersion to instantly kill all active sessions/cookies
+    targetUser.isActive = false;
+    targetUser.employmentStatus = 'TERMINATED';
+    targetUser.tokenVersion = (targetUser.tokenVersion || 0) + 1;
+    targetUser.assignedWarehouseId = null;
+    targetUser.offboardedAt = new Date();
+    targetUser.offboardedBy = req.userId;
+    targetUser.offboardingReason = reason;
+    await targetUser.save({ validateModifiedOnly: true });
+
+    // Enterprise Audit Log
+    try {
+      const effectiveTenantId = targetUser.tenantId || req.tenantId;
+      const auditDoc = new AuditLog({
+        action: 'EMPLOYEE_OFFBOARDED',
+        performedBy: req.userId,
+        targetUser: targetUser._id,
+        details: {
+          userName: targetUser.name,
+          userEmail: targetUser.email,
+          userRole: targetUser.role,
+          reason,
+          reassignedTo: reassignee ? { id: reassignee._id, name: reassignee.name, role: reassignee.role } : null,
+          offboardedAt: targetUser.offboardedAt
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+        ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {})
+      });
+      if (!effectiveTenantId) {
+        auditDoc.$locals = { skipTenantIsolation: true };
+      }
+      await auditDoc.save();
+    } catch (auditErr) {
+      logger.warn('Failed to save offboarding audit log:', auditErr);
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully offboarded ${targetUser.name} and revoked all active sessions.`,
+      user: {
+        id: targetUser._id,
+        name: targetUser.name,
+        employmentStatus: targetUser.employmentStatus,
+        isActive: targetUser.isActive
+      }
+    });
+  } catch (err) {
+    logger.error('SuperAdmin offboard user error:', err);
+    res.status(500).json({ success: false, error: 'Failed to offboard user' });
   }
 });
 

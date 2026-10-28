@@ -1,0 +1,358 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AcuStock Enterprise Inventory API",
+    "version": "2.0.0",
+    "description": "Enterprise-grade multi-tenant inventory operations, stock reservations, serial tracking, automated billing, and developer webhooks.",
+    "contact": {
+      "name": "AcuStock Engineering",
+      "url": "https://acustock.example.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Production v1 API"
+    },
+    {
+      "url": "/api",
+      "description": "Legacy API alias"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "User authentication token obtained via /api/auth/login"
+      },
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "Developer secret key starting with acu_live_"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": false },
+          "error": { "type": "string" },
+          "code": { "type": "string" }
+        }
+      },
+      "StockSummary": {
+        "type": "object",
+        "properties": {
+          "productId": { "type": "string" },
+          "productName": { "type": "string" },
+          "sku": { "type": "string" },
+          "currentStock": { "type": "number", "example": 150 },
+          "totalIn": { "type": "number", "example": 200 },
+          "totalOut": { "type": "number", "example": 50 },
+          "lowStock": { "type": "boolean", "example": false }
+        }
+      },
+      "StockReservation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "reservationCode": { "type": "string", "example": "RES-1793160000-A1B2C3" },
+          "productId": { "type": "string" },
+          "reservedQty": { "type": "integer", "example": 5 },
+          "status": { "type": "string", "enum": ["ACTIVE", "FULFILLED", "RELEASED", "EXPIRED"] },
+          "expiresAt": { "type": "string", "format": "date-time" },
+          "warehouseId": { "type": "string", "nullable": true },
+          "orderId": { "type": "string", "nullable": true }
+        }
+      },
+      "ApiKey": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "example": "Shopify Connector" },
+          "keyPrefix": { "type": "string", "example": "acu_live_a1b2c3..." },
+          "role": { "type": "string", "enum": ["ADMIN", "MANAGER", "USER"] },
+          "scopes": { "type": "array", "items": { "type": "string" } },
+          "isActive": { "type": "boolean" },
+          "lastUsedAt": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "WebhookSubscription": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "example": "ERP Dispatch Hook" },
+          "url": { "type": "string", "format": "uri", "example": "https://erp.client.com/webhook" },
+          "events": { "type": "array", "items": { "type": "string", "example": "stock.out" } },
+          "isActive": { "type": "boolean" },
+          "failureCount": { "type": "integer", "example": 0 }
+        }
+      },
+      "BillingUsage": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": true },
+          "plan": { "type": "string", "example": "pro" },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "users": {
+                "type": "object",
+                "properties": {
+                  "current": { "type": "integer", "example": 3 },
+                  "max": { "type": "integer", "example": 20 },
+                  "percent": { "type": "integer", "example": 15 },
+                  "status": { "type": "string", "example": "HEALTHY" }
+                }
+              },
+              "items": {
+                "type": "object",
+                "properties": {
+                  "current": { "type": "integer", "example": 120 },
+                  "max": { "type": "integer", "example": 5000 },
+                  "percent": { "type": "integer", "example": 2 },
+                  "status": { "type": "string", "example": "HEALTHY" }
+                }
+              }
+            }
+          },
+          "quotaStatus": { "type": "string", "example": "HEALTHY" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "System Health & Deep Probe",
+        "description": "Verifies MongoDB connection latency, write capability, and Redis ping.",
+        "responses": {
+          "200": { "description": "System Healthy" },
+          "503": { "description": "Database or Redis Unavailable" }
+        }
+      }
+    },
+    "/stock/summary": {
+      "get": {
+        "summary": "Inventory Stock Summary",
+        "description": "Calculates physical stock balance from ledger for all catalog products.",
+        "security": [{ "BearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of product stock summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "summary": { "type": "array", "items": { "$ref": "#/components/schemas/StockSummary" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stock/in": {
+      "post": {
+        "summary": "Record Inbound Stock (Stock IN)",
+        "description": "Transactional inbound stock movement. Enforces serial number deduplication and batch allocation.",
+        "security": [{ "BearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["productId", "quantity"],
+                "properties": {
+                  "productId": { "type": "string" },
+                  "quantity": { "type": "integer", "minimum": 1, "maximum": 100000 },
+                  "serialNumbers": { "type": "array", "items": { "type": "string" } },
+                  "warehouseId": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Stock IN recorded successfully" },
+          "400": { "$ref": "#/components/schemas/ErrorResponse" }
+        }
+      }
+    },
+    "/stock/out": {
+      "post": {
+        "summary": "Dispatch Outbound Stock (Stock OUT)",
+        "description": "Dispatches stock. Validates Available-To-Promise stock and fulfills soft reservations if reservationId is supplied.",
+        "security": [{ "BearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["productId", "quantity"],
+                "properties": {
+                  "productId": { "type": "string" },
+                  "quantity": { "type": "integer", "minimum": 1, "maximum": 100000 },
+                  "serialNumbers": { "type": "array", "items": { "type": "string" } },
+                  "reservationId": { "type": "string", "description": "Optional reservation to fulfill" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Stock OUT dispatched successfully" },
+          "400": { "$ref": "#/components/schemas/ErrorResponse" }
+        }
+      }
+    },
+    "/reservations": {
+      "get": {
+        "summary": "List Stock Reservations",
+        "security": [{ "BearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "parameters": [
+          { "name": "productId", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string", "enum": ["ACTIVE", "FULFILLED", "RELEASED", "EXPIRED"] } }
+        ],
+        "responses": {
+          "200": { "description": "List of reservations" }
+        }
+      },
+      "post": {
+        "summary": "Create Stock Reservation (Hold)",
+        "description": "Locks inventory units against Available-To-Promise for a set TTL before dispatch.",
+        "security": [{ "BearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["productId", "reservedQty"],
+                "properties": {
+                  "productId": { "type": "string" },
+                  "reservedQty": { "type": "integer", "minimum": 1 },
+                  "ttlMinutes": { "type": "integer", "default": 60 },
+                  "warehouseId": { "type": "string" },
+                  "notes": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Stock reserved successfully" },
+          "400": { "$ref": "#/components/schemas/ErrorResponse" }
+        }
+      }
+    },
+    "/reservations/{id}/release": {
+      "post": {
+        "summary": "Release Stock Reservation",
+        "description": "Frees reserved units immediately back to the available pool.",
+        "security": [{ "BearerAuth": [] }, { "ApiKeyAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "Reservation released" }
+        }
+      }
+    },
+    "/api-keys": {
+      "get": {
+        "summary": "List Developer API Keys",
+        "security": [{ "BearerAuth": [] }],
+        "responses": { "200": { "description": "List of masked API keys" } }
+      },
+      "post": {
+        "summary": "Create Developer API Key",
+        "description": "Generates secret token (acu_live_...). Stored as SHA-256 hash.",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "role": { "type": "string", "enum": ["ADMIN", "MANAGER", "USER"] },
+                  "scopes": { "type": "array", "items": { "type": "string" } },
+                  "expiresDays": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "API key generated" } }
+      }
+    },
+    "/webhooks": {
+      "get": {
+        "summary": "List Webhook Subscriptions",
+        "security": [{ "BearerAuth": [] }],
+        "responses": { "200": { "description": "Active webhooks" } }
+      },
+      "post": {
+        "summary": "Register Webhook Subscription",
+        "description": "Registers HTTP endpoint with HMAC-SHA256 signature verification.",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "url", "events"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "url": { "type": "string", "format": "uri" },
+                  "events": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        },
+        "responses": { "201": { "description": "Webhook registered" } }
+      }
+    },
+    "/billing/usage": {
+      "get": {
+        "summary": "Live Quota Utilization & Usage Metering",
+        "description": "Calculates real-time utilization percentages against subscription plan limits.",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Current quota utilization metrics",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BillingUsage" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/backups": {
+      "get": {
+        "summary": "List Enterprise Backups",
+        "security": [{ "BearerAuth": [] }],
+        "responses": { "200": { "description": "Catalog of backup archives" } }
+      },
+      "post": {
+        "summary": "Create Compressed Backup Archive",
+        "description": "Generates SHA-256 verified streaming gzip backup archive.",
+        "security": [{ "BearerAuth": [] }],
+        "responses": { "201": { "description": "Backup created" } }
+      }
+    }
+  }
+}

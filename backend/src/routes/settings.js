@@ -9,6 +9,7 @@ const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
 const Tenant = require('../models/Tenant');
 const { logBusinessEvent } = require('../utils/auditHelper');
+const logger = require('../utils/logger');
 
 router.use(requireTenantId);
 const bcrypt = require('bcryptjs');
@@ -44,7 +45,7 @@ router.get('/serial-policies', requireAuth, requireRole(['ADMIN', 'MANAGER']), a
       .sort({ updatedAt: -1 });
     res.json(policies);
   } catch (err) {
-    console.error('Error fetching serial policies:', err);
+    logger.error('Error fetching serial policies:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch serial policies' });
   }
 });
@@ -75,7 +76,7 @@ router.get('/serial-policies/:productId', requireAuth, async (req, res) => {
     
     res.json(policy);
   } catch (err) {
-    console.error('Error fetching serial policy:', err);
+    logger.error('Error fetching serial policy:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch serial policy' });
   }
 });
@@ -156,7 +157,7 @@ router.post('/serial-policies', requireAuth, requireRole(['ADMIN']), async (req,
       policy: populated
     });
   } catch (err) {
-    console.error('Error saving serial policy:', err);
+    logger.error('Error saving serial policy:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to save serial policy' });
   }
 });
@@ -174,7 +175,7 @@ router.get('/permissions', requireAuth, requireRole(['ADMIN']), async (req, res)
     const permissions = await Permission.find({ tenantId: req.tenantId }).sort({ role: 1 });
     res.json(permissions);
   } catch (err) {
-    console.error('Error fetching permissions:', err);
+    logger.error('Error fetching permissions:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch permissions' });
   }
 });
@@ -227,7 +228,7 @@ router.get('/permissions/:role', requireAuth, async (req, res) => {
     
     res.json(permission);
   } catch (err) {
-    console.error('Error fetching role permissions:', err);
+    logger.error('Error fetching role permissions:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch role permissions' });
   }
 });
@@ -283,7 +284,7 @@ router.put('/permissions/:role', requireAuth, requireRole(['ADMIN']), async (req
       permission 
     });
   } catch (err) {
-    console.error('Error updating permissions:', err);
+    logger.error('Error updating permissions:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to update permissions' });
   }
 });
@@ -332,7 +333,7 @@ router.put('/users/:id/status', requireAuth, requireRole(['ADMIN']), async (req,
       user: { _id: user._id, name: user.name, isActive: user.isActive }
     });
   } catch (err) {
-    console.error('Error updating user status:', err);
+    logger.error('Error updating user status:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to update user status' });
   }
 });
@@ -375,7 +376,7 @@ router.delete('/users/:id', requireAuth, requireRole(['ADMIN']), async (req, res
       userId: user._id
     });
   } catch (err) {
-    console.error('Error deleting user:', err);
+    logger.error('Error deleting user:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to delete user' });
   }
 });
@@ -479,7 +480,7 @@ router.post('/users/:id/reset-password', requireAuth, requireRole(['ADMIN', 'MAN
     
     res.json(response);
   } catch (err) {
-    console.error('Error resetting password:', err);
+    logger.error('Error resetting password:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to reset password' });
   }
 });
@@ -523,7 +524,7 @@ router.post('/users/:id/force-logout', requireAuth, requireRole(['ADMIN']), asyn
       userId: user._id 
     });
   } catch (err) {
-    console.error('Error forcing logout:', err);
+    logger.error('Error forcing logout:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to force logout' });
   }
 });
@@ -548,7 +549,7 @@ router.get('/account-stats', requireAuth, requireRole(['ADMIN']), async (req, re
       managers: { total: totalManagers, active: activeManagers, inactive: totalManagers - activeManagers }
     });
   } catch (err) {
-    console.error('Error fetching account stats:', err);
+    logger.error('Error fetching account stats:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch account stats' });
   }
 });
@@ -572,7 +573,7 @@ router.get('/profile', requireAuth, async (req, res) => {
     }
     res.json(user);
   } catch (err) {
-    console.error('Error fetching profile:', err);
+    logger.error('Error fetching profile:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch profile' });
   }
 });
@@ -623,7 +624,7 @@ router.put('/profile', requireAuth, async (req, res) => {
 
     res.json({ message: 'Profile updated', user });
   } catch (err) {
-    console.error('Error updating profile:', err);
+    logger.error('Error updating profile:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to update profile' });
   }
 });
@@ -684,7 +685,7 @@ router.put('/profile/password', requireAuth, async (req, res) => {
     
     res.json({ message: 'Password changed successfully. Please login again.' });
   } catch (err) {
-    console.error('Error changing password:', err);
+    logger.error('Error changing password:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to change password' });
   }
 });
@@ -728,7 +729,7 @@ router.get('/users/:id/password-info', requireAuth, requireRole(['ADMIN', 'MANAG
       failedLoginAttempts: user.failedLoginAttempts || 0
     });
   } catch (err) {
-    console.error('Error fetching password info:', err);
+    logger.error('Error fetching password info:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch password info' });
   }
 });
@@ -771,7 +772,7 @@ router.post('/users/:id/reset-failed-attempts', requireAuth, requireRole(['ADMIN
       userId: user._id 
     });
   } catch (err) {
-    console.error('Error resetting failed attempts:', err);
+    logger.error('Error resetting failed attempts:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to reset failed attempts' });
   }
 });
@@ -812,7 +813,7 @@ router.get('/users/password-summary', requireAuth, requireRole(['ADMIN']), async
     
     res.json({ users: summary, stats });
   } catch (err) {
-    console.error('Error fetching password summary:', err);
+    logger.error('Error fetching password summary:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch password summary' });
   }
 });
@@ -870,7 +871,7 @@ router.get('/organization', requireAuth, async (req, res) => {
 
     res.json(tenant);
   } catch (err) {
-    console.error('Error fetching organization settings:', err);
+    logger.error('Error fetching organization settings:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to fetch organization settings' });
   }
 });
@@ -946,15 +947,173 @@ router.put('/organization', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), 
         after: updates,
         summary: `Updated organization settings and preferences for ${tenant.name}`
       }
-    }).catch(err => console.error('[Audit] Failed to log organization setting update:', err.message));
+    }).catch(err => logger.error('[Audit] Failed to log organization setting update:', { error: err.message }));
 
     res.json({
       message: 'Organization settings updated successfully',
       tenant
     });
   } catch (err) {
-    console.error('Error updating organization settings:', err);
+    logger.error('Error updating organization settings:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
     res.status(500).json({ message: 'Failed to update organization settings' });
+  }
+});
+
+/**
+ * GET /api/settings/tracking
+ * Fetch current tenant tracking settings and carrier preferences
+ */
+router.get('/tracking', requireAuth, async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.tenantId, { settings: 1, name: 1 }).lean();
+    if (!tenant) return res.status(404).json({ message: 'Tenant not found' });
+
+    res.json({
+      trackingModuleEnabled: Boolean(tenant.settings?.trackingModuleEnabled ?? true),
+      trackingEnabled: Boolean(tenant.settings?.trackingEnabled ?? true),
+      trackingCarriers: tenant.settings?.trackingCarriers || ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART'],
+      trackingPollInterval: tenant.settings?.trackingPollInterval || 15
+    });
+  } catch (err) {
+    logger.error('Error fetching tracking settings:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
+    res.status(500).json({ message: 'Failed to fetch tracking settings' });
+  }
+});
+
+/**
+ * PUT /api/settings/tracking
+ * Update operational tracking preferences (ADMIN / SUPER_ADMIN)
+ */
+router.put('/tracking', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.tenantId);
+    if (!tenant) return res.status(404).json({ message: 'Tenant not found' });
+
+    if (tenant.settings?.trackingModuleEnabled === false && req.user.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({ message: 'Tracking module is not enabled for your organization subscription' });
+    }
+
+    const { trackingEnabled, trackingCarriers, trackingPollInterval } = req.body;
+
+    if (typeof trackingEnabled === 'boolean') {
+      tenant.settings.trackingEnabled = trackingEnabled;
+    }
+    if (Array.isArray(trackingCarriers)) {
+      tenant.settings.trackingCarriers = trackingCarriers;
+    }
+    if (typeof trackingPollInterval === 'number' && trackingPollInterval >= 5) {
+      tenant.settings.trackingPollInterval = trackingPollInterval;
+    }
+
+    await tenant.save();
+
+    logBusinessEvent({
+      req,
+      action: 'SETTING_CHANGED',
+      entityType: 'Tenant',
+      entityId: tenant._id,
+      changes: {
+        after: { trackingEnabled, trackingCarriers, trackingPollInterval },
+        summary: `Updated delivery tracking preferences for ${tenant.name}`
+      }
+    }).catch(err => logger.error('[Audit] Failed to log tracking setting update:', { error: err.message }));
+
+    res.json({
+      success: true,
+      settings: {
+        trackingModuleEnabled: tenant.settings.trackingModuleEnabled,
+        trackingEnabled: tenant.settings.trackingEnabled,
+        trackingCarriers: tenant.settings.trackingCarriers,
+        trackingPollInterval: tenant.settings.trackingPollInterval
+      }
+    });
+  } catch (err) {
+    logger.error('Error updating tracking settings:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
+    res.status(500).json({ message: 'Failed to update tracking settings' });
+  }
+});
+
+/**
+ * GET /api/settings/whatsapp
+ * Fetch tenant WhatsApp notification settings & Meta Cloud API connectivity status
+ */
+router.get('/whatsapp', requireAuth, async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.tenantId).select('settings');
+    if (!tenant) return res.status(404).json({ message: 'Tenant not found' });
+
+    const aiConfig = require('../ai/config/ai.config');
+    const isLiveMetaConfigured = Boolean(aiConfig?.whatsapp?.apiToken && aiConfig?.whatsapp?.phoneNumberId);
+
+    res.json({
+      whatsappAlertsEnabled: Boolean(tenant.settings?.whatsappAlertsEnabled ?? false),
+      lowStockAlertThreshold: tenant.settings?.lowStockAlertThreshold ?? 10,
+      lowStockEmailAlerts: Boolean(tenant.settings?.lowStockEmailAlerts ?? true),
+      dailyDigestEnabled: Boolean(tenant.settings?.dailyDigestEnabled ?? false),
+      isLiveMetaConfigured,
+      phoneNumberId: isLiveMetaConfigured ? aiConfig.whatsapp.phoneNumberId : null,
+      apiVersion: aiConfig?.whatsapp?.apiVersion || 'v20.0'
+    });
+  } catch (err) {
+    logger.error('Error fetching whatsapp settings:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
+    res.status(500).json({ message: 'Failed to fetch WhatsApp settings' });
+  }
+});
+
+/**
+ * PUT /api/settings/whatsapp
+ * Update tenant WhatsApp notification settings (ADMIN / SUPER_ADMIN)
+ */
+router.put('/whatsapp', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.tenantId);
+    if (!tenant) return res.status(404).json({ message: 'Tenant not found' });
+
+    const {
+      whatsappAlertsEnabled,
+      lowStockAlertThreshold,
+      lowStockEmailAlerts,
+      dailyDigestEnabled
+    } = req.body;
+
+    if (typeof whatsappAlertsEnabled === 'boolean') {
+      tenant.settings.whatsappAlertsEnabled = whatsappAlertsEnabled;
+    }
+    if (typeof lowStockAlertThreshold === 'number' && lowStockAlertThreshold >= 0) {
+      tenant.settings.lowStockAlertThreshold = lowStockAlertThreshold;
+    }
+    if (typeof lowStockEmailAlerts === 'boolean') {
+      tenant.settings.lowStockEmailAlerts = lowStockEmailAlerts;
+    }
+    if (typeof dailyDigestEnabled === 'boolean') {
+      tenant.settings.dailyDigestEnabled = dailyDigestEnabled;
+    }
+
+    await tenant.save();
+
+    logBusinessEvent({
+      req,
+      action: 'SETTING_CHANGED',
+      entityType: 'Tenant',
+      entityId: tenant._id,
+      changes: {
+        after: { whatsappAlertsEnabled, lowStockAlertThreshold, lowStockEmailAlerts, dailyDigestEnabled },
+        summary: `Updated WhatsApp alert settings for ${tenant.name}`
+      }
+    }).catch(err => logger.error('[Audit] Failed to log whatsapp setting update:', { error: err.message }));
+
+    res.json({
+      success: true,
+      settings: {
+        whatsappAlertsEnabled: tenant.settings.whatsappAlertsEnabled,
+        lowStockAlertThreshold: tenant.settings.lowStockAlertThreshold,
+        lowStockEmailAlerts: tenant.settings.lowStockEmailAlerts,
+        dailyDigestEnabled: tenant.settings.dailyDigestEnabled
+      }
+    });
+  } catch (err) {
+    logger.error('Error updating whatsapp settings:', { error: err.message, stack: err.stack, tenantId: req.tenantId });
+    res.status(500).json({ message: 'Failed to update WhatsApp settings' });
   }
 });
 

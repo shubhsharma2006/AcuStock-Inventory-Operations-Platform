@@ -16,11 +16,31 @@ type ProductItem = {
   quantity?: number;
   category?: string;
   uom?: string;
+  trackingMode?: "NONE" | "SERIAL" | "BATCH";
+  lotPolicy?: {
+    requireSupplierBatch?: boolean;
+    minShelfLifeDays?: number;
+    allocationStrategy?: "FEFO" | "FIFO";
+  };
   serialPolicy?: {
     enableSerial?: boolean;
     requireSerialOnIN?: boolean;
     requireSerialOnOUT?: boolean;
   };
+};
+
+type InventoryLot = {
+  _id: string;
+  lotNumber: string;
+  remainingQty: number;
+  initialQty: number;
+  expiryDate: string;
+  mfgDate?: string;
+  supplierBatchNumber?: string;
+  status: string;
+  isExpired?: boolean;
+  isNearExpiry?: boolean;
+  daysUntilExpiry?: number;
 };
 
 type Company = {
@@ -56,6 +76,7 @@ export default function StockOutPage() {
   const [warehouseId, setWarehouseId] = useState("");
   const [quantity, setQuantity] = useState<number>(1);
   const [selectedSerials, setSelectedSerials] = useState<string[]>([]);
+  const [selectedLotId, setSelectedLotId] = useState("");
   const [buyerName, setBuyerName] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("CREDIT");
   const [transactionId, setTransactionId] = useState("");
@@ -90,6 +111,17 @@ export default function StockOutPage() {
     enabled: Boolean(productId),
   });
 
+  // Query available lots when product is batch-tracked
+  const { data: availableLotsData, isLoading: loadingLots } = useQuery<{ success: boolean; lots: InventoryLot[] }>({
+    queryKey: ["available-lots", productId],
+    queryFn: () => apiFetch<{ success: boolean; lots: InventoryLot[] }>(`/lots/availability/${productId}`),
+    enabled: Boolean(productId),
+  });
+
+  const availableLots = useMemo(() => {
+    return availableLotsData?.lots || [];
+  }, [availableLotsData]);
+
   const products = useMemo(() => {
     if (Array.isArray(productsData)) return productsData;
     return (productsData as any)?.items || [];
@@ -106,6 +138,18 @@ export default function StockOutPage() {
   }, [warehousesData]);
 
   const availableSerials = availableSerialsData?.serials || [];
+
+  const selectedProduct = products.find((p: ProductItem) => p._id === productId);
+
+  // Auto-select FEFO lot (earliest valid non-expired active lot)
+  useEffect(() => {
+    if (selectedProduct?.trackingMode === "BATCH" && availableLots.length > 0) {
+      const fefoCandidate = availableLots.find((l) => !l.isExpired && l.status === "ACTIVE");
+      if (fefoCandidate && !selectedLotId) {
+        setSelectedLotId(fefoCandidate._id);
+      }
+    }
+  }, [selectedProduct, availableLots, selectedLotId]);
 
   // Auto-select primary warehouse if none selected
   useEffect(() => {
@@ -156,7 +200,6 @@ export default function StockOutPage() {
     }));
   }, [warehouses]);
 
-  const selectedProduct = products.find((p: ProductItem) => p._id === productId);
   const serialPolicy = selectedProduct?.serialPolicy || {};
   const requiresSerials = serialPolicy.enableSerial && serialPolicy.requireSerialOnOUT;
 
@@ -188,6 +231,14 @@ export default function StockOutPage() {
       return;
     }
 
+    if (selectedProduct?.trackingMode === "BATCH") {
+      const activeLots = availableLots.filter((l) => !l.isExpired && l.status === "ACTIVE");
+      if (activeLots.length === 0) {
+        setFormError("No active, non-expired lots available in stock for this batch-tracked product. Cannot dispatch.");
+        return;
+      }
+    }
+
     setLoading(true);
     setFormError(null);
 
@@ -199,6 +250,8 @@ export default function StockOutPage() {
           warehouseId: warehouseId || undefined,
           quantity: Number(quantity),
           serialNumbers: selectedSerials,
+          lotId: selectedProduct?.trackingMode === "BATCH" ? (selectedLotId || undefined) : undefined,
+          preferredLotId: selectedProduct?.trackingMode === "BATCH" ? (selectedLotId || undefined) : undefined,
           buyer: buyerName.trim() || undefined,
           condition,
           transaction: {
@@ -214,6 +267,8 @@ export default function StockOutPage() {
       queryClient.invalidateQueries({ queryKey: ["products-list"] });
       queryClient.invalidateQueries({ queryKey: ["items"] });
       queryClient.invalidateQueries({ queryKey: ["available-serials", productId] });
+      queryClient.invalidateQueries({ queryKey: ["available-lots", productId] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-lots"] });
 
       const roleHome = `/dashboard/${
         user?.role === "SUPER_ADMIN" || user?.role === "ADMIN"
@@ -243,7 +298,7 @@ export default function StockOutPage() {
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Step 1: Product & Quantity */}
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
+        <div className="relative z-30 rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
           <h2 className="text-lg font-bold text-white">1. Select Product & Quantity to Dispatch</h2>
 
           <div className="grid gap-4 sm:grid-cols-3">
@@ -302,11 +357,158 @@ export default function StockOutPage() {
               addNewLabel="+ Add New Warehouse"
             />
           </div>
+
+          {/* Tracking Policy Info Banner */}
+          {selectedProduct && (
+            <div className={`rounded-xl border p-4 text-xs ${
+              selectedProduct.trackingMode === "BATCH"
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                : serialPolicy.enableSerial
+                ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+                : "border-white/10 bg-slate-950/60 text-slate-400"
+            }`}>
+              {selectedProduct.trackingMode === "BATCH" ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 font-medium">
+                    <span>🧪 Batch Item with Automated FEFO Allocation:</span>
+                    <span>Earliest expiring batch automatically prioritized to prevent shrinkage.</span>
+                  </div>
+                  <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">
+                    FEFO Active
+                  </span>
+                </div>
+              ) : serialPolicy.enableSerial ? (
+                <div className="flex items-center gap-2 font-medium">
+                  <span>⚡ Enterprise Serial Policy Active:</span>
+                  <span>{requiresSerials ? "Serials REQUIRED on Stock OUT" : "Serials OPTIONAL on Stock OUT"}</span>
+                </div>
+              ) : (
+                <div>Standard inventory item (Dispatched directly from stock ledger).</div>
+              )}
+            </div>
+          )}
         </div>
+
+        {/* Step 2A: FEFO Batch Allocation (If Batch-Tracked) */}
+        {selectedProduct?.trackingMode === "BATCH" && (
+          <div className="relative z-20 rounded-2xl border border-emerald-500/20 bg-slate-900/60 p-6 backdrop-blur-xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span>2. FEFO Batch Allocation</span>
+                  <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-300 border border-emerald-500/30">
+                    First-Expired First-Out
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Select a lot for dispatch or accept the system-recommended earliest expiring batch.
+                </p>
+              </div>
+              {selectedLotId && (
+                <span className="text-xs font-mono font-bold px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Allocated Lot ID: {availableLots.find(l => l._id === selectedLotId)?.lotNumber || "Selected"}
+                </span>
+              )}
+            </div>
+
+            {loadingLots ? (
+              <div className="p-6 text-center text-xs text-slate-400 animate-pulse">
+                Analyzing inventory shelf-life & sorting lots by FEFO...
+              </div>
+            ) : availableLots.length > 0 ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {availableLots.map((lot, idx) => {
+                  const isSelected = selectedLotId === lot._id;
+                  const isBlocked = lot.status === "BLOCKED";
+                  const isExpired = lot.isExpired;
+                  const isNear = lot.isNearExpiry;
+                  const isFefoRecommended = idx === 0 && !isExpired && !isBlocked;
+
+                  return (
+                    <div
+                      key={lot._id}
+                      onClick={() => {
+                        if (!isBlocked && !isExpired) {
+                          setSelectedLotId(lot._id);
+                        }
+                      }}
+                      className={`relative rounded-xl border p-4 transition text-xs ${
+                        isBlocked || isExpired
+                          ? "border-rose-500/20 bg-rose-500/5 opacity-50 cursor-not-allowed"
+                          : isSelected
+                          ? "border-emerald-400 bg-emerald-400/10 cursor-pointer shadow-lg shadow-emerald-500/5"
+                          : "border-white/10 bg-slate-950/70 hover:bg-white/5 cursor-pointer"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-bold text-white">
+                              {lot.lotNumber}
+                            </span>
+                            {isFefoRecommended && (
+                              <span className="rounded bg-emerald-500/30 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200 border border-emerald-400/40">
+                                ⚡ FEFO Recommended
+                              </span>
+                            )}
+                          </div>
+                          {lot.supplierBatchNumber && (
+                            <div className="text-[10px] text-slate-400 mt-0.5">
+                              Supplier Batch: {lot.supplierBatchNumber}
+                            </div>
+                          )}
+                        </div>
+
+                        <input
+                          type="radio"
+                          name="preferredLot"
+                          checked={isSelected}
+                          disabled={isBlocked || isExpired}
+                          onChange={() => setSelectedLotId(lot._id)}
+                          className="h-4 w-4 accent-emerald-400 mt-1 cursor-pointer"
+                        />
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/5 pt-2.5">
+                        <div className="text-[11px] text-slate-300">
+                          Available: <strong className="text-white font-mono">{lot.remainingQty}</strong> units
+                        </div>
+
+                        <div>
+                          {isExpired ? (
+                            <span className="rounded bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-rose-300 border border-rose-500/30">
+                              Expired
+                            </span>
+                          ) : isBlocked ? (
+                            <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                              Quarantined
+                            </span>
+                          ) : isNear ? (
+                            <span className="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300 border border-amber-500/30">
+                              ⚠️ Expiring in {lot.daysUntilExpiry}d ({new Date(lot.expiryDate).toLocaleDateString()})
+                            </span>
+                          ) : (
+                            <span className="rounded bg-white/5 px-2 py-0.5 text-[10px] text-slate-300 border border-white/10">
+                              Expires: {new Date(lot.expiryDate).toLocaleDateString()} ({lot.daysUntilExpiry}d left)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-center text-xs text-rose-300">
+                ⚠️ No active lots found for this product. You cannot dispatch batch-tracked products without active inventory lots.
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Step 2: Available In-Stock Serial Selection */}
         {selectedProduct && serialPolicy.enableSerial && (
-          <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
+          <div className="relative z-20 rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="text-lg font-bold text-white">2. Select In-Stock Serial Numbers</h2>
@@ -421,7 +623,7 @@ export default function StockOutPage() {
         )}
 
         {/* Step 3: Customer / Buyer Metadata */}
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
+        <div className="relative z-10 rounded-2xl border border-white/10 bg-slate-900/40 p-6 backdrop-blur-xl space-y-4">
           <h2 className="text-lg font-bold text-white">3. Buyer & Dispatch Details</h2>
 
           <div className="grid gap-4 sm:grid-cols-2">

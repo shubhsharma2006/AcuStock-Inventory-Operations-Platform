@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, downloadAuthenticatedPdf } from "@/lib/api";
 import { CsvExportButton } from "@/components/CsvExportButton";
+import { POReceiveModal } from "@/components/po-receive-modal";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ const inputStyle: React.CSSProperties = {
 export default function PurchaseOrdersPage() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [poToReceive, setPoToReceive] = useState<PurchaseOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -139,7 +141,7 @@ export default function PurchaseOrdersPage() {
     queryFn: () => apiFetch(`/api/purchase-orders?limit=50${statusFilter ? `&status=${statusFilter}` : ""}`),
   });
 
-  async function handleAction(id: string, action: "approve" | "receive" | "cancel") {
+  async function handleAction(id: string, action: "approve" | "cancel") {
     setActionLoading(id + action);
     try {
       await apiFetch(`/api/purchase-orders/${id}/${action}`, { method: "POST" });
@@ -165,6 +167,14 @@ export default function PurchaseOrdersPage() {
         />
       )}
 
+      {poToReceive && (
+        <POReceiveModal
+          po={poToReceive as any}
+          onClose={() => setPoToReceive(null)}
+          onSuccess={() => queryClient.invalidateQueries({ queryKey: ["purchase-orders"] })}
+        />
+      )}
+
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.25rem", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: "#ecf3ff", marginBottom: 2 }}>Purchase Orders</h1>
@@ -177,8 +187,8 @@ export default function PurchaseOrdersPage() {
             style={{ ...inputStyle, width: "auto", fontSize: 12 }}
           >
             <option value="">All statuses</option>
-            {["draft", "approved", "sent", "received", "cancelled"].map((s) => (
-              <option key={s} value={s}>{s.toUpperCase()}</option>
+            {["draft", "approved", "sent", "partially_received", "received", "cancelled"].map((s) => (
+              <option key={s} value={s}>{s.replace("_", " ").toUpperCase()}</option>
             ))}
           </select>
           <button
@@ -229,8 +239,8 @@ export default function PurchaseOrdersPage() {
                     {po.status === "draft" && (
                       <ActionBtn label="Approve" id={`approve-po-${po._id}`} color="#5498ff" loading={actionLoading === po._id + "approve"} onClick={() => handleAction(po._id, "approve")} />
                     )}
-                    {["approved", "sent"].includes(po.status) && (
-                      <ActionBtn label="Receive" id={`receive-po-${po._id}`} color="#34d399" loading={actionLoading === po._id + "receive"} onClick={() => handleAction(po._id, "receive")} />
+                    {["approved", "sent", "partially_received"].includes(po.status) && (
+                      <ActionBtn label="Receive GRN" id={`receive-po-${po._id}`} color="#34d399" loading={false} onClick={() => setPoToReceive(po)} />
                     )}
                     <ActionBtn
                       label="📄 PO PDF"

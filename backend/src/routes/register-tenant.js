@@ -23,6 +23,7 @@ const jwt      = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const User     = require('../models/User');
 const Tenant   = require('../models/Tenant');
+const { validatePasswordStrength } = require('../utils/passwordValidator');
 const Permission = require('../models/permission');
 const logger   = require('../utils/logger');
 
@@ -111,8 +112,11 @@ router.post('/register-tenant', async (req, res) => {
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         errors.push('A valid email address is required');
       }
-      if (!password || typeof password !== 'string' || password.length < 8) {
-        errors.push('password must be at least 8 characters');
+      if (!password || typeof password !== 'string') {
+        errors.push('Password is required');
+      } else {
+        const pwdErr = validatePasswordStrength(password);
+        if (pwdErr) errors.push(pwdErr);
       }
 
       if (errors.length > 0) {

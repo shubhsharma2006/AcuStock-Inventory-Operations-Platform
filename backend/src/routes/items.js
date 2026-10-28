@@ -13,6 +13,7 @@ const checkPlanLimits = require('../middleware/checkPlanLimits');
 const storageService = require('../services/storage.service');
 const { validateCsvBuffer } = storageService;
 const { logBusinessEvent } = require('../utils/auditHelper');
+const { validateUpload } = require('../middleware/uploadValidation');
 
 const router = express.Router();
 router.use(requireTenantId);
@@ -117,7 +118,7 @@ const handleCsvUpload = (req, res, next) => {
       req.file = (req.files['csvFile'] && req.files['csvFile'][0]) || (req.files['file'] && req.files['file'][0]);
     }
 
-    next();
+    validateUpload(req, res, next);
   });
 };
 
@@ -1244,7 +1245,7 @@ router.delete('/:id/images/:imageId', requireAuth, validateObjectId, requirePerm
  * POST /api/items/images/bulk-import
  * Bulk map external image URLs to items by SKU from CSV/Excel
  */
-router.post('/images/bulk-import', requireAuth, requirePermission('canManageProductImages'), upload.single('file'), async (req, res) => {
+router.post('/images/bulk-import', requireAuth, requirePermission('canManageProductImages'), upload.single('file'), validateUpload, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'CSV or Excel file is required' });

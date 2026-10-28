@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import {
@@ -104,6 +106,9 @@ function LowStockList({ items }: { items: DashboardData["lowStockItems"] }) {
 // ── Main Analytics Page ────────────────────────────────────────
 
 export default function AnalyticsPage() {
+  const params = useParams();
+  const role = (params?.role as string) || "admin";
+
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ["analytics-dashboard"],
     queryFn: () => apiFetch("/api/reports/dashboard"),
@@ -120,14 +125,40 @@ export default function AnalyticsPage() {
   } as const;
 
   return (
-    <main style={{ padding: "1.5rem", maxWidth: 1400 }} className="animate-fade-in">
-      <div style={{ marginBottom: "1.5rem" }}>
-        <h1 style={{ fontSize: 24, fontWeight: 700, color: "#ecf3ff", marginBottom: 4 }}>
-          Analytics
-        </h1>
-        <p style={{ color: "#9bb0cb", fontSize: 14 }}>
-          Real-time inventory insights and trends
-        </p>
+    <main style={{ padding: "1.5rem", maxWidth: 1400 }} className="animate-fade-in space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "#ecf3ff", marginBottom: 4 }}>
+            Analytics
+          </h1>
+          <p style={{ color: "#9bb0cb", fontSize: 14 }}>
+            Real-time inventory insights and trends
+          </p>
+        </div>
+      </div>
+
+      {/* Demand Forecasting & ROP Banner */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-amber-400/30 bg-gradient-to-r from-amber-500/10 via-amber-400/5 to-transparent p-4 backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-400/20 text-xl text-amber-300 border border-amber-400/30">
+            📈
+          </div>
+          <div>
+            <div className="font-semibold text-white text-sm">
+              Statistical Demand Forecasting & Reorder Planning (ROP)
+            </div>
+            <div className="text-xs text-slate-300">
+              Deterministic ROP and 95% service-level safety stocks calculated directly from historical stock ledger outflows.
+            </div>
+          </div>
+        </div>
+        <Link
+          href={`/dashboard/${role}/analytics/forecasting`}
+          className="inline-flex items-center gap-1.5 rounded-xl bg-amber-400 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-300 transition shadow-md shadow-amber-400/20 active:scale-95"
+        >
+          <span>Open Forecasting Engine</span>
+          <span>↗</span>
+        </Link>
       </div>
 
       {/* Stat Cards */}

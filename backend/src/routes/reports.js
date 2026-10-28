@@ -9,30 +9,31 @@ const router = express.Router();
 router.use(requireTenantId);
 
 // ============================================================
-// IN-PROCESS DASHBOARD CACHE
+// DASHBOARD CACHE (Redis with In-Memory Fallback)
 // ============================================================
-// Dashboard endpoints run 10-15 parallel aggregations each call.
-// A 60-second TTL cache eliminates redundant DB work when multiple
-// admins/managers have the dashboard open simultaneously, while still
-// keeping data fresh enough for operational use.
-// Cache is keyed by "<route>:<userId>" so each user gets their own snapshot.
-const _dashCache = new Map(); // key → { data, expiresAt }
-const DASH_TTL_MS = 60 * 1000; // 60 seconds
+const redisService = require('../services/redis.service');
+const DASH_TTL_SECONDS = 60; // 60 seconds
 
-function getCached(key) {
-  const entry = _dashCache.get(key);
-  if (entry && Date.now() < entry.expiresAt) return entry.data;
-  _dashCache.delete(key);
-  return null;
+async function getCached(key) {
+  try {
+    return await redisService.get(`dash:${key}`);
+  } catch {
+    return null;
+  }
 }
-function setCache(key, data) {
-  _dashCache.set(key, { data, expiresAt: Date.now() + DASH_TTL_MS });
+async function setCache(key, data) {
+  try {
+    await redisService.set(`dash:${key}`, data, DASH_TTL_SECONDS);
+  } catch {}
 }
 // Allow routes to manually bust the cache (e.g. after a stock-in/out)
-function bustCache(userId) {
-  for (const key of _dashCache.keys()) {
-    if (!userId || key.includes(String(userId))) _dashCache.delete(key);
-  }
+async function bustCache(userId) {
+  try {
+    if (userId) {
+      await redisService.del(`dash:admin-dashboard:${userId}`);
+      await redisService.del(`dash:manager-dashboard:${userId}`);
+    }
+  } catch {}
 }
 module.exports.bustCache = bustCache;
 
@@ -474,8 +475,10 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const userObjectId = new mongoose.Types.ObjectId(req.userId);
-    const tenantFilter = { tenantId: req.tenantId };
-    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantAggFilter = req.tenantId && mongoose.Types.ObjectId.isValid(req.tenantId)
+      ? { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
+      : {};
 
     // Get own activity counts
     const [totalActivity, todayActivity, productCount] = await Promise.all([
@@ -537,14 +540,16 @@ router.get('/my-dashboard', requireAuth, async (req, res) => {
 const handleAdminDashboard = async (req, res) => {
   // Cache check — serve stale-safe snapshot if available (keyed by tenant and user)
   const cacheKey = `${req.tenantId || 'global'}:admin-dashboard:${req.userId}`;
-  const cached = getCached(cacheKey);
+  const cached = await getCached(cacheKey);
   if (cached) return res.json(cached);
 
   try {
     const Company = require('../models/Company');
     const mongoose = require('mongoose');
-    const tenantFilter = { tenantId: req.tenantId };
-    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantAggFilter = req.tenantId && mongoose.Types.ObjectId.isValid(req.tenantId)
+      ? { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
+      : {};
     
     // Date calculations
     const now = new Date();
@@ -934,7 +939,7 @@ const handleAdminDashboard = async (req, res) => {
       recentActivity: formattedRecentActivity,
       topPerformers
     };
-    setCache(cacheKey, responseData);
+    await setCache(cacheKey, responseData);
     return res.json(responseData);
   } catch (error) {
     console.error('Error fetching admin dashboard:', error);
@@ -955,14 +960,16 @@ router.get('/dashboard-stats', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']
 // ============================================================
 router.get('/kpis', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   const cacheKey = `${req.tenantId || 'global'}:kpis:${req.query.period || '30d'}`;
-  const cached = getCached(cacheKey);
+  const cached = await getCached(cacheKey);
   if (cached) return res.json(cached);
 
   try {
     const PurchaseOrder = require('../models/PurchaseOrder');
     const SalesOrder    = require('../models/SalesOrder');
-    const tenantFilter  = { tenantId: req.tenantId };
-    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const tenantFilter  = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantAggFilter = req.tenantId && mongoose.Types.ObjectId.isValid(req.tenantId)
+      ? { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
+      : {};
 
     // ── Determine dead stock window from period param ──────
     const period = req.query.period || '30d';
@@ -1151,7 +1158,7 @@ router.get('/kpis', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (r
       }
     };
 
-    setCache(cacheKey, kpis);
+    await setCache(cacheKey, kpis);
     res.json(kpis);
   } catch (error) {
     console.error('Error fetching KPIs:', error);
@@ -1253,13 +1260,15 @@ router.get('/user-activity', requireAuth, async (req, res) => {
 router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']), async (req, res) => {
   // Cache check — keyed per-tenant and user so each manager sees their own data
   const cacheKey = `${req.tenantId || 'global'}:manager-dashboard:${req.userId}`;
-  const cached = getCached(cacheKey);
+  const cached = await getCached(cacheKey);
   if (cached) return res.json(cached);
 
   try {
     const Company = require('../models/Company');
-    const tenantFilter = { tenantId: req.tenantId };
-    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantAggFilter = req.tenantId && mongoose.Types.ObjectId.isValid(req.tenantId)
+      ? { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
+      : {};
     
     // Date calculations
     const now = new Date();
@@ -1455,7 +1464,7 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
       lowStockAlerts: lowStockProducts,
       recentActivity: formattedRecentActivity
     };
-    setCache(cacheKey, responseData);
+    await setCache(cacheKey, responseData);
     return res.json(responseData);
   } catch (error) {
     console.error('Error fetching manager dashboard:', error);
@@ -1480,8 +1489,10 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
 router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { type, startDate, endDate, userId } = req.query;
-    const tenantFilter = { tenantId: req.tenantId };
-    const tenantAggFilter = { tenantId: new mongoose.Types.ObjectId(req.tenantId) };
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+    const tenantAggFilter = req.tenantId && mongoose.Types.ObjectId.isValid(req.tenantId)
+      ? { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
+      : {};
 
     if (!['stock-ledger', 'user-activity', 'products'].includes(type)) {
       return res.status(400).json({ message: 'type must be stock-ledger, user-activity, or products' });

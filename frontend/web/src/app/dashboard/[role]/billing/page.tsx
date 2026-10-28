@@ -115,6 +115,24 @@ export default function BillingPage() {
   const tenant = statusData?.tenant;
   const paymentMode = statusData?.paymentMode || "demo";
 
+  // 2b. Fetch Live Quota Usage
+  const { data: usageData } = useQuery<{
+    success: boolean;
+    metrics: {
+      users: { current: number; max: number; percent: number; status: string };
+      items: { current: number; max: number; percent: number; status: string };
+      storage: { currentMb: number; maxMb: number; percent: number; status: string };
+      activeWarehouses: number;
+      activeReservations: number;
+    };
+    quotaStatus: string;
+  }>({
+    queryKey: ["billing-usage"],
+    queryFn: () => apiFetch("/billing/usage"),
+  });
+
+  const metrics = usageData?.metrics;
+
   // 3. Fetch Transaction History Ledger
   const { data: transactionsData, isLoading: loadingTransactions } = useQuery<{ success: boolean; transactions: PaymentTransaction[] }>({
     queryKey: ["billing-transactions"],
@@ -332,17 +350,20 @@ export default function BillingPage() {
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>Team Seats</span>
               <span className="font-semibold text-white">
-                {tenant?.usage?.users || 1} / {tenant?.limits?.maxUsers || 5} seats
+                {metrics ? metrics.users.current : (tenant?.usage?.users || 1)} / {metrics ? metrics.users.max : (tenant?.limits?.maxUsers || 5)} seats
               </span>
             </div>
             <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
               <div
-                className="h-full bg-amber-400 rounded-full"
+                className={`h-full rounded-full transition-all duration-500 ${
+                  metrics?.users.status === "EXCEEDED"
+                    ? "bg-rose-500"
+                    : metrics?.users.status === "WARNING"
+                    ? "bg-amber-400"
+                    : "bg-emerald-400"
+                }`}
                 style={{
-                  width: `${Math.min(
-                    100,
-                    (((tenant?.usage?.users || 1) / (tenant?.limits?.maxUsers || 5)) * 100)
-                  )}%`,
+                  width: `${metrics ? metrics.users.percent : Math.min(100, (((tenant?.usage?.users || 1) / (tenant?.limits?.maxUsers || 5)) * 100))}%`,
                 }}
               />
             </div>
@@ -352,17 +373,20 @@ export default function BillingPage() {
             <div className="flex items-center justify-between text-xs text-slate-400">
               <span>Catalog SKUs</span>
               <span className="font-semibold text-white">
-                {tenant?.usage?.items || 0} / {(tenant?.limits?.maxItems || 100).toLocaleString()} items
+                {metrics ? metrics.items.current : (tenant?.usage?.items || 0)} / {(metrics ? metrics.items.max : (tenant?.limits?.maxItems || 100)).toLocaleString()} items
               </span>
             </div>
             <div className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
               <div
-                className="h-full bg-emerald-400 rounded-full"
+                className={`h-full rounded-full transition-all duration-500 ${
+                  metrics?.items.status === "EXCEEDED"
+                    ? "bg-rose-500"
+                    : metrics?.items.status === "WARNING"
+                    ? "bg-amber-400"
+                    : "bg-emerald-400"
+                }`}
                 style={{
-                  width: `${Math.min(
-                    100,
-                    (((tenant?.usage?.items || 0) / (tenant?.limits?.maxItems || 100)) * 100)
-                  )}%`,
+                  width: `${metrics ? metrics.items.percent : Math.min(100, (((tenant?.usage?.items || 0) / (tenant?.limits?.maxItems || 100)) * 100))}%`,
                 }}
               />
             </div>
@@ -375,7 +399,10 @@ export default function BillingPage() {
                 {(tenant?.limits?.maxStorage || 1024).toLocaleString()} MB provisioned
               </span>
             </div>
-            <p className="mt-2 text-[11px] text-slate-500 truncate">Document vault & audit records</p>
+            <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
+              <span>Warehouses: <strong className="text-white">{metrics?.activeWarehouses ?? 1}</strong></span>
+              <span>Stock Holds: <strong className="text-amber-400">{metrics?.activeReservations ?? 0} active</strong></span>
+            </div>
           </div>
         </div>
       </div>

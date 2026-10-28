@@ -4,6 +4,8 @@ import { useState } from "react";
 import { apiFetch, downloadAuthenticatedPdf } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CreateDeliveryModal } from "@/components/create-delivery-modal";
+import { ShipmentTrackingPanel } from "@/components/shipment-tracking-panel";
+import { TaxInvoiceModal, type TaxInvoiceData } from "@/components/tax-invoice-modal";
 
 type Shipment = {
   _id: string;
@@ -101,6 +103,10 @@ export default function ShipmentsPage() {
   const [receivedBy, setReceivedBy] = useState("");
   const [notes, setNotes] = useState("");
 
+  // Tracking drawer modal
+  const [trackingDrawerOpen, setTrackingDrawerOpen] = useState(false);
+  const [trackingShipment, setTrackingShipment] = useState<Shipment | null>(null);
+
   // Transporter modal
   const [transporterModalOpen, setTransporterModalOpen] = useState(false);
   const [trName, setTrName] = useState("");
@@ -111,6 +117,7 @@ export default function ShipmentsPage() {
   const [trEmail, setTrEmail] = useState("");
   const [trGstin, setTrGstin] = useState("");
   const [trError, setTrError] = useState<string | null>(null);
+  const [invoiceModalData, setInvoiceModalData] = useState<TaxInvoiceData | null>(null);
 
   // Queries
   const { data: shipmentsData, isLoading: loadingShipments } = useQuery<{ shipments: Shipment[] }>({
@@ -528,6 +535,57 @@ export default function ShipmentsPage() {
                             </button>
                             <button
                               type="button"
+                              onClick={() => {
+                                setInvoiceModalData({
+                                  invoiceNumber: `INV-${s.reference || s._id.slice(-6).toUpperCase()}`,
+                                  invoiceDate: s.createdAt ? new Date(s.createdAt).toLocaleDateString() : new Date().toLocaleDateString(),
+                                  company: {
+                                    name: "AcuStock Enterprise Hub",
+                                    gstin: "27AABCU9603R1ZM",
+                                    address: "Plot 42, Logistics Park Central",
+                                    city: "Mumbai",
+                                    state: "Maharashtra",
+                                    pincode: "400001"
+                                  },
+                                  buyer: {
+                                    name: s.customerName || s.companyName || "Commercial Consignee",
+                                    address: s.city ? `${s.city}, ${s.state || ""}` : "Dock Delivery Station",
+                                    city: s.city || "Mumbai",
+                                    state: s.state || "Maharashtra",
+                                    phone: s.phone
+                                  },
+                                  items: [
+                                    {
+                                      description: s.productName || "Industrial Inventory Consignment",
+                                      quantity: s.quantity || 1,
+                                      unitPrice: 1200,
+                                      taxRate: 18,
+                                      uom: "PCS"
+                                    }
+                                  ],
+                                  transportDetails: {
+                                    transporterName: s.transporterName || s.courier || "SafeExpress Logistics",
+                                    vehicleNumber: s.porterDetails?.vehicleNumber || "MH-04-AZ-2026",
+                                    ewayBillNumber: s.courierDetails?.eWayBill || `EWB-${s.reference || "991204"}`
+                                  }
+                                });
+                              }}
+                              className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-400/20"
+                            >
+                              🧾 Invoice
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTrackingShipment(s);
+                                setTrackingDrawerOpen(true);
+                              }}
+                              className="rounded-xl border border-sky-400/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20"
+                            >
+                              📡 Track
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => openUpdateModal(s)}
                               className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/10 hover:text-white"
                             >
@@ -727,6 +785,24 @@ export default function ShipmentsPage() {
         </div>
       )}
 
+      {/* LIVE SHIPMENT TRACKING DRAWER */}
+      {trackingDrawerOpen && trackingShipment && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
+          <div className="w-full max-w-lg rounded-3xl border border-white/15 bg-slate-900 p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <ShipmentTrackingPanel
+              shipmentId={trackingShipment._id}
+              shipmentRef={trackingShipment.reference}
+              carrierType={trackingShipment.carrierType || "OTHER"}
+              awb={trackingShipment.awb}
+              onClose={() => {
+                setTrackingDrawerOpen(false);
+                setTrackingShipment(null);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* CREATE TRANSPORTER MODAL */}
       {transporterModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
@@ -835,6 +911,14 @@ export default function ShipmentsPage() {
             </div>
           </div>
         </div>
+      )}
+      {/* GST Tax Invoice Printable Modal */}
+      {invoiceModalData && (
+        <TaxInvoiceModal
+          isOpen={Boolean(invoiceModalData)}
+          onClose={() => setInvoiceModalData(null)}
+          invoice={invoiceModalData}
+        />
       )}
     </div>
   );

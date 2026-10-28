@@ -157,29 +157,72 @@ To enable 24/7 WhatsApp inventory management, please upgrade your subscription i
   }
 };
 
+const jwt = require('jsonwebtoken');
+const User = require('../../models/User');
+
 /**
  * POST /api/ai/whatsapp/simulate - Developer Simulation Endpoint
  * Allows testing full WhatsApp resolution and agent pipeline locally
  */
 exports.simulateMessage = async (req, res) => {
   try {
-    const { phone, message } = req.body;
+    let { phone, message } = req.body;
 
-    if (!phone || !message) {
+    if (!message || typeof message !== 'string') {
       return res.status(400).json({
         success: false,
-        error: 'Both phone and message are required in body'
+        error: 'Message is required in body'
       });
     }
 
-    const { authenticated, securityContext, user, error } = await phoneResolver.resolveSecurityContext(phone);
+    let authenticated = false;
+    let securityContext = null;
+    let resolvedUser = null;
+    let error = null;
+
+    if (phone && String(phone).trim()) {
+      const resolution = await phoneResolver.resolveSecurityContext(phone);
+      authenticated = resolution.authenticated;
+      securityContext = resolution.securityContext;
+      resolvedUser = resolution.user;
+      error = resolution.error;
+    } else {
+      // Check auth token if phone not supplied in payload
+      const authHeader = req.headers.authorization;
+      const cookieToken = req.cookies?.authToken;
+      const token = cookieToken || (authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : null);
+
+      if (token && process.env.JWT_SECRET) {
+        try {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          const userId = decoded._id || decoded.id || decoded.userId;
+          const userDoc = await User.findById(userId);
+          if (userDoc && userDoc.isActive) {
+            resolvedUser = userDoc;
+            authenticated = true;
+            securityContext = {
+              tenantId: userDoc.tenantId ? String(userDoc.tenantId) : null,
+              userId: userDoc._id,
+              userName: userDoc.name,
+              role: userDoc.role,
+              source: 'whatsapp'
+            };
+            phone = userDoc.phone || '9999999999';
+          }
+        } catch {
+          // Token verification failed or expired
+        }
+      }
+    }
 
     if (!authenticated || !securityContext) {
       return res.status(403).json({
         success: false,
         authenticated: false,
         error: error || 'UNREGISTERED_PHONE',
-        message: `Phone number ${phone} is not linked to any active AcuStock user account.`
+        message: phone
+          ? `Phone number ${phone} is not linked to any active AcuStock user account.`
+          : 'Please provide a registered phone number or log in to simulate WhatsApp assistant queries.'
       });
     }
 
@@ -193,10 +236,11 @@ exports.simulateMessage = async (req, res) => {
       success: true,
       authenticated: true,
       user: {
-        id: user._id,
-        name: user.name,
-        role: user.role,
-        tenantId: securityContext.tenantId
+        id: resolvedUser?._id,
+        name: resolvedUser?.name,
+        role: resolvedUser?.role,
+        tenantId: securityContext.tenantId,
+        phone: phone
       },
       input: message,
       output: botResponse.text,
@@ -210,3 +254,4 @@ exports.simulateMessage = async (req, res) => {
     });
   }
 };
+
