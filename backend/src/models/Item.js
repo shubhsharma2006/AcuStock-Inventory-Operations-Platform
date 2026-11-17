@@ -157,6 +157,51 @@ const itemSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  // Enterprise Inventory Valuation & Costing
+  valuationMethod: {
+    type: String,
+    enum: ['WAC', 'FIFO', 'STANDARD'],
+    default: 'WAC',
+    index: true
+  },
+  currentWAC: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  standardCost: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  baseCurrency: {
+    type: String,
+    default: 'INR',
+    uppercase: true,
+    trim: true
+  },
+  costLayers: [{
+    quantity: { type: Number, required: true, min: 0 },
+    unitCost: { type: Number, required: true, min: 0 },
+    receivedAt: { type: Date, default: Date.now },
+    poId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder' }
+  }],
+  // Kits & Assemblies
+  isKit: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  kitId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Kit',
+    default: null
+  },
+  // Expiry Alert Thresholds (e.g. [30, 60, 90] days before expiry)
+  expiryAlertThresholds: {
+    type: [Number],
+    default: [30, 60, 90]
+  },
   mrp: {
     type: Number
   },

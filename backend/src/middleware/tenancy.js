@@ -46,12 +46,18 @@ function extractTenantSlugFromHost(hostHeader) {
     return RESERVED_SUBDOMAINS.has(sub) ? null : sub;
   }
 
-  // 4. Handle standard multi-level domains (e.g. acme.acustock.com or acme.acustock.local)
-  const parts = hostname.split('.');
-  if (parts.length >= 3) {
-    const candidate = parts[0];
-    if (candidate && !RESERVED_SUBDOMAINS.has(candidate)) {
-      return candidate;
+  // 4. Handle platform root domains (e.g. acme.acustock.com or acme.acustock.local)
+  const isPlatformHost = hostname.endsWith('.acustock.com') ||
+                         hostname.endsWith('.acustock.local') ||
+                         hostname.endsWith('.acustock.in');
+
+  if (isPlatformHost) {
+    const parts = hostname.split('.');
+    if (parts.length >= 3) {
+      const candidate = parts[0];
+      if (candidate && !RESERVED_SUBDOMAINS.has(candidate)) {
+        return candidate;
+      }
     }
   }
 
@@ -71,11 +77,31 @@ async function resolveTenant(req, res, next) {
     delete req.query.tenantId;
   }
 
-  // Extract subdomain if host header is available
-  const hostSubdomain = extractTenantSlugFromHost(req.headers.host || req.hostname);
+  // Extract subdomain or custom domain if host header is available
+  const rawHost = req.headers.host || req.hostname;
+  const hostSubdomain = extractTenantSlugFromHost(rawHost);
   if (hostSubdomain) {
     req.subdomainSlug = hostSubdomain;
     req.isWorkspaceSubdomain = true;
+  }
+
+  // Check if incoming host is a verified Custom Domain
+  const cleanHost = rawHost ? rawHost.split(':')[0].toLowerCase().trim() : null;
+  let customDomainTenant = null;
+  if (cleanHost && !hostSubdomain && !RESERVED_SUBDOMAINS.has(cleanHost) && !/^(\d{1,3}\.){3}\d{1,3}$/.test(cleanHost) && cleanHost !== 'localhost') {
+    try {
+      customDomainTenant = await Tenant.findOne({
+        'customDomain.domain': cleanHost,
+        'customDomain.status': 'VERIFIED',
+        isActive: true
+      });
+      if (customDomainTenant) {
+        req.isCustomDomain = true;
+        req.customDomain = cleanHost;
+      }
+    } catch (e) {
+      logger.error('Error resolving custom domain:', e.message);
+    }
   }
 
   // 1. If already resolved by requireAuth
@@ -95,6 +121,13 @@ async function resolveTenant(req, res, next) {
     } catch (err) {
       logger.error('Error resolving tenant from req.tenantId:', err.message);
     }
+    return next();
+  }
+
+  // If matched via custom domain before auth
+  if (customDomainTenant) {
+    req.tenantId = customDomainTenant._id;
+    req.tenant = customDomainTenant;
     return next();
   }
 

@@ -217,6 +217,29 @@ const PermissionSchema = new mongoose.Schema(
       default: true
     },
 
+    // ===== ENTERPRISE MODULE & SECTION GOVERNANCE =====
+    // Map of moduleId -> 'HIDDEN' | 'READ_ONLY' | 'FULL_ACCESS'
+    moduleAccess: {
+      type: Map,
+      of: String,
+      default: {}
+    },
+    // Array of section IDs (e.g. ['CRM_SALES', 'OPERATIONS_WMS']) disabled for this role
+    disabledSections: {
+      type: [String],
+      default: []
+    },
+    // Redacts purchase costPrice and profit margins for workers
+    maskFinancials: {
+      type: Boolean,
+      default: false
+    },
+    // Data Loss Prevention (DLP) - Disables CSV/XLSX export downloads
+    disableExport: {
+      type: Boolean,
+      default: false
+    },
+
     // Audit
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -247,5 +270,8 @@ PermissionSchema.pre('save', function (next) {
 });
 
 PermissionSchema.index({ tenantId: 1, role: 1 }, { unique: true });
+
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+PermissionSchema.plugin(tenantIsolationPlugin);
 
 module.exports = mongoose.model('Permission', PermissionSchema);

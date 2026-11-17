@@ -1,0 +1,190 @@
+/**
+ * India Geographic Dataset for WMS, Logistics & Statutory Compliance
+ * 28 States, 8 Union Territories, and major industrial/logistics cities per state.
+ */
+
+export const INDIAN_STATES_AND_CITIES: Record<string, string[]> = {
+  "Andhra Pradesh": [
+    "Visakhapatnam",
+    "Vijayawada",
+    "Guntur",
+    "Nellore",
+    "Kurnool",
+    "Tirupati",
+    "Rajahmundry",
+    "Kakinada",
+    "Anantapur",
+    "Kadapa"
+  ],
+  "Arunachal Pradesh": ["Itanagar", "Naharlagun", "Pasighat", "Tawang", "Ziro"],
+  "Assam": ["Guwahati", "Silchar", "Dibrugarh", "Jorhat", "Nagaon", "Tinsukia", "Tezpur", "Bongaigaon"],
+  "Bihar": ["Patna", "Gaya", "Bhagalpur", "Muzaffarpur", "Purnia", "Darbhanga", "Bihar Sharif", "Arrah", "Begusarai"],
+  "Chhattisgarh": ["Raipur", "Bhilai", "Bilaspur", "Korba", "Rajnandgaon", "Durg", "Raigarh"],
+  "Goa": ["Panaji", "Margao", "Vasco da Gama", "Mapusa", "Ponda"],
+  "Gujarat": [
+    "Ahmedabad",
+    "Surat",
+    "Vadodara",
+    "Rajkot",
+    "Bhavnagar",
+    "Jamnagar",
+    "Gandhinagar",
+    "Anand",
+    "Morbi",
+    "Vapi",
+    "Bharuch",
+    "Navsari",
+    "Mehsana"
+  ],
+  "Haryana": [
+    "Gurugram",
+    "Faridabad",
+    "Panipat",
+    "Ambala",
+    "Yamunanagar",
+    "Rohtak",
+    "Hisar",
+    "Karnal",
+    "Sonipat",
+    "Panchkula",
+    "Bahadurgarh"
+  ],
+  "Himachal Pradesh": ["Shimla", "Dharamshala", "Solan", "Mandi", "Baddi", "Kullu", "Una", "Hamirpur"],
+  "Jharkhand": ["Ranchi", "Jamshedpur", "Dhanbad", "Bokaro", "Deoghar", "Hazaribagh", "Giridih"],
+  "Karnataka": [
+    "Bengaluru",
+    "Mysuru",
+    "Hubballi",
+    "Mangaluru",
+    "Belagavi",
+    "Davanagere",
+    "Ballari",
+    "Tumakuru",
+    "Shivamogga",
+    "Bidar",
+    "Hosapete"
+  ],
+  "Kerala": [
+    "Kochi",
+    "Thiruvananthapuram",
+    "Kozhikode",
+    "Thrissur",
+    "Kollam",
+    "Palakkad",
+    "Kannur",
+    "Alappuzha",
+    "Kottayam",
+    "Malappuram"
+  ],
+  "Madhya Pradesh": [
+    "Indore",
+    "Bhopal",
+    "Jabalpur",
+    "Gwalior",
+    "Ujjain",
+    "Sagar",
+    "Dewas",
+    "Satna",
+    "Ratlam",
+    "Rewa",
+    "Pithampur"
+  ],
+  "Maharashtra": [
+    "Mumbai",
+    "Pune",
+    "Nagpur",
+    "Thane",
+    "Nashik",
+    "Aurangabad (Chhatrapati Sambhajinagar)",
+    "Solapur",
+    "Bhiwandi",
+    "Navi Mumbai",
+    "Kolhapur",
+    "Amravati",
+    "Nanded",
+    "Jalgaon",
+    "Akola",
+    "Panvel"
+  ],
+  "Manipur": ["Imphal", "Churachandpur", "Thoubal"],
+  "Meghalaya": ["Shillong", "Tura", "Jowai"],
+  "Mizoram": ["Aizawl", "Lunglei", "Champhai"],
+  "Nagaland": ["Kohima", "Dimapur", "Mokokchung"],
+  "Odisha": ["Bhubaneswar", "Cuttack", "Rourkela", "Berhampur", "Sambalpur", "Puri", "Balasore", "Bhadrak"],
+  "Punjab": ["Ludhiana", "Amritsar", "Jalandhar", "Patiala", "Bathinda", "Mohali", "Pathankot", "Hoshiarpur"],
+  "Rajasthan": [
+    "Jaipur",
+    "Jodhpur",
+    "Kota",
+    "Bikaner",
+    "Ajmer",
+    "Udaipur",
+    "Bhilwara",
+    "Alwar",
+    "Sikar",
+    "Bhiwadi",
+    "Pali"
+  ],
+  "Sikkim": ["Gangtok", "Namchi", "Gyalshing"],
+  "Tamil Nadu": [
+    "Chennai",
+    "Coimbatore",
+    "Madurai",
+    "Tiruchirappalli",
+    "Salem",
+    "Tiruppur",
+    "Erode",
+    "Vellore",
+    "Thoothukudi",
+    "Dindigul",
+    "Hosur",
+    "Kanchipuram"
+  ],
+  "Telangana": ["Hyderabad", "Warangal", "Nizamabad", "Karimnagar", "Ramagundam", "Khammam", "Secunderabad", "Mahbubnagar"],
+  "Tripura": ["Agartala", "Udaipur", "Dharmanagar"],
+  "Uttar Pradesh": [
+    "Noida",
+    "Greater Noida",
+    "Lucknow",
+    "Kanpur",
+    "Ghaziabad",
+    "Agra",
+    "Varanasi",
+    "Meerut",
+    "Prayagraj",
+    "Bareilly",
+    "Aligarh",
+    "Moradabad",
+    "Saharanpur",
+    "Gorakhpur",
+    "Firozabad",
+    "Jhansi"
+  ],
+  "Uttarakhand": ["Dehradun", "Haridwar", "Roorkee", "Haldwani", "Rudrapur", "Rishikesh", "Pantnagar"],
+  "West Bengal": [
+    "Kolkata",
+    "Howrah",
+    "Asansol",
+    "Siliguri",
+    "Durgapur",
+    "Bardhaman",
+    "Kharagpur",
+    "Haldia",
+    "Barasat"
+  ],
+  "Andaman and Nicobar Islands": ["Port Blair"],
+  "Chandigarh": ["Chandigarh"],
+  "Dadra and Nagar Haveli and Daman and Diu": ["Daman", "Diu", "Silvassa"],
+  "Delhi": ["New Delhi", "North Delhi", "South Delhi", "West Delhi", "East Delhi", "Dwarka", "Okhla", "Rohini"],
+  "Jammu and Kashmir": ["Srinagar", "Jammu", "Anantnag", "Baramulla"],
+  "Ladakh": ["Leh", "Kargil"],
+  "Lakshadweep": ["Kavaratti"],
+  "Puducherry": ["Puducherry", "Karaikal", "Yanam", "Mahe"]
+};
+
+export const ALL_INDIAN_STATES = Object.keys(INDIAN_STATES_AND_CITIES).sort();
+
+export const TOP_ALL_INDIAN_CITIES = Array.from(
+  new Set(Object.values(INDIAN_STATES_AND_CITIES).flat())
+).sort();
+

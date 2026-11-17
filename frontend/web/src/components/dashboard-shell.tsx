@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { useState, useEffect, type ReactNode } from "react";
 import { useSession } from "@/hooks/use-session";
+import { useMyModules } from "@/hooks/use-module-permission";
 import { useNotificationsData } from "@/hooks/use-feature-data";
 import { useRealtimeState } from "@/components/realtime-provider";
 import { UserMenu } from "@/components/user-menu";
@@ -51,71 +52,129 @@ const icons = {
   developer:   "M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5",
   backups:     "M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0l-3-3m3 3l3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z",
   reservations:"M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z",
+  scan:        "M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5zM6.75 6.75h.008v.008H6.75V6.75zM6.75 16.5h.008v.008H6.75V16.5zM16.5 6.75h.008v.008H16.5V6.75zM13.5 13.5h.75v.75h-.75V13.5zm3 0h.75v.75h-.75V13.5zm-3 3h.75v.75h-.75V16.5zm3 3h.75v.75h-.75V19.5z",
+  adjustments: "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99",
+  valuation:   "M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  kits:        "M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9",
+  crm:         "M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z",
+  suppliers:   "M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.999-3.199a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z",
   menu:        "M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5",
   close:       "M6 18L18 6M6 6l12 12",
 };
 
 /* ─── Nav item types ────────────────────────────────────────────────────────── */
 
-type NavGroup = {
+type NavItem = {
   label: string;
-  items: { label: string; href: string; icon: string; badge?: number; roles?: Role[] }[];
+  href: string;
+  icon: string;
+  badge?: number;
+  roles?: Role[];
+  readOnly?: boolean;
 };
 
-function buildNavGroups(basePath: string, role: Role, unread: number): NavGroup[] {
+type NavGroup = {
+  sectionId: string;
+  label: string;
+  items: NavItem[];
+};
+
+function extractModuleId(href: string, basePath: string): string {
+  if (href === basePath) return "dashboard";
+  const sub = href.replace(basePath, "").replace(/^\//, "");
+  return sub.split("/")[0] || "dashboard";
+}
+
+function buildNavGroups(
+  basePath: string,
+  role: Role,
+  unread: number,
+  moduleHelper?: ReturnType<typeof useMyModules>
+): NavGroup[] {
   const isAdmin = role === "ADMIN" || role === "SUPER_ADMIN";
   const isManager = role === "MANAGER";
 
-  return [
+  const rawGroups: NavGroup[] = [
     {
-      label: "Overview",
+      sectionId: "INTELLIGENCE",
+      label: "Intelligence & Overview",
       items: [
         { label: "Dashboard", href: basePath, icon: "dashboard" },
-        { label: "Analytics", href: `${basePath}/analytics`, icon: "analytics" },
-        ...(isAdmin || isManager ? [{ label: "Reports Hub", href: `${basePath}/reports`, icon: "analytics" }] : []),
+        { label: "Executive Analytics", href: `${basePath}/analytics`, icon: "analytics" },
+        ...(isAdmin || isManager ? [{ label: "Reports Hub & Aging", href: `${basePath}/reports`, icon: "analytics" }] : []),
+        { label: "Mobile WMS Scanner", href: `${basePath}/scan`, icon: "scan" },
       ],
     },
     {
-      label: "Inventory",
+      sectionId: "OPERATIONS_WMS",
+      label: "Operations & WMS",
       items: [
-        { label: "Products", href: `${basePath}/products`, icon: "products" },
-        { label: "Batches & Lots", href: `${basePath}/lots`, icon: "ledger" },
-        { label: "Cycle Counts & Audits", href: `${basePath}/cycle-counts`, icon: "ledger" },
-        { label: "Reorder Hub", href: `${basePath}/reorder-hub`, icon: "po" },
-        { label: "Stock Holds & Soft Locks", href: `${basePath}/reservations`, icon: "reservations" },
-        { label: "Warehouses", href: `${basePath}/warehouses`, icon: "companies" },
+        { label: "Products & Catalog", href: `${basePath}/products`, icon: "products" },
+        { label: "Warehouses & Bins", href: `${basePath}/warehouses`, icon: "companies" },
+        { label: "Batches, Lots & FEFO", href: `${basePath}/lots`, icon: "ledger" },
         { label: "Stock Transfers", href: `${basePath}/stock-transfers`, icon: "so" },
         { label: "Units of Measure", href: `${basePath}/units`, icon: "products" },
-        { label: "Stock IN", href: `${basePath}/stock-in`, icon: "stockIn" },
-        { label: "Stock OUT", href: `${basePath}/stock-out`, icon: "stockOut" },
-        { label: "Stock Ledger", href: `${basePath}/stock-ledger`, icon: "ledger" },
+        { label: "Stock IN (Receiving)", href: `${basePath}/stock-in`, icon: "stockIn" },
+        { label: "Stock OUT (Picking)", href: `${basePath}/stock-out`, icon: "stockOut" },
+        { label: "Waves & Put-Wall", href: `${basePath}/picking-waves`, icon: "stockOut" },
+      ],
+    },
+    {
+      sectionId: "STOCK_CONTROL",
+      label: "Stock Control & Audit",
+      items: [
+        { label: "Reorder Hub", href: `${basePath}/reorder-hub`, icon: "po" },
+        { label: "Adjustments & Scrap", href: `${basePath}/adjustments`, icon: "adjustments" },
+        { label: "Cycle Counts & Audits", href: `${basePath}/cycle-counts`, icon: "ledger" },
+        { label: "Reconciliation Queue", href: `${basePath}/reconciliation`, icon: "ledger" },
+        { label: "Stock Holds & Soft Locks", href: `${basePath}/reservations`, icon: "reservations" },
+        { label: "Stock Ledger & Chain", href: `${basePath}/stock-ledger`, icon: "ledger" },
         { label: "Remaining Stock", href: `${basePath}/remaining-stock`, icon: "remaining" },
-        { label: "Serial Search & Audit", href: `${basePath}/serials`, icon: "products" },
+        { label: "Serial Traceability", href: `${basePath}/serials`, icon: "products" },
         { label: "Warranty Tracking", href: `${basePath}/warranty`, icon: "privacy" },
       ],
     },
     {
-      label: "Orders & Logistics",
+      sectionId: "CRM_SALES",
+      label: "CRM & Sales Pipeline",
       items: [
-        { label: "Purchase Orders", href: `${basePath}/purchase-orders`, icon: "po" },
+        { label: "Deals & Pipeline", href: `${basePath}/crm`, icon: "crm" },
         { label: "Sales Orders", href: `${basePath}/sales-orders`, icon: "so" },
+        { label: "Invoices & AR", href: `${basePath}/invoices`, icon: "billing" },
         { label: "Shipments & Logistics", href: `${basePath}/shipments`, icon: "po" },
+        { label: "Returns & RMA", href: `${basePath}/rma`, icon: "adjustments" },
+      ],
+    },
+    {
+      sectionId: "PROCUREMENT_MFG",
+      label: "Procurement & Value",
+      items: [
+        { label: "Manufacturing & MRP", href: `${basePath}/manufacturing`, icon: "kits" },
+        { label: "Kits & Assemblies (BOM)", href: `${basePath}/kits`, icon: "kits" },
+        { label: "Supplier Scorecards", href: `${basePath}/suppliers`, icon: "suppliers" },
+        { label: "Valuation & Landed Cost", href: `${basePath}/valuation`, icon: "valuation" },
+        { label: "Purchase Orders", href: `${basePath}/purchase-orders`, icon: "po" },
+        { label: "Vendor Bills & AP", href: `${basePath}/vendor-bills`, icon: "billing" },
+        { label: "General Ledger & P&L", href: `${basePath}/general-ledger`, icon: "billing" },
       ],
     },
     ...(isAdmin || isManager
       ? [
           {
-            label: "Management",
+            sectionId: "MANAGEMENT",
+            label: "Management & Audits",
             items: [
-              ...(isAdmin ? [{ label: "Users", href: `${basePath}/users`, icon: "users" }] : []),
-              ...(isAdmin ? [{ label: "Companies", href: `${basePath}/companies`, icon: "companies" }] : []),
+              ...(isAdmin ? [{ label: "Users & RBAC", href: `${basePath}/users`, icon: "users" }] : []),
+              ...(isAdmin ? [{ label: "Companies & Vendors", href: `${basePath}/companies`, icon: "companies" }] : []),
               ...(isAdmin ? [{ label: "Team Invites", href: `${basePath}/invites`, icon: "users" }] : []),
+              { label: "Import History & Rollback", href: `${basePath}/import-history`, icon: "ledger" },
               { label: "Notifications", href: `${basePath}/notifications`, icon: "notifications", badge: unread > 0 ? unread : undefined },
             ],
           },
         ]
       : [
           {
+            sectionId: "MANAGEMENT",
             label: "Personal",
             items: [
               { label: "Notifications", href: `${basePath}/notifications`, icon: "notifications", badge: unread > 0 ? unread : undefined },
@@ -125,7 +184,8 @@ function buildNavGroups(basePath: string, role: Role, unread: number): NavGroup[
     ...(isAdmin
       ? [
           {
-            label: "System",
+            sectionId: "SYSTEM_GOVERNANCE",
+            label: "System & Governance",
             items: [
               { label: "Developer & API", href: `${basePath}/developer`, icon: "developer" },
               { label: "Backups & Recovery", href: `${basePath}/backups`, icon: "backups" },
@@ -140,23 +200,89 @@ function buildNavGroups(basePath: string, role: Role, unread: number): NavGroup[
         ]
       : [
           {
+            sectionId: "SYSTEM_GOVERNANCE",
             label: "Account",
             items: [{ label: "Settings", href: `${basePath}/settings`, icon: "settings" }],
           },
         ]),
   ];
+
+  // If moduleHelper permissions are loaded, filter dynamically
+  if (!moduleHelper || !moduleHelper.data) {
+    return rawGroups;
+  }
+
+  // SuperAdmin has access to everything
+  if (role === "SUPER_ADMIN") {
+    return rawGroups;
+  }
+
+  return rawGroups
+    .filter((group) => !moduleHelper.disabledSections.includes(group.sectionId))
+    .map((group) => {
+      const filteredItems = group.items
+        .map((item) => {
+          const modId = extractModuleId(item.href, basePath);
+          const isHidden = moduleHelper.isModuleHidden(modId);
+          const isReadOnly = moduleHelper.isModuleReadOnly(modId);
+          return {
+            ...item,
+            _hidden: isHidden,
+            readOnly: isReadOnly,
+          };
+        })
+        .filter((item) => !item._hidden);
+
+      return {
+        ...group,
+        items: filteredItems,
+      };
+    })
+    .filter((group) => group.items.length > 0);
 }
 
 /* ─── Dashboard Shell ───────────────────────────────────────────────────────── */
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user } = useSession();
+  const myModules = useMyModules();
   const { refreshToken, connected } = useRealtimeState();
   const { unreadCount } = useNotificationsData(1, 1, refreshToken);
   const { theme, toggleTheme } = useTheme();
   const { workspace, subdomain } = useWorkspace();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Client-Side Route Protection Guard:
+  // If user visits a bookmarked or direct URL for a disabled module, redirect home with notification.
+  useEffect(() => {
+    if (!user || user.role === "SUPER_ADMIN" || !myModules.data) return;
+
+    const roleSlug =
+      user.role === "SUPER_ADMIN" || user.role === "ADMIN"
+        ? "admin"
+        : user.role.toLowerCase();
+    const basePath = `/dashboard/${roleSlug}`;
+
+    const sub = pathname.replace(basePath, "").replace(/^\//, "");
+    const currentModuleId = sub.split("/")[0] || "dashboard";
+
+    if (currentModuleId && currentModuleId !== "dashboard" && myModules.isModuleHidden(currentModuleId)) {
+      router.replace(basePath);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("acustock:notification", {
+            detail: {
+              title: "Module Access Restricted",
+              message: `The '${currentModuleId}' module is disabled for your account by organizational governance.`,
+              priority: "HIGH",
+            },
+          })
+        );
+      }
+    }
+  }, [pathname, user, myModules, router]);
 
   if (!user) return null;
 
@@ -165,7 +291,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       ? "admin"
       : user.role.toLowerCase();
   const basePath = `/dashboard/${roleSlug}`;
-  const navGroups = buildNavGroups(basePath, user.role, unreadCount);
+  const navGroups = buildNavGroups(basePath, user.role, unreadCount, myModules);
 
   function isActive(href: string) {
     if (href === basePath) return pathname === basePath;
@@ -191,7 +317,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       </div>
 
       {/* Nav groups */}
-      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-2">
+      <nav className="flex-1 min-h-0 space-y-6 overflow-y-auto px-3 py-2 pb-8">
         {navGroups.map((group) => (
           <div key={group.label}>
             <div className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
@@ -213,6 +339,11 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                   >
                     <Icon d={(icons as Record<string, string>)[item.icon] || icons.dashboard} className="h-[18px] w-[18px] shrink-0" />
                     <span className="flex-1 truncate">{item.label}</span>
+                    {item.readOnly ? (
+                      <span className="rounded bg-sky-500/10 border border-sky-500/20 px-1.5 py-0.5 text-[9px] font-mono font-medium text-sky-400">
+                        View Only
+                      </span>
+                    ) : null}
                     {item.badge ? (
                       <span className="rounded-full bg-amber-400/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">
                         {item.badge > 99 ? "99+" : item.badge}
@@ -226,11 +357,21 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         ))}
       </nav>
 
-      {/* Connection indicator */}
-      <div className="border-t border-white/5 px-4 py-3">
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-emerald-400" : "bg-slate-600"}`} />
-          {connected ? "Real-time connected" : "Connecting…"}
+      {/* Connection & Heartbeat status */}
+      <div className="shrink-0 border-t border-white/10 px-4 py-3 bg-slate-950 relative z-20">
+        <div className="flex items-center justify-between text-[11px]">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              {connected && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${connected ? "bg-emerald-400" : "bg-amber-500"}`} />
+            </span>
+            <span className="font-medium text-slate-400">
+              {connected ? "WMS Live Connected" : "Connecting Gateway…"}
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-slate-500">
+            ⌥B Scan
+          </span>
         </div>
       </div>
     </>
@@ -248,7 +389,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 
       {/* Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[260px] flex-col border-r border-white/5 bg-slate-950 transition-transform duration-300 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-full w-[260px] flex-col border-r border-white/5 bg-slate-950 transition-transform duration-300 lg:static lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >

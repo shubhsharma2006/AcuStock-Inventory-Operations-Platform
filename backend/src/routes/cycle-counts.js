@@ -5,10 +5,11 @@ const Item = require('../models/Item');
 const Warehouse = require('../models/Warehouse');
 const StockLedger = require('../models/StockLedger');
 const InventoryLot = require('../models/InventoryLot');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { logBusinessEvent } = require('../utils/auditHelper');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 /**
  * GET /api/cycle-counts

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "name": "acustock-enterprise-suite",
+  "description": "AcuStock Enterprise Cloud ERP, WMS, and CRM Platform",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "sleepApplication": false
+  },
+  "services": {
+    "acustock-backend": {
+      "source": {
+        "repo": "https://github.com/acustock/acustock",
+        "rootDirectory": "backend"
+      },
+      "build": {
+        "builder": "NIXPACKS"
+      },
+      "deploy": {
+        "startCommand": "npm start",
+        "healthcheckPath": "/api/health",
+        "healthcheckTimeout": 100
+      },
+      "variables": {
+        "NODE_ENV": "production",
+        "PORT": "5001",
+        "MONGODB_URI": "${{MongoDB.MONGO_URL}}",
+        "REDIS_URL": "${{Redis.REDIS_URL}}",
+        "JWT_SECRET": "${{secret:acustock_jwt_secret}}",
+        "PAYMENT_MODE": "live"
+      }
+    },
+    "acustock-frontend": {
+      "source": {
+        "repo": "https://github.com/acustock/acustock",
+        "rootDirectory": "frontend/web"
+      },
+      "build": {
+        "builder": "NIXPACKS"
+      },
+      "deploy": {
+        "startCommand": "npm start",
+        "healthcheckPath": "/",
+        "healthcheckTimeout": 100
+      },
+      "variables": {
+        "NODE_ENV": "production",
+        "PORT": "3000",
+        "NEXT_PUBLIC_API_URL": "${{acustock-backend.RAILWAY_PUBLIC_DOMAIN}}/api"
+      }
+    }
+  }
+}
+

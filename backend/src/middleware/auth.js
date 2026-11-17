@@ -18,16 +18,27 @@ const normalizePaginationQuery = (query = {}) => {
 
 /**
  * validateObjectId
- * Middleware: rejects requests where :id is not a valid MongoDB ObjectId.
- * Prevents CastError stack traces from leaking to the client.
- * Usage: router.get('/:id', requireAuth, validateObjectId, handler)
+ * Flexible middleware: supports either direct middleware signature (req, res, next)
+ * or a factory signature validateObjectId('customParamName')
  */
-const validateObjectId = (req, res, next) => {
-  const id = req.params.id || req.params.productId;
+const validateObjectId = (paramOrReq, res, next) => {
+  if (typeof paramOrReq === 'string') {
+    const paramName = paramOrReq;
+    return (req, res, next) => {
+      const id = req.params[paramName];
+      if (id && !isValidObjectIdString(id)) {
+        return res.status(400).json({ success: false, error: `Invalid ${paramName} format` });
+      }
+      next();
+    };
+  }
+
+  const req = paramOrReq;
+  const id = req && req.params ? (req.params.id || req.params.productId) : null;
   if (id && !isValidObjectIdString(id)) {
     return res.status(400).json({ success: false, error: 'Invalid ID format' });
   }
-  next();
+  if (typeof next === 'function') next();
 };
 
 const jwt = require('jsonwebtoken');

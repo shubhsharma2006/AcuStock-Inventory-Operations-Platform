@@ -21,6 +21,7 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
 
   supplier: {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', index: true },
     name:    { type: String, required: true, trim: true },
     email:   { type: String, trim: true },
     phone:   { type: String, trim: true },
@@ -40,8 +41,19 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
 
   totalValue: { type: Number, default: 0 },   // sum of lineTotals
+  currency: { type: String, default: 'INR', uppercase: true, trim: true },
 
   expectedDeliveryDate: Date,
+  actualDeliveryDate: Date,
+
+  // Quality inspection on receipt
+  qualityInspection: {
+    inspectedAt: Date,
+    inspectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    totalUnitsReceived: { type: Number, default: 0 },
+    rejectedUnits: { type: Number, default: 0 },
+    defectNotes: { type: String, trim: true }
+  },
 
   notes: { type: String, trim: true, maxlength: 1000 },
 

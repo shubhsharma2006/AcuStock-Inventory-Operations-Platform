@@ -90,6 +90,39 @@ const UserPermissionSchema = new mongoose.Schema(
     canExportData: { type: Boolean, default: null },
     canViewProductDetails: { type: Boolean, default: null },
 
+    // ===== ENTERPRISE MODULE & SECTION GOVERNANCE OVERRIDES =====
+    // Map of moduleId -> { access: 'HIDDEN' | 'READ_ONLY' | 'FULL_ACCESS', expiresAt: Date, reason: String }
+    moduleOverrides: {
+      type: Map,
+      of: new mongoose.Schema({
+        access: { type: String, enum: ['HIDDEN', 'READ_ONLY', 'FULL_ACCESS'], required: true },
+        expiresAt: { type: Date, default: null }, // null = indefinite
+        reason: { type: String, default: '' },
+        grantedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+      }, { _id: false }),
+      default: () => new Map()
+    },
+    // Map of sectionId -> Boolean (true = enabled, false = disabled)
+    sectionOverrides: {
+      type: Map,
+      of: Boolean,
+      default: () => new Map()
+    },
+    // Optional persona applied to user (e.g. 'WAREHOUSE_PICKER')
+    appliedPersonaId: {
+      type: String,
+      default: null
+    },
+    // Data privacy & DLP overrides (null = inherit from role)
+    maskFinancials: {
+      type: Boolean,
+      default: null
+    },
+    disableExport: {
+      type: Boolean,
+      default: null
+    },
+
     updatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'

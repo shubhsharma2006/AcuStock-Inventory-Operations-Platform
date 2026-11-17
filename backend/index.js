@@ -78,10 +78,19 @@ const gdprRoutes           = require('./src/routes/gdpr');
 const onboardingRoutes     = require('./src/routes/onboarding');
 const purchaseOrderRoutes  = require('./src/routes/purchase-orders');
 const salesOrderRoutes     = require('./src/routes/sales-orders');
+const invoiceRoutes        = require('./src/routes/invoices');
+const creditNoteRoutes     = require('./src/routes/credit-notes');
+const vendorBillRoutes     = require('./src/routes/vendor-bills');
+const portalRoutes         = require('./src/routes/portal');
+const pickingWaveRoutes    = require('./src/routes/picking-waves');
+const generalLedgerRoutes  = require('./src/routes/general-ledger');
+const manufacturingRoutes  = require('./src/routes/manufacturing');
+const crmRoutes            = require('./src/routes/crm');
 const csvExportRoutes      = require('./src/routes/csv-export');
 const billingRoutes        = require('./src/routes/billing');
 const googleAuthRoutes     = require('./src/routes/google-auth');
 const superadminRoutes     = require('./src/routes/superadmin');
+const governanceRoutes     = require('./src/routes/governance');
 const registerTenantRoutes = require('./src/routes/register-tenant');
 const twoFactorRoutes      = require('./src/routes/two-factor');
 const warehouseRoutes      = require('./src/routes/warehouses');
@@ -102,8 +111,21 @@ const sessionRoutes        = require('./src/routes/sessions');
 const backupRoutes         = require('./src/routes/backups');
 const apiKeyRoutes         = require('./src/routes/apiKeys');
 const webhookRoutes        = require('./src/routes/webhooks');
+const ecommerceWebhookRoutes = require('./src/routes/ecommerce-webhooks');
 const reservationRoutes     = require('./src/routes/reservations');
 const docsRoutes            = require('./src/routes/docs');
+const locationsRoutes       = require('./src/routes/locations');
+const adjustmentRoutes      = require('./src/routes/adjustments');
+const valuationRoutes       = require('./src/routes/valuation');
+const suppliersRoutes       = require('./src/routes/suppliers');
+const kitsRoutes            = require('./src/routes/kits');
+const expiryRoutes          = require('./src/routes/expiry');
+const reconciliationRoutes  = require('./src/routes/reconciliation');
+const traceabilityRoutes    = require('./src/routes/traceability');
+const agingRoutes           = require('./src/routes/aging');
+const importHistoryRoutes   = require('./src/routes/import-history');
+const metricsRoutes         = require('./src/routes/metrics');
+const metricsService        = require('./src/services/metrics.service');
 const { aiRouter }         = require('./src/ai');
 const { resolveTenant }    = require('./src/middleware/tenancy');
 const { requireAuth, requireTenantId } = require('./src/middleware/auth');
@@ -144,8 +166,8 @@ app.use(helmet({
   contentSecurityPolicy: IS_PRODUCTION ? {
     directives: {
       defaultSrc:     ["'self'"],
-      scriptSrc:      ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
-      styleSrc:       ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
+      scriptSrc:      ["'self'"],
+      styleSrc:       ["'self'", "'unsafe-inline'"],
       imgSrc:         ["'self'", 'data:', 'blob:'],
       connectSrc:     ["'self'", 'ws:', 'wss:'],       // Socket.IO WebSocket
       fontSrc:        ["'self'", 'data:'],
@@ -222,6 +244,7 @@ global.io = io;
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
+  metricsService.incrementWebSockets();
   if (!IS_PRODUCTION) console.log(`🔌 Client connected: ${socket.id}`);
 
   let authenticatedUser = null;
@@ -290,6 +313,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    metricsService.decrementWebSockets();
     if (!IS_PRODUCTION) console.log(`🔌 Client disconnected: ${socket.id}`);
   });
 });
@@ -337,7 +361,7 @@ if (process.env.REDIS_URL) {
   const { RedisStore } = require('rate-limit-redis');
   const rateLimitRedis = new Redis(process.env.REDIS_URL, {
     maxRetriesPerRequest: 1,
-    enableOfflineQueue: false
+    enableOfflineQueue: true
   });
   rateLimitStore = new RedisStore({
     sendCommand: (...args) => rateLimitRedis.call(...args)
@@ -466,18 +490,13 @@ app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 // INPUT SANITIZATION
 // ============================================================
 
-// #20 — NoSQL injection prevention.
-// express-mongo-sanitize's default middleware tries to reassign req.query,
-// but Express 4 makes req.query a read-only getter — that throws
-// "Cannot set property query of #<IncomingMessage> which has only a getter".
-// We use the library's sanitize() function directly, applying it only to
-// req.body and req.params (both are plain writable objects).
-const { sanitize: _mongoSanitize } = require('express-mongo-sanitize');
-app.use((req, _res, next) => {
-  if (req.body)   req.body   = _mongoSanitize(req.body);
-  if (req.params) req.params = _mongoSanitize(req.params);
-  next();
-});
+// Deep NoSQL operator injection prevention for body, params, and read-only query getters
+const { noSqlSanitizer } = require('./src/middleware/noSqlSanitizer');
+app.use(noSqlSanitizer);
+
+// Universal HTML/XSS input sanitization
+const { xssSanitizer } = require('./src/middleware/xssSanitizer');
+app.use(xssSanitizer);
 
 // #19 — Trim leading/trailing whitespace from all string fields in req.body.
 // Prevents strings like "  admin  " matching where "admin" is expected,
@@ -512,6 +531,8 @@ const mongoOptions = {
 
 const connectWithRetry = async (attempt = 1) => {
   try {
+    // Fail-safe execution timeout: terminates runaway unindexed queries after 5 seconds
+    mongoose.set('maxTimeMS', 5000);
     await mongoose.connect(process.env.MONGODB_URI, mongoOptions);
     logger.info('✅ MongoDB connected');
     logger.info(`📊 Database: ${mongoose.connection.name}`);
@@ -617,6 +638,14 @@ connectWithRetry();
 app.use((req, res, next) => {
   req.requestId = req.headers['x-request-id'] || `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   res.setHeader('x-request-id', req.requestId);
+
+  // Prometheus request latency and count tracking
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    metricsService.recordHttpRequest(req.method, req.route?.path || req.path, res.statusCode, duration);
+  });
+
   next();
 });
 
@@ -634,6 +663,8 @@ const UNGUARDED_PREFIXES = [
   '/api/docs',
   '/api/v1/docs',
   '/api/health',
+  '/api/ready',
+  '/api/metrics',
 ];
 app.use('/api/', (req, res, next) => {
   const path = req.originalUrl.split('?')[0];
@@ -646,111 +677,13 @@ app.use('/api/', (req, res, next) => {
   });
 });
 
-// Routes
-app.use('/api/auth', registerTenantRoutes); // Self-service tenant registration (public)
-app.use('/api/auth', googleAuthRoutes);  // Google OAuth (must be before authRoutes)
-app.use('/api/auth/2fa', twoFactorRoutes); // Two-Factor Authentication (TOTP)
-app.use('/api/auth', authRoutes);
-app.use('/api/audit-logs', (req, res, next) => {
-  req.url = '/audit-logs' + (req.url === '/' ? '' : req.url);
-  authRoutes(req, res, next);
-});
-app.use('/api/superadmin', superadminRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/managers', managerRoutes);
-app.use('/api/companies', companyRoutes);
-app.use('/api/items', itemRoutes);
-app.use('/api/stock', stockRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/reports/scheduled', reportScheduledRoutes);
-app.use('/api/units', unitRoutes);
-app.use('/api/logistics', logisticsRoutes);
-app.use('/api/shipments', shipmentRoutes);
-app.use('/api/tracking', trackingRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/warranty',      warrantyRoutes);
-app.use('/api/setup',         setupRoutes);
-app.use('/api/ownership',     ownershipRoutes);
-app.use('/api/invites',       inviteRoutes);
-app.use('/api/permissions',   permissionRoutes);
-app.use('/api/gdpr',          gdprRoutes);
-app.use('/api/onboarding',    onboardingRoutes);
-app.use('/api/purchase-orders', purchaseOrderRoutes);
-app.use('/api/sales-orders',    salesOrderRoutes);
-app.use('/api/warehouses',      warehouseRoutes);
-app.use('/api/stock-transfers', stockTransferRoutes);
-app.use('/api/billing',         billingRoutes);
-app.use('/api/forecasts',       forecastRoutes);
-app.use('/api/tenants',         tenantRoutes);
-app.use('/api/activity',        activityRoutes);
-app.use('/api/search',          searchRoutes);
-app.use('/api/transporters',    transporterRoutes);
-app.use('/api/lots',            lotRoutes);
-app.use('/api/cycle-counts',    cycleCountRoutes);
-app.use('/api/reorder',         reorderRoutes);
-app.use('/api/packages',        packageRoutes);
-app.use('/api/labels',          labelRoutes);
-app.use('/api/rma',             rmaRoutes);
-app.use('/api/sessions',        sessionRoutes);
-app.use('/api/backups',         backupRoutes);
-app.use('/api/api-keys',        apiKeyRoutes);
-app.use('/api/webhooks',        webhookRoutes);
-app.use('/api/reservations',    reservationRoutes);
-app.use('/api/docs',            docsRoutes);
-app.use('/api/ai',              aiRouter);
-// CSV exports (mounted at root /api so paths like /api/stock/export/csv work)
-app.use('/api', csvExportRoutes);
-
 // ============================================================
-// API VERSIONING (/api/v1/ Aliases)
+// MAINTENANCE MODE (SAP NetWeaver / High-Availability Standard)
 // ============================================================
-const v1Routes = [
-  ['auth', authRoutes],
-  ['users', userRoutes],
-  ['managers', managerRoutes],
-  ['companies', companyRoutes],
-  ['items', itemRoutes],
-  ['stock', stockRoutes],
-  ['dashboard', dashboardRoutes],
-  ['reports', reportRoutes],
-  ['units', unitRoutes],
-  ['logistics', logisticsRoutes],
-  ['shipments', shipmentRoutes],
-  ['tracking', trackingRoutes],
-  ['settings', settingsRoutes],
-  ['notifications', notificationRoutes],
-  ['warranty', warrantyRoutes],
-  ['purchase-orders', purchaseOrderRoutes],
-  ['sales-orders', salesOrderRoutes],
-  ['warehouses', warehouseRoutes],
-  ['stock-transfers', stockTransferRoutes],
-  ['billing', billingRoutes],
-  ['forecasts', forecastRoutes],
-  ['tenants', tenantRoutes],
-  ['activity', activityRoutes],
-  ['search', searchRoutes],
-  ['transporters', transporterRoutes],
-  ['lots', lotRoutes],
-  ['cycle-counts', cycleCountRoutes],
-  ['reorder', reorderRoutes],
-  ['packages', packageRoutes],
-  ['labels', labelRoutes],
-  ['rma', rmaRoutes],
-  ['sessions', sessionRoutes],
-  ['backups', backupRoutes],
-  ['api-keys', apiKeyRoutes],
-  ['webhooks', webhookRoutes],
-  ['reservations', reservationRoutes],
-  ['docs', docsRoutes],
-  ['ai', aiRouter]
-];
-for (const [prefix, handler] of v1Routes) {
-  app.use(`/api/v1/${prefix}`, handler);
-}
+const maintenanceMode = require('./src/middleware/maintenanceMode');
+app.use(maintenanceMode());
 
-// Health check endpoint
+// Health check endpoints (infrastructure endpoints registered before feature routers)
 app.get('/api/health', async (req, res) => {
   const healthcheck = {
     status: 'OK',
@@ -828,6 +761,140 @@ app.get('/api/health/ready', (req, res) => {
     database: ready ? 'connected' : 'disconnected'
   });
 });
+
+// Routes
+app.use('/api/auth', registerTenantRoutes); // Self-service tenant registration (public)
+app.use('/api/auth', googleAuthRoutes);  // Google OAuth (must be before authRoutes)
+app.use('/api/auth/2fa', twoFactorRoutes); // Two-Factor Authentication (TOTP)
+app.use('/api/auth', authRoutes);
+app.use('/api/audit-logs', (req, res, next) => {
+  req.url = '/audit-logs' + (req.url === '/' ? '' : req.url);
+  authRoutes(req, res, next);
+});
+app.use('/api/superadmin', superadminRoutes);
+app.use('/api/superadmin/governance', governanceRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/managers', managerRoutes);
+app.use('/api/companies', companyRoutes);
+app.use('/api/items', itemRoutes);
+app.use('/api/stock', stockRoutes);
+app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/reports', reportRoutes);
+app.use('/api/reports', agingRoutes);
+app.use('/api/reports/scheduled', reportScheduledRoutes);
+app.use('/api/units', unitRoutes);
+app.use('/api/logistics', logisticsRoutes);
+app.use('/api/shipments', shipmentRoutes);
+app.use('/api/tracking', trackingRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/warranty',      warrantyRoutes);
+app.use('/api/setup',         setupRoutes);
+app.use('/api/ownership',     ownershipRoutes);
+app.use('/api/invites',       inviteRoutes);
+app.use('/api/permissions',   permissionRoutes);
+app.use('/api/gdpr',          gdprRoutes);
+app.use('/api/onboarding',    onboardingRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/sales-orders',    salesOrderRoutes);
+app.use('/api/invoices',        invoiceRoutes);
+app.use('/api/credit-notes',    creditNoteRoutes);
+app.use('/api/vendor-bills',    vendorBillRoutes);
+app.use('/api/portal',          portalRoutes);
+app.use('/api/picking-waves',   pickingWaveRoutes);
+app.use('/api/gl',              generalLedgerRoutes);
+app.use('/api/manufacturing',   manufacturingRoutes);
+app.use('/api/crm',             crmRoutes);
+app.use('/api/warehouses',      warehouseRoutes);
+app.use('/api/locations',       locationsRoutes);
+app.use('/api/adjustments',     adjustmentRoutes);
+app.use('/api/valuation',       valuationRoutes);
+app.use('/api/suppliers',       suppliersRoutes);
+app.use('/api/kits',            kitsRoutes);
+app.use('/api/expiry',          expiryRoutes);
+app.use('/api/reconciliation',  reconciliationRoutes);
+app.use('/api/traceability',    traceabilityRoutes);
+app.use('/api/import-history',  importHistoryRoutes);
+app.use('/api/stock-transfers', stockTransferRoutes);
+app.use('/api/billing',         billingRoutes);
+app.use('/api/forecasts',       forecastRoutes);
+app.use('/api/tenants',         tenantRoutes);
+app.use('/api/activity',        activityRoutes);
+app.use('/api/search',          searchRoutes);
+app.use('/api/transporters',    transporterRoutes);
+app.use('/api/lots',            lotRoutes);
+app.use('/api/cycle-counts',    cycleCountRoutes);
+app.use('/api/reorder',         reorderRoutes);
+app.use('/api/packages',        packageRoutes);
+app.use('/api/labels',          labelRoutes);
+app.use('/api/rma',             rmaRoutes);
+app.use('/api/sessions',        sessionRoutes);
+app.use('/api/backups',         backupRoutes);
+app.use('/api/api-keys',        apiKeyRoutes);
+app.use('/api/webhooks',        webhookRoutes);
+app.use('/api/webhooks',        ecommerceWebhookRoutes);
+app.use('/api/reservations',    reservationRoutes);
+app.use('/api/docs',            docsRoutes);
+app.use('/api/metrics',         metricsRoutes);
+app.use('/api/ai',              aiRouter);
+// CSV exports (mounted at root /api so paths like /api/stock/export/csv work)
+app.use('/api', csvExportRoutes);
+
+// ============================================================
+// API VERSIONING (/api/v1/ Aliases)
+// ============================================================
+const v1Routes = [
+  ['auth', authRoutes],
+  ['users', userRoutes],
+  ['managers', managerRoutes],
+  ['companies', companyRoutes],
+  ['items', itemRoutes],
+  ['stock', stockRoutes],
+  ['dashboard', dashboardRoutes],
+  ['reports', reportRoutes],
+  ['units', unitRoutes],
+  ['logistics', logisticsRoutes],
+  ['shipments', shipmentRoutes],
+  ['tracking', trackingRoutes],
+  ['settings', settingsRoutes],
+  ['notifications', notificationRoutes],
+  ['warranty', warrantyRoutes],
+  ['purchase-orders', purchaseOrderRoutes],
+  ['sales-orders', salesOrderRoutes],
+  ['warehouses', warehouseRoutes],
+  ['locations', locationsRoutes],
+  ['adjustments', adjustmentRoutes],
+  ['valuation', valuationRoutes],
+  ['suppliers', suppliersRoutes],
+  ['kits', kitsRoutes],
+  ['expiry', expiryRoutes],
+  ['reconciliation', reconciliationRoutes],
+  ['traceability', traceabilityRoutes],
+  ['import-history', importHistoryRoutes],
+  ['stock-transfers', stockTransferRoutes],
+  ['billing', billingRoutes],
+  ['forecasts', forecastRoutes],
+  ['tenants', tenantRoutes],
+  ['activity', activityRoutes],
+  ['search', searchRoutes],
+  ['transporters', transporterRoutes],
+  ['lots', lotRoutes],
+  ['cycle-counts', cycleCountRoutes],
+  ['reorder', reorderRoutes],
+  ['packages', packageRoutes],
+  ['labels', labelRoutes],
+  ['rma', rmaRoutes],
+  ['sessions', sessionRoutes],
+  ['backups', backupRoutes],
+  ['api-keys', apiKeyRoutes],
+  ['webhooks', webhookRoutes],
+  ['reservations', reservationRoutes],
+  ['docs', docsRoutes],
+  ['ai', aiRouter]
+];
+for (const [prefix, handler] of v1Routes) {
+  app.use(`/api/v1/${prefix}`, handler);
+}
 
 // Serve frontend HTML pages (must come after API routes)
 // Root redirect to modern frontend web dashboard

@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
+import { BinHierarchyExplorer } from "@/components/warehouse/bin-hierarchy-explorer";
+import { TypeaheadInput } from "@/components/ui/typeahead-input";
+import { ALL_INDIAN_STATES, INDIAN_STATES_AND_CITIES, TOP_ALL_INDIAN_CITIES } from "@/lib/india-geo-data";
 
 interface Warehouse {
   _id: string;
@@ -41,11 +44,17 @@ export default function WarehousesPage() {
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedWarehouseForStock, setSelectedWarehouseForStock] = useState<Warehouse | null>(null);
+  const [selectedWarehouseForTopology, setSelectedWarehouseForTopology] = useState<Warehouse | null>(null);
 
-  const { data: warehouses = [], isLoading, error } = useQuery<Warehouse[]>({
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const { data: rawWarehouses = [], isLoading, error } = useQuery<Warehouse[]>({
     queryKey: ["warehouses"],
     queryFn: () => apiFetch("/warehouses"),
   });
+  const warehouses: Warehouse[] = Array.isArray(rawWarehouses)
+    ? rawWarehouses
+    : ((rawWarehouses as any)?.warehouses || (rawWarehouses as any)?.data || []);
 
   const { data: warehouseStock = [], isLoading: isLoadingStock } = useQuery<WarehouseStockItem[]>({
     queryKey: ["warehouse-stock", selectedWarehouseForStock?._id],
@@ -53,28 +62,107 @@ export default function WarehousesPage() {
     enabled: !!selectedWarehouseForStock,
   });
 
+  const filteredWarehouses = warehouses.filter((w) => {
+    if (!searchTerm) return true;
+    const term = searchTerm.toLowerCase();
+    return (
+      w.name.toLowerCase().includes(term) ||
+      w.code.toLowerCase().includes(term) ||
+      w.address?.city?.toLowerCase().includes(term) ||
+      w.address?.state?.toLowerCase().includes(term)
+    );
+  });
+
+  const totalCapacity = warehouses.reduce((sum, w) => sum + (w.capacity || 0), 0);
+  const defaultWarehouse = warehouses.find((w) => w.isDefault) || warehouses[0];
+
   return (
     <div className="space-y-6 p-4 sm:p-6 lg:p-8">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-widest text-amber-400">Multi-Location Engine</div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">Warehouses & Hubs</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Manage multi-location physical inventory, regional distribution hubs, and zone capacities.
-          </p>
+      {/* Header Banner */}
+      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 p-6 backdrop-blur-xl shadow-xl">
+        <div className="absolute -right-10 -top-10 h-44 w-44 rounded-full bg-amber-500/10 blur-3xl pointer-events-none" />
+        <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex rounded-full bg-amber-400/10 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wider text-amber-300 border border-amber-400/20">
+                Multi-Location Engine
+              </span>
+              <span className="text-xs text-slate-400">SAP EWM Standard Storage Locations</span>
+            </div>
+            <h1 className="mt-2 text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+              Warehouses & Distribution Hubs
+            </h1>
+            <p className="mt-1 text-sm text-slate-400 max-w-2xl">
+              Control multi-facility stock distribution, regional fulfillment hubs, zone storage limits, and 6-level bin topology architectures.
+            </p>
+          </div>
+
+          <button
+            id="create-warehouse-btn"
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-amber-400 to-orange-400 px-5 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-400/20 transition hover:from-amber-300 hover:to-orange-300"
+          >
+            <span>+ Add Warehouse Facility</span>
+          </button>
         </div>
-        <button
-          id="create-warehouse-btn"
-          type="button"
-          onClick={() => setShowCreateModal(true)}
-          className="inline-flex items-center gap-2 rounded-2xl bg-amber-400 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/20 transition hover:bg-amber-300"
-        >
-          <span>+ Add Warehouse</span>
-        </button>
+
+        {/* Executive KPI Row */}
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-2xl border border-white/5 bg-slate-950/50 p-4">
+            <div className="text-xs text-slate-400">Active Facilities</div>
+            <div className="mt-1 text-2xl font-extrabold text-white">{warehouses.length}</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">Distribution Hubs</div>
+          </div>
+          <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+            <div className="text-xs text-emerald-300">Primary Hub</div>
+            <div className="mt-1 text-lg font-bold text-emerald-400 truncate">
+              {defaultWarehouse ? defaultWarehouse.name : "None assigned"}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500 font-mono">
+              {defaultWarehouse?.code || "—"}
+            </div>
+          </div>
+          <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+            <div className="text-xs text-sky-300">Total System Capacity</div>
+            <div className="mt-1 text-2xl font-extrabold text-sky-400">
+              {totalCapacity > 0 ? totalCapacity.toLocaleString() : "Uncapped"}
+            </div>
+            <div className="mt-0.5 text-[11px] text-slate-500">Volumetric Units</div>
+          </div>
+          <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+            <div className="text-xs text-indigo-300">Topology Engine</div>
+            <div className="mt-1 text-lg font-bold text-indigo-400">6-Level Granular</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">Aisle → Rack → Shelf → Bin</div>
+          </div>
+        </div>
       </div>
 
-      {isLoading ? <div className="text-slate-400">Loading warehouses…</div> : null}
+      {/* Filter and Search Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-900/50 p-4 backdrop-blur-xl">
+        <div className="relative flex-1 max-w-md">
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search facility name, code, or city…"
+            className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-4 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-amber-400"
+          />
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm("")}
+              className="absolute right-3 top-2 text-xs text-slate-400 hover:text-white"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        <div className="text-xs text-slate-400">
+          Showing <strong className="text-white">{filteredWarehouses.length}</strong> of {warehouses.length} hubs
+        </div>
+      </div>
+
+      {isLoading ? <div className="text-slate-400 py-8 text-center text-sm">Loading warehouses…</div> : null}
       {error ? (
         <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">
           {error instanceof Error ? error.message : "Failed to load warehouses"}
@@ -84,21 +172,23 @@ export default function WarehousesPage() {
       {/* Warehouse Cards Grid */}
       {!isLoading && !error ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {warehouses.map((wh) => (
+          {filteredWarehouses.map((wh) => (
             <div
               key={wh._id}
-              className="relative flex flex-col justify-between rounded-3xl border border-white/10 bg-slate-900/60 p-5 backdrop-blur-xl transition hover:border-amber-400/30"
+              className="relative flex flex-col justify-between rounded-3xl border border-white/10 bg-slate-900/60 p-6 backdrop-blur-xl transition hover:border-amber-400/40 hover:bg-slate-900/80 shadow-lg group"
             >
               <div>
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <h3 className="text-lg font-bold text-white">{wh.name}</h3>
-                    <div className="mt-1 flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-white group-hover:text-amber-300 transition">
+                      {wh.name}
+                    </h3>
+                    <div className="mt-1.5 flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-amber-300 bg-amber-400/10 px-2 py-0.5 rounded-lg border border-amber-400/20">
                         {wh.code}
                       </span>
                       {wh.isDefault ? (
-                        <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">
+                        <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-300 border border-emerald-500/30">
                           Primary Default
                         </span>
                       ) : null}
@@ -106,9 +196,9 @@ export default function WarehousesPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 space-y-1 text-xs text-slate-300">
+                <div className="mt-4 space-y-2 text-xs text-slate-300">
                   {wh.address?.city || wh.address?.state ? (
-                    <div className="flex items-center gap-1.5 text-slate-400">
+                    <div className="flex items-center gap-2 text-slate-400">
                       <span>📍</span>
                       <span>
                         {[wh.address?.street, wh.address?.city, wh.address?.state, wh.address?.zipCode]
@@ -119,35 +209,62 @@ export default function WarehousesPage() {
                   ) : null}
 
                   {wh.contactPerson ? (
-                    <div className="flex items-center gap-1.5 text-slate-400">
+                    <div className="flex items-center gap-2 text-slate-400">
                       <span>👤</span>
                       <span>{wh.contactPerson} {wh.phone ? `(${wh.phone})` : ""}</span>
                     </div>
                   ) : null}
 
                   {wh.capacity ? (
-                    <div className="flex items-center gap-1.5 text-slate-400">
+                    <div className="flex items-center gap-2 text-slate-400">
                       <span>📦</span>
-                      <span>Capacity: {wh.capacity.toLocaleString()} units</span>
+                      <span>Capacity: <strong className="text-white font-mono">{wh.capacity.toLocaleString()}</strong> units</span>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <span>📦</span>
+                      <span>Capacity: Standard Storage Pool</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setSelectedWarehouseForStock(wh)}
-                  className="text-xs font-semibold text-amber-300 hover:text-amber-200 transition"
-                >
-                  View Stock Balances →
-                </button>
-                <span className="text-xs text-slate-500">
+              <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-4 gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedWarehouseForTopology(wh)}
+                    className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 transition flex items-center gap-1.5"
+                  >
+                    <span>🗺️</span>
+                    <span>Bin Topology</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedWarehouseForStock(wh)}
+                    className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-400/20 transition"
+                  >
+                    Stock Balances →
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-500 font-mono">
                   {new Date(wh.createdAt).toLocaleDateString()}
                 </span>
               </div>
             </div>
           ))}
+
+          {filteredWarehouses.length === 0 && warehouses.length > 0 ? (
+            <div className="col-span-full rounded-3xl border border-dashed border-white/10 p-12 text-center text-slate-400">
+              <p className="font-semibold text-white">No facilities match your search criteria</p>
+              <button
+                onClick={() => setSearchTerm("")}
+                className="mt-2 text-xs text-amber-400 hover:underline"
+              >
+                Clear filter
+              </button>
+            </div>
+          ) : null}
 
           {warehouses.length === 0 ? (
             <div className="col-span-full rounded-3xl border border-dashed border-white/10 p-12 text-center text-slate-400">
@@ -157,6 +274,16 @@ export default function WarehousesPage() {
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {/* 6-Level Bin Hierarchy Explorer (SAP EWM Storage Location Standard) */}
+      {selectedWarehouseForTopology ? (
+        <BinHierarchyExplorer
+          warehouseId={selectedWarehouseForTopology._id}
+          warehouseName={selectedWarehouseForTopology.name}
+          warehouseCode={selectedWarehouseForTopology.code}
+          onClose={() => setSelectedWarehouseForTopology(null)}
+        />
       ) : null}
 
       {/* Stock Balances Drilldown Drawer / Modal */}
@@ -241,6 +368,13 @@ function CreateWarehouseModal({ onClose, onCreated }: { onClose: () => void; onC
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
   const [zipCode, setZipCode] = useState("");
+
+  const warehouseCityOptions = useMemo(() => {
+    if (state && INDIAN_STATES_AND_CITIES[state]) {
+      return INDIAN_STATES_AND_CITIES[state];
+    }
+    return TOP_ALL_INDIAN_CITIES;
+  }, [state]);
   const [contactPerson, setContactPerson] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -331,37 +465,38 @@ function CreateWarehouseModal({ onClose, onCreated }: { onClose: () => void; onC
             </div>
           </div>
 
+          <div>
+            <label className="block text-xs font-medium text-slate-300 mb-1">Street Address</label>
+            <input
+              value={street}
+              onChange={(e) => setStreet(e.target.value)}
+              placeholder="Plot 45, MIDC Phase 2"
+              className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
+            />
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">Street Address</label>
-              <input
-                value={street}
-                onChange={(e) => setStreet(e.target.value)}
-                placeholder="Plot 45, MIDC Phase 2"
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
+              <TypeaheadInput
+                label="State"
+                value={state}
+                onChange={(val) => setState(val)}
+                options={ALL_INDIAN_STATES}
+                placeholder="Type or select State…"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">City</label>
-              <input
+              <TypeaheadInput
+                label="City"
                 value={city}
-                onChange={(e) => setCity(e.target.value)}
-                placeholder="Pune"
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
+                onChange={(val) => setCity(val)}
+                options={warehouseCityOptions}
+                placeholder="Type or select City…"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">State</label>
-              <input
-                value={state}
-                onChange={(e) => setState(e.target.value)}
-                placeholder="Maharashtra"
-                className="w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:border-amber-400"
-              />
-            </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">PIN / Zip Code</label>
               <input

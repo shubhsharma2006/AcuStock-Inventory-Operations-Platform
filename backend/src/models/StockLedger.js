@@ -15,6 +15,12 @@ const stockLedgerSchema = new mongoose.Schema({
     ref: 'Warehouse',
     index: true
   },
+  locationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'WarehouseLocation',
+    index: true,
+    default: null
+  },
   transferId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'StockTransfer',
@@ -34,6 +40,25 @@ const stockLedgerSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxlength: 200
+  },
+  reasonCode: {
+    type: String,
+    enum: [
+      'NONE',
+      'DAMAGE',
+      'SCRAP',
+      'THEFT',
+      'WRITE_OFF',
+      'FOUND',
+      'RECLASSIFICATION',
+      'EXPIRED',
+      'QC_REJECTION',
+      'CYCLE_COUNT',
+      'CORRECTION',
+      'OTHER'
+    ],
+    default: 'NONE',
+    index: true
   },
   quantity: {
     type: Number,

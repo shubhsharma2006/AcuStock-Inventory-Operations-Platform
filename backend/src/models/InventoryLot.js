@@ -14,6 +14,17 @@ const inventoryLotSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  warehouseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Warehouse',
+    index: true
+  },
+  locationId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'WarehouseLocation',
+    index: true,
+    default: null
+  },
   initialQty: {
     type: Number,
     required: true,

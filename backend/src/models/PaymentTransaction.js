@@ -85,4 +85,7 @@ paymentTransactionSchema.index(
   { unique: true, partialFilterExpression: { webhookEventId: { $type: 'string' } } }
 );
 
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+paymentTransactionSchema.plugin(tenantIsolationPlugin);
+
 module.exports = mongoose.model('PaymentTransaction', paymentTransactionSchema);

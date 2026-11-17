@@ -273,10 +273,71 @@ async function handleProductByUser(req, res) {
 // GET /api/reports/stock-movement - Get stock movement data (Admin only)
 router.get('/stock-movement', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
-    const stockMovements = await StockLedger.aggregate([
+    const tenantObjId = new mongoose.Types.ObjectId(req.tenantId);
+
+    // 1. Group movements by product
+    const productAgg = await StockLedger.aggregate([
+      { $match: { tenantId: tenantObjId, isDeleted: { $ne: true } } },
       {
-        $match: { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
-      },
+        $group: {
+          _id: '$productId',
+          totalIn: {
+            $sum: {
+              $cond: [{ $in: ['$type', ['IN', 'TRANSFER_IN', 'ADJUSTMENT_IN']] }, '$quantity', 0]
+            }
+          },
+          totalOut: {
+            $sum: {
+              $cond: [{ $in: ['$type', ['OUT', 'TRANSFER_OUT', 'ADJUSTMENT_OUT']] }, '$quantity', 0]
+            }
+          },
+          transactionCount: { $sum: 1 },
+          lastMovementDate: { $max: '$createdAt' }
+        }
+      }
+    ]);
+
+    const moveMap = new Map(productAgg.map(p => [p._id ? p._id.toString() : '', p]));
+
+    // 2. Fetch catalog items for this tenant
+    const items = await Item.find({ tenantId: req.tenantId, isDeleted: { $ne: true } })
+      .select('name sku shortName category currentStock lowStockThreshold salesPrice purchasePrice')
+      .lean();
+
+    const movement = items.map(item => {
+      const stats = moveMap.get(item._id.toString()) || { totalIn: 0, totalOut: 0, transactionCount: 0 };
+      const totalIn = stats.totalIn || 0;
+      const totalOut = stats.totalOut || 0;
+      const netChange = totalIn - totalOut;
+      const totalOps = totalIn + totalOut;
+
+      let velocityGrade = 'STAGNANT';
+      if (totalOps >= 50) velocityGrade = 'VERY_HIGH';
+      else if (totalOps >= 20) velocityGrade = 'HIGH';
+      else if (totalOps > 0) velocityGrade = 'MODERATE';
+
+      return {
+        productId: item._id,
+        productName: item.name || item.shortName || 'Unnamed Product',
+        sku: item.sku || item.shortName || '—',
+        category: item.category || 'General',
+        currentStock: item.currentStock ?? Math.max(0, netChange),
+        lowStockThreshold: item.lowStockThreshold ?? 10,
+        totalIn,
+        totalOut,
+        netChange,
+        totalOps,
+        velocityGrade,
+        lastMovementDate: stats.lastMovementDate || null
+      };
+    });
+
+    // Sort by totalOps descending, then name
+    movement.sort((a, b) => (b.totalOps - a.totalOps) || a.productName.localeCompare(b.productName));
+
+    // 3. Timeline aggregation for backwards-compatibility and time-series trends
+    const timeline = await StockLedger.aggregate([
+      { $match: { tenantId: tenantObjId, isDeleted: { $ne: true } } },
       {
         $group: {
           _id: {
@@ -289,18 +350,21 @@ router.get('/stock-movement', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN'])
         }
       },
       {
-        $sort: {
-          '_id.year': 1,
-          '_id.month': 1,
-          '_id.day': 1
-        }
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
       }
     ]);
 
-    res.json(stockMovements);
+    res.json({
+      success: true,
+      movement,
+      timeline,
+      totalCatalogItems: items.length,
+      totalInSum: movement.reduce((acc, m) => acc + m.totalIn, 0),
+      totalOutSum: movement.reduce((acc, m) => acc + m.totalOut, 0)
+    });
   } catch (error) {
     console.error('Error fetching stock movement data:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ success: false, message: 'Server error' });
   }
 });
 
@@ -1488,14 +1552,15 @@ router.get('/manager-dashboard', requireAuth, requireRole(['MANAGER', 'ADMIN']),
  */
 router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
-    const { type, startDate, endDate, userId } = req.query;
+    const { type, startDate, endDate, userId, format } = req.query;
     const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
     const tenantAggFilter = req.tenantId && mongoose.Types.ObjectId.isValid(req.tenantId)
       ? { tenantId: new mongoose.Types.ObjectId(req.tenantId) }
       : {};
 
-    if (!['stock-ledger', 'user-activity', 'products'].includes(type)) {
-      return res.status(400).json({ message: 'type must be stock-ledger, user-activity, or products' });
+    const allowedTypes = ['stock-ledger', 'user-activity', 'products', 'low-stock'];
+    if (!allowedTypes.includes(type)) {
+      return res.status(400).json({ message: `type must be one of: ${allowedTypes.join(', ')}` });
     }
 
     // Escape a single CSV cell
@@ -1598,6 +1663,44 @@ router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async 
       ]));
     }
 
+    // ── low-stock ──────────────────────────────────────────────
+    if (type === 'low-stock') {
+      const items = await Item.find({ ...tenantFilter, isDeleted: { $ne: true } })
+        .select('name sku shortName category currentStock lowStockThreshold salesPrice')
+        .sort({ currentStock: 1 })
+        .lean();
+      const lowItems = items.filter(i => (i.currentStock ?? 0) <= (i.lowStockThreshold ?? 10));
+      headers = ['Product Name', 'SKU', 'Category', 'Current Stock', 'Low Stock Threshold', 'Status', 'Sales Price'];
+      rows = lowItems.map(i => csvRow([
+        i.name || i.shortName,
+        i.sku || '—',
+        i.category || 'General',
+        i.currentStock ?? 0,
+        i.lowStockThreshold ?? 10,
+        (i.currentStock ?? 0) === 0 ? 'OUT_OF_STOCK' : 'CRITICAL_LOW',
+        i.salesPrice ?? 0
+      ]));
+    }
+
+    if (format === 'json') {
+      const parsedData = rows.map(r => {
+        const parts = r.split(',');
+        const obj = {};
+        headers.forEach((h, idx) => {
+          obj[h] = parts[idx] ? parts[idx].replace(/^"|"$/g, '') : '';
+        });
+        return obj;
+      });
+      return res.json({
+        success: true,
+        type,
+        count: parsedData.length,
+        exportedAt: new Date().toISOString(),
+        headers,
+        data: parsedData
+      });
+    }
+
     const filename = `acustock-${type}-${new Date().toISOString().slice(0, 10)}.csv`;
     const csv = [csvRow(headers), ...rows].join('\r\n');
 
@@ -1607,6 +1710,152 @@ router.get('/export', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async 
   } catch (error) {
     console.error('CSV export error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ============================================================
+// TALLY PRIME & ZOHO BOOKS XML DATA BRIDGE
+// GET /api/reports/tally-xml
+// Query: exportType = 'vouchers' | 'masters' | 'both', startDate, endDate
+// ============================================================
+router.get('/tally-xml', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const { exportType = 'vouchers', startDate, endDate } = req.query;
+    const tenantFilter = req.tenantId ? { tenantId: req.tenantId } : {};
+
+    // Helper to format Date for Tally: YYYYMMDD
+    const tallyDate = (d) => {
+      const dt = d ? new Date(d) : new Date();
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const day = String(dt.getDate()).padStart(2, '0');
+      return `${y}${m}${day}`;
+    };
+
+    // Helper to escape XML special chars
+    const escapeXml = (unsafe) => {
+      if (unsafe === null || unsafe === undefined) return '';
+      return String(unsafe)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    };
+
+    let xmlMessages = [];
+
+    // 1. Export Masters if requested
+    if (exportType === 'masters' || exportType === 'both') {
+      const items = await Item.find(tenantFilter).lean();
+      for (const item of items) {
+        const name = escapeXml(item.name || item.shortName || 'Inventory Item');
+        const sku = escapeXml(item.sku || '');
+        const uom = escapeXml(item.uom || 'PCS');
+        const hsn = escapeXml(item.hsn || '');
+        const openQty = item.openingStock || item.currentStock || 0;
+        const rate = item.costPrice || item.purchasePrice || item.price || 0;
+        const value = Math.round(openQty * rate);
+
+        xmlMessages.push(`
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <STOCKITEM NAME="${name}" ACTION="Create">
+        <NAME>${name}</NAME>
+        <PARTNO>${sku}</PARTNO>
+        <BASEUNITS>${uom}</BASEUNITS>
+        <GSTAPPLICABLE>&#4; Applicable</GSTAPPLICABLE>
+        ${hsn ? `<HSNDETAILS><HSNCODE>${hsn}</HSNCODE></HSNDETAILS>` : ''}
+        <OPENINGBALANCE>${openQty} ${uom}</OPENINGBALANCE>
+        <OPENINGRATE>${rate}</OPENINGRATE>
+        <OPENINGVALUE>${value}</OPENINGVALUE>
+      </STOCKITEM>
+    </TALLYMESSAGE>`);
+      }
+    }
+
+    // 2. Export Vouchers if requested
+    if (exportType === 'vouchers' || exportType === 'both') {
+      const match = { ...tenantFilter };
+      if (startDate) match.createdAt = { $gte: new Date(startDate) };
+      if (endDate) match.createdAt = { ...(match.createdAt || {}), $lte: new Date(endDate + 'T23:59:59.999Z') };
+
+      const entries = await StockLedger.find(match)
+        .populate('productId', 'name sku uom hsn costPrice salesPrice')
+        .populate('warehouseId', 'name code')
+        .populate('createdBy', 'name')
+        .sort({ createdAt: 1 })
+        .limit(5000)
+        .lean();
+
+      for (const entry of entries) {
+        const isReceipt = entry.type === 'IN';
+        const vchType = isReceipt ? 'Receipt Note' : 'Delivery Note';
+        const dateStr = tallyDate(entry.createdAt);
+        const vchNum = escapeXml(entry.reference || `ACU-${entry._id.toString().slice(-6).toUpperCase()}`);
+        const party = escapeXml(entry.supplier || entry.customerName || (isReceipt ? 'Sundry Creditor' : 'Cash / Sundry Debtor'));
+        const itemName = escapeXml(entry.productId?.name || 'Stock Item');
+        const uom = escapeXml(entry.productId?.uom || 'PCS');
+        const qty = Math.abs(entry.quantity || 1);
+        const rate = isReceipt
+          ? (entry.productId?.costPrice || 100)
+          : (entry.productId?.salesPrice || entry.productId?.costPrice || 100);
+        const amount = Math.round(qty * rate);
+        const godown = escapeXml(entry.warehouseId?.name || 'Main Warehouse');
+        const batchName = escapeXml(entry.lotNumber || 'Primary Lot');
+
+        xmlMessages.push(`
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <VOUCHER VCHTYPE="${vchType}" ACTION="Create">
+        <DATE>${dateStr}</DATE>
+        <VOUCHERTYPENAME>${vchType}</VOUCHERTYPENAME>
+        <VOUCHERNUMBER>${vchNum}</VOUCHERNUMBER>
+        <PARTYNAME>${party}</PARTYNAME>
+        <NARRATION>AcuStock Ledger Move: ${escapeXml(entry.notes || entry.type)} by ${escapeXml(entry.createdBy?.name || 'Admin')}</NARRATION>
+        <ALLINVENTORYENTRIES.LIST>
+          <STOCKITEMNAME>${itemName}</STOCKITEMNAME>
+          <RATE>${rate}/${uom}</RATE>
+          <AMOUNT>${isReceipt ? -amount : amount}</AMOUNT>
+          <ACTUALQTY>${qty} ${uom}</ACTUALQTY>
+          <BILLEDQTY>${qty} ${uom}</BILLEDQTY>
+          <BATCHALLOCATIONS.LIST>
+            <GODOWNNAME>${godown}</GODOWNNAME>
+            <BATCHNAME>${batchName}</BATCHNAME>
+            <AMOUNT>${isReceipt ? -amount : amount}</AMOUNT>
+            <ACTUALQTY>${qty} ${uom}</ACTUALQTY>
+            <BILLEDQTY>${qty} ${uom}</BILLEDQTY>
+          </BATCHALLOCATIONS.LIST>
+        </ALLINVENTORYENTRIES.LIST>
+      </VOUCHER>
+    </TALLYMESSAGE>`);
+      }
+    }
+
+    const tallyEnvelope = `<?xml version="1.0" encoding="UTF-8"?>
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>AcuStock Enterprise</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>${xmlMessages.join('')}
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+
+    const fileName = `tally-prime-${exportType}-${new Date().toISOString().slice(0, 10)}.xml`;
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.send(tallyEnvelope);
+  } catch (err) {
+    console.error('Tally XML export error:', err);
+    res.status(500).json({ message: 'Failed to generate Tally XML', error: err.message });
   }
 });
 

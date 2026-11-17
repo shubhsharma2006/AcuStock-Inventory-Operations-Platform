@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
-const { requireAuth, requireRole, requireTenantId, checkForcePasswordReset } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, checkForcePasswordReset, validateObjectId } = require('../middleware/auth');
 const { validateRequest, schemas } = require('../middleware/validateRequest');
 const { sendPasswordResetEmail } = require('../services/email.service');
 const { notify } = require('../services/notificationHelper');
@@ -802,17 +802,25 @@ router.post('/change-password', requireAuth, async (req, res) => {
 // POST /api/auth/forgot-password - Request password reset
 router.post('/forgot-password', async (req, res) => {
   try {
-    const { identifier, role } = req.body;
+    const { identifier, role, tenantSlug } = req.body;
     
     if (!identifier || !role) {
       return res.status(400).json({ message: 'Identifier and role are required' });
     }
+
+    let resolvedTenantId = req.tenantId || null;
+    if (!resolvedTenantId && tenantSlug && typeof tenantSlug === 'string') {
+      const Tenant = require('../models/Tenant');
+      const tenantDoc = await Tenant.findOne({ slug: tenantSlug.trim().toLowerCase(), isActive: true }).select('_id');
+      if (tenantDoc) resolvedTenantId = tenantDoc._id;
+    }
     
     let user;
+    const baseQuery = resolvedTenantId ? { tenantId: resolvedTenantId } : {};
     if (role === 'USER') {
-      user = await User.findOne({ phone: identifier, role: 'USER' });
+      user = await User.findOne({ ...baseQuery, phone: identifier, role: 'USER' });
     } else {
-      user = await User.findOne({ email: identifier.toLowerCase(), role });
+      user = await User.findOne({ ...baseQuery, email: identifier.toLowerCase(), role });
     }
     
     // Always return success to prevent user enumeration
@@ -842,6 +850,7 @@ router.post('/forgot-password', async (req, res) => {
       targetUser: user._id,
       targetUserName: user.name,
       targetUserRole: user.role,
+      tenantId: user.tenantId || resolvedTenantId || undefined,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent'),
       severity: 'WARNING'
@@ -997,11 +1006,11 @@ router.post('/verify-reset-token', async (req, res) => {
 // ============================================================
 
 // GET /api/auth/audit-logs - Get password-related audit logs
-router.get('/audit-logs', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+router.get('/audit-logs', requireAuth, requireTenantId, requireRole(['ADMIN']), async (req, res) => {
   try {
     const { action, userId, page = 1, limit = 50 } = req.query;
     
-    const query = {};
+    const query = { tenantId: req.tenantId };
     
     // Filter by specific action types
     if (action) {
@@ -1050,11 +1059,38 @@ router.get('/audit-logs', requireAuth, requireRole(['ADMIN']), async (req, res) 
   }
 });
 
+// GET /api/auth/audit-logs/verify-integrity - Mathematically verify cryptographic Merkle chain
+router.get('/audit-logs/verify-integrity', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const { verifyTenantAuditChain } = require('../services/auditIntegrity.service');
+    const verification = await verifyTenantAuditChain(req.tenantId);
+
+    if (!verification.valid) {
+      logger.warn(`[AUDIT_INTEGRITY] Tamper detected for tenant ${req.tenantId}: ${verification.reason}`);
+      return res.status(409).json({
+        success: false,
+        status: 'TAMPER_DETECTED',
+        ...verification
+      });
+    }
+
+    res.json({
+      success: true,
+      status: 'VERIFIED',
+      ...verification
+    });
+  } catch (error) {
+    logger.error('Audit chain verification error:', error);
+    res.status(500).json({ success: false, message: 'Failed to verify audit log integrity' });
+  }
+});
+
 // GET /api/auth/audit-logs/user/:userId - Get audit logs for specific user
-router.get('/audit-logs/user/:userId', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+router.get('/audit-logs/user/:userId', requireAuth, requireTenantId, validateObjectId, requireRole(['ADMIN']), async (req, res) => {
   try {
     const logs = await AuditLog.find({ 
-      targetUser: req.params.userId 
+      targetUser: req.params.userId,
+      tenantId: req.tenantId
     })
       .sort({ createdAt: -1 })
       .limit(100)
@@ -1065,6 +1101,156 @@ router.get('/audit-logs/user/:userId', requireAuth, requireRole(['ADMIN']), asyn
   } catch (error) {
     logger.error('Fetch user audit logs error:', error);
     res.status(500).json({ message: 'Failed to fetch audit logs' });
+  }
+});
+
+// ============================================================
+// ENTERPRISE SAML 2.0 / SSO ROUTES (Item 1.2)
+// ============================================================
+
+const samlService = require('../services/saml.service');
+const Tenant = require('../models/Tenant');
+
+/**
+ * GET /api/auth/sso/lookup
+ * Checks whether an email address domain has an enterprise SSO configuration
+ */
+router.get('/sso/lookup', async (req, res) => {
+  try {
+    const email = (req.query.email || '').trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ success: false, error: 'Valid email is required.' });
+    }
+
+    const domain = email.split('@')[1];
+    const tenant = await Tenant.findOne({
+      'sso.enabled': true,
+      'sso.domainPatterns': domain,
+      isActive: true
+    });
+
+    if (!tenant) {
+      return res.json({
+        success: true,
+        ssoAvailable: false
+      });
+    }
+
+    res.json({
+      success: true,
+      ssoAvailable: true,
+      enforced: !!tenant.sso.enforced,
+      tenantSlug: tenant.slug,
+      tenantName: tenant.name
+    });
+  } catch (error) {
+    logger.error('SSO lookup error:', error);
+    res.status(500).json({ success: false, error: 'Failed to perform SSO lookup.' });
+  }
+});
+
+/**
+ * GET /api/auth/sso/metadata/:tenantSlug
+ * Returns Service Provider SAML Metadata XML for enterprise IdP import
+ */
+router.get('/sso/metadata/:tenantSlug', async (req, res) => {
+  try {
+    const slug = req.params.tenantSlug.toLowerCase().trim();
+    const xml = samlService.generateSpMetadataXml(slug);
+    res.setHeader('Content-Type', 'application/xml');
+    res.send(xml);
+  } catch (error) {
+    logger.error('SSO metadata generation error:', error);
+    res.status(500).send('Error generating SAML metadata');
+  }
+});
+
+/**
+ * GET /api/auth/sso/login/:tenantSlug
+ * Initiates SP-initiated SAML flow and redirects user to IdP SSO URL
+ */
+router.get('/sso/login/:tenantSlug', async (req, res) => {
+  try {
+    const slug = req.params.tenantSlug.toLowerCase().trim();
+    const tenant = await Tenant.findOne({ slug, isActive: true });
+
+    if (!tenant || !tenant.sso?.enabled) {
+      return res.status(404).json({ success: false, error: `SSO is not enabled for workspace "${slug}".` });
+    }
+
+    const relayState = req.query.redirect || '/';
+    const { redirectUrl } = samlService.createAuthnRequestUrl(tenant, relayState);
+
+    res.redirect(redirectUrl);
+  } catch (error) {
+    logger.error('SSO login redirect error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Failed to initiate SSO login.' });
+  }
+});
+
+/**
+ * POST /api/auth/sso/callback/:tenantSlug
+ * Assertion Consumer Service (ACS) endpoint consuming SAMLResponse from IdP
+ */
+router.post('/sso/callback/:tenantSlug', async (req, res) => {
+  try {
+    const slug = req.params.tenantSlug.toLowerCase().trim();
+    const tenant = await Tenant.findOne({ slug, isActive: true });
+
+    if (!tenant || !tenant.sso?.enabled) {
+      return res.status(404).send('Tenant not found or SSO disabled.');
+    }
+
+    const samlResponseBase64 = req.body.SAMLResponse;
+    const claims = samlService.parseAndValidateSamlResponse(samlResponseBase64, tenant);
+    const { user, isNew } = await samlService.provisionOrUpdateSamlUser(claims, tenant);
+
+    // Audit log
+    await AuditLog.logEvent({
+      action: isNew ? 'ACCOUNT_CREATED' : 'LOGIN_SUCCESS',
+      performedBy: user._id,
+      performedByName: user.name,
+      performedByRole: user.role,
+      targetUser: user._id,
+      targetUserName: user.name,
+      targetUserRole: user.role,
+      tenantId: tenant._id,
+      details: {
+        provider: 'SAML_SSO',
+        idpEmail: claims.email,
+        isJitProvisioned: isNew
+      },
+      ipAddress: req.ip,
+      severity: 'INFO'
+    });
+
+    // Generate JWT access & refresh tokens
+    const { accessToken, refreshToken } = user.generateAuthTokens ? user.generateAuthTokens() : {
+      accessToken: jwt.sign(
+        { userId: user._id, role: user.role, tenantId: tenant._id },
+        process.env.JWT_SECRET || 'test_secret',
+        { expiresIn: '15m' }
+      ),
+      refreshToken: jwt.sign(
+        { userId: user._id, tenantId: tenant._id },
+        process.env.JWT_REFRESH_SECRET || 'test_refresh_secret',
+        { expiresIn: '7d' }
+      )
+    };
+
+    // Set secure auth cookie
+    res.cookie('authToken', accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 15 * 60 * 1000
+    });
+
+    const relayState = req.body.RelayState || '/dashboard/admin';
+    res.redirect(relayState);
+  } catch (error) {
+    logger.error('SAML callback processing error:', error);
+    res.status(400).send(`SAML Authentication Error: ${error.message}`);
   }
 });
 

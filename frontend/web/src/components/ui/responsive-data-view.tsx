@@ -100,6 +100,7 @@ export function ResponsiveDataView<T>({
               {data.map((item) => (
                 <tr
                   key={keyExtractor(item)}
+                  style={{ contentVisibility: "auto", containIntrinsicSize: "0 52px" }}
                   className="transition hover:bg-white/[0.03] group"
                 >
                   {columns.map((col) => (

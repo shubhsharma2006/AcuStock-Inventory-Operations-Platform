@@ -41,6 +41,93 @@ const companySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  legalName: {
+    type: String,
+    trim: true
+  },
+  shortName: {
+    type: String,
+    trim: true
+  },
+  type: {
+    type: String,
+    enum: ['SUPPLIER', 'BUYER', 'MANUFACTURER', 'PARTNER', 'CUSTOMER'],
+    default: 'SUPPLIER'
+  },
+  pan: {
+    type: String,
+    trim: true,
+    uppercase: true
+  },
+  cin: {
+    type: String,
+    trim: true,
+    uppercase: true
+  },
+  msme: {
+    type: String,
+    trim: true
+  },
+  contactPerson: {
+    type: String,
+    trim: true
+  },
+  paymentTerms: {
+    type: String,
+    default: 'Net 30'
+  },
+  creditLimit: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  creditDays: {
+    type: Number,
+    default: 30,
+    min: 0
+  },
+  outstandingBalance: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  isCreditBlocked: {
+    type: Boolean,
+    default: false
+  },
+  creditBlockReason: {
+    type: String,
+    trim: true
+  },
+  creditOverrideUntil: {
+    type: Date,
+    default: null
+  },
+  currency: {
+    type: String,
+    default: 'INR'
+  },
+  notes: {
+    type: String,
+    trim: true
+  },
+  shippingAddress: {
+    street: { type: String },
+    city: { type: String },
+    state: { type: String },
+    zipCode: { type: String },
+    country: { type: String, default: 'India' }
+  },
+  isSupplier: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  supplierProfile: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SupplierProfile',
+    default: null
+  },
   isActive: {
     type: Boolean,
     default: true

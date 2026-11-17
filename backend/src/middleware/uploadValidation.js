@@ -72,6 +72,37 @@ function inspectFileBuffer(buffer, mimetype = '') {
     }
   }
 
+  // 4. Strict Magic-Byte Header Verification (Polyglot Defense)
+  if (mimetype === 'application/pdf') {
+    const pdfMagic = Buffer.from([0x25, 0x50, 0x44, 0x46]); // %PDF
+    if (buffer.length < 4 || !buffer.subarray(0, 4).equals(pdfMagic)) {
+      return {
+        clean: false,
+        reason: 'Invalid PDF format: file header does not match %PDF specification (polyglot rejected)'
+      };
+    }
+  }
+
+  if (mimetype === 'image/jpeg') {
+    const jpegMagic = Buffer.from([0xFF, 0xD8, 0xFF]);
+    if (buffer.length < 3 || !buffer.subarray(0, 3).equals(jpegMagic)) {
+      return {
+        clean: false,
+        reason: 'Invalid JPEG format: missing SOI header bytes (polyglot rejected)'
+      };
+    }
+  }
+
+  if (mimetype === 'image/png') {
+    const pngMagic = Buffer.from([0x89, 0x50, 0x4E, 0x47]);
+    if (buffer.length < 4 || !buffer.subarray(0, 4).equals(pngMagic)) {
+      return {
+        clean: false,
+        reason: 'Invalid PNG format: missing PNG header bytes (polyglot rejected)'
+      };
+    }
+  }
+
   return { clean: true };
 }
 

@@ -13,7 +13,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireTenantId } = require('../middleware/auth');
 const {
   generateTotpSecret,
   generateQrCode,
@@ -48,7 +48,7 @@ async function log2faEvent(action, user, req, details = {}) {
 // ═══════════════════════════════════════════════════════════════
 // 1. POST /api/auth/2fa/generate — Start 2FA setup (Auth required)
 // ═══════════════════════════════════════════════════════════════
-router.post('/generate', requireAuth, async (req, res) => {
+router.post('/generate', requireAuth, requireTenantId, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
     if (!user) {
@@ -84,7 +84,7 @@ router.post('/generate', requireAuth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // 2. POST /api/auth/2fa/enable — Confirm & Activate 2FA
 // ═══════════════════════════════════════════════════════════════
-router.post('/enable', requireAuth, async (req, res) => {
+router.post('/enable', requireAuth, requireTenantId, async (req, res) => {
   try {
     const { code } = req.body || {};
     if (!code || typeof code !== 'string') {
@@ -143,7 +143,7 @@ router.post('/enable', requireAuth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // 3. POST /api/auth/2fa/disable — Disable 2FA (Password + OTP)
 // ═══════════════════════════════════════════════════════════════
-router.post('/disable', requireAuth, async (req, res) => {
+router.post('/disable', requireAuth, requireTenantId, async (req, res) => {
   try {
     const { password, code } = req.body || {};
     if (!password || !code) {
@@ -207,7 +207,7 @@ router.post('/disable', requireAuth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // 4. GET /api/auth/2fa/status — Check current 2FA status
 // ═══════════════════════════════════════════════════════════════
-router.get('/status', requireAuth, async (req, res) => {
+router.get('/status', requireAuth, requireTenantId, async (req, res) => {
   try {
     const user = await User.findById(req.userId).select('+twoFactorRecoveryCodes');
     if (!user) {
@@ -230,7 +230,7 @@ router.get('/status', requireAuth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // 5. POST /api/auth/2fa/recovery-codes/regenerate
 // ═══════════════════════════════════════════════════════════════
-router.post('/recovery-codes/regenerate', requireAuth, async (req, res) => {
+router.post('/recovery-codes/regenerate', requireAuth, requireTenantId, async (req, res) => {
   try {
     const { password, code } = req.body || {};
     if (!password || !code) {

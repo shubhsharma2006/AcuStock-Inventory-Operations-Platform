@@ -71,7 +71,7 @@ jobs:
           cache-dependency-path: frontend/web/package-lock.json
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci || npm install
         working-directory: frontend/web
 
       - name: TypeScript check

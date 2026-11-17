@@ -204,7 +204,7 @@ export default function ShipmentsPage() {
   const dmrcCount = shipments.filter((s) => s.carrierType === "DMRC" || s.courier?.toLowerCase().includes("dmrc")).length;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6 lg:p-8">
+    <div className="space-y-6 p-4 sm:p-6 lg:p-8 pb-36">
       {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>

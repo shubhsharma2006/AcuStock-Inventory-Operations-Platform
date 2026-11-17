@@ -16,6 +16,7 @@ const AuditLog   = require('../models/AuditLog');
 const { logBusinessEvent } = require('../utils/auditHelper');
 const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const { invalidatePermissionCache } = require('../middleware/requirePermission');
+const { resolveAllModulesForUser } = require('../middleware/requireModuleAccess');
 const logger     = require('../utils/logger');
 
 const router = express.Router();
@@ -84,6 +85,21 @@ router.get('/me', requireAuth, async (req, res) => {
   } catch (err) {
     logger.error('Error fetching my permissions:', err);
     res.status(500).json({ success: false, error: 'Failed to fetch permissions' });
+  }
+});
+
+// GET /api/permissions/my-modules — get active resolved module & section access for current user
+router.get('/my-modules', requireAuth, async (req, res) => {
+  try {
+    const data = await resolveAllModulesForUser(req.tenantId, req.userId, req.userRole);
+    res.json({
+      success: true,
+      role: req.userRole,
+      ...data,
+    });
+  } catch (err) {
+    logger.error('Error resolving my-modules:', err);
+    res.status(500).json({ success: false, error: 'Failed to resolve module permissions' });
   }
 });
 

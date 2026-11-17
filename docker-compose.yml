@@ -48,8 +48,8 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017/acustock?replicaSet=rs0
       REDIS_URL: redis://redis:6379
-      NODE_ENV: production
-      FRONTEND_BASE_URL: http://localhost
+      NODE_ENV: development
+      FRONTEND_BASE_URL: http://localhost:3000
       PORT: 5001
     depends_on:
       mongo:
@@ -57,7 +57,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:5001:5001"
+      - "5001:5001"
     volumes:
       - backend-uploads:/app/uploads
       - backend-logs:/app/logs
@@ -75,18 +75,18 @@ services:
     depends_on:
       - backend
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
 
-  nginx:
-    image: nginx:1.25-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-    depends_on:
-      - backend
-      - frontend
+#   nginx:
+#     image: nginx:1.25-alpine
+#     restart: unless-stopped
+#     ports:
+#       - "80:80"
+#     volumes:
+#       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+#     depends_on:
+#       - backend
+#       - frontend
 
 volumes:
   mongo-data:

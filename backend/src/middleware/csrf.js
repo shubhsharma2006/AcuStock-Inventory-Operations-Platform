@@ -36,7 +36,11 @@ function createCsrfMiddleware({ isProduction = false, safePaths = [] } = {}) {
 
     if (!isSafeMethod && !isSafePath && !isBearerAuth) {
       const submittedToken = req.headers['x-csrf-token'];
-      if (!submittedToken || submittedToken !== csrfToken) {
+      const validToken = typeof submittedToken === 'string' &&
+        Buffer.byteLength(submittedToken) === Buffer.byteLength(csrfToken) &&
+        crypto.timingSafeEqual(Buffer.from(submittedToken), Buffer.from(csrfToken));
+
+      if (!validToken) {
         return res.status(403).json({
           success: false,
           error: 'CSRF token missing or invalid',

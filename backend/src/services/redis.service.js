@@ -35,6 +35,14 @@ class InMemoryCache {
     this.cache.delete(key);
   }
 
+  delPrefix(prefix) {
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
   flush() {
     this.cache.clear();
   }
@@ -116,6 +124,24 @@ class RedisService {
       }
     }
     this.fallbackCache.del(key);
+  }
+
+  async delPrefix(prefix) {
+    if (this.isRedisConnected && this.client) {
+      try {
+        let cursor = '0';
+        do {
+          const [nextCursor, keys] = await this.client.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 100);
+          cursor = nextCursor;
+          if (keys && keys.length > 0) {
+            await this.client.del(...keys);
+          }
+        } while (cursor !== '0');
+      } catch (err) {
+        logger.warn(`Redis delPrefix error: ${err.message}`);
+      }
+    }
+    this.fallbackCache.delPrefix(prefix);
   }
 
   async remember(key, ttlSeconds, fetchFn) {

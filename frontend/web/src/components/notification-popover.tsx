@@ -92,7 +92,7 @@ export function NotificationPopover({ basePath }: NotificationPopoverProps) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  /* Close on outside click */
+  /* Close on outside click or Escape */
   useEffect(() => {
     if (!open) return;
     function onClickOutside(e: MouseEvent) {
@@ -103,8 +103,18 @@ export function NotificationPopover({ basePath }: NotificationPopoverProps) {
         setOpen(false);
       }
     }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    }
     document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }, [open]);
 
   /* Mark all as read */

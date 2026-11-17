@@ -53,17 +53,36 @@ class AcuBotAgent {
       throw new Error('SecurityContext is strictly required for AcuBot execution');
     }
 
+    // AI Cyber Security Shield: Rate Limiting & Prompt Injection Guard
+    const { inspectAndSandboxPrompt, scrubAiResponse, checkAiRateLimit } = require('./ai-shield');
+    checkAiRateLimit(securityContext.tenantId);
+    const sandboxedPrompt = inspectAndSandboxPrompt(prompt, {
+      tenantId: securityContext.tenantId,
+      userId: securityContext.userId
+    });
+
+    let result;
     if (this.hasLiveKey) {
       try {
-        return await this._runGeminiConversation({ prompt, history, securityContext, onStep });
+        result = await this._runGeminiConversation({ prompt: sandboxedPrompt, history, securityContext, onStep });
       } catch (err) {
+        if (err.code === 'PROMPT_INJECTION_DETECTED' || err.code === 'PROMPT_TOO_LONG' || err.code === 'AI_RATE_LIMIT_EXCEEDED') {
+          throw err;
+        }
         logger.error('Gemini API call failed, falling back to local reasoning engine:', err.message);
         // Fallback to local intelligent engine if live API call errors
-        return await this._runLocalEngine({ prompt, securityContext, onStep });
+        result = await this._runLocalEngine({ prompt, securityContext, onStep });
       }
+    } else {
+      result = await this._runLocalEngine({ prompt, securityContext, onStep });
     }
 
-    return await this._runLocalEngine({ prompt, securityContext, onStep });
+    // AI Cyber Security Shield: Egress Secret & PII Scrubber
+    if (result && result.text) {
+      result.text = scrubAiResponse(result.text);
+    }
+
+    return result;
   }
 
   /**

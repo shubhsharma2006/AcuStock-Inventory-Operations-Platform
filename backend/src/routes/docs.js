@@ -3,15 +3,26 @@ const path = require('path');
 const fs = require('fs');
 
 const router = express.Router();
-const openApiSpecPath = path.join(__dirname, '../docs/openapi.json');
+const openApiSpecJsonPath = path.join(__dirname, '../docs/openapi.json');
+const openApiSpecYamlPath = path.join(__dirname, '../../../docs/openapi.yaml');
 
 // Serve OpenAPI 3.0 specification JSON
 router.get('/openapi.json', (req, res) => {
-  if (fs.existsSync(openApiSpecPath)) {
+  if (fs.existsSync(openApiSpecJsonPath)) {
     res.setHeader('Content-Type', 'application/json');
-    res.sendFile(openApiSpecPath);
+    res.sendFile(openApiSpecJsonPath);
   } else {
-    res.status(404).json({ success: false, error: 'OpenAPI specification not found' });
+    res.status(404).json({ success: false, error: 'OpenAPI specification JSON not found' });
+  }
+});
+
+// Serve OpenAPI 3.0 specification YAML
+router.get('/openapi.yaml', (req, res) => {
+  if (fs.existsSync(openApiSpecYamlPath)) {
+    res.setHeader('Content-Type', 'text/yaml; charset=utf-8');
+    res.sendFile(openApiSpecYamlPath);
+  } else {
+    res.status(404).send('OpenAPI specification YAML not found');
   }
 });
 
@@ -92,8 +103,9 @@ router.get('/', (req, res) => {
       <span>AcuStock API Documentation</span>
       <span class="badge">v2.0 Production</span>
     </div>
-    <div>
-      <a href="/api/docs/openapi.json" target="_blank" style="color: #94a3b8; text-decoration: none; font-size: 0.875rem; font-weight: 500;">Raw OpenAPI JSON &rarr;</a>
+    <div style="display: flex; gap: 1rem; align-items: center;">
+      <a href="/api/docs/openapi.json" target="_blank" style="color: #38bdf8; text-decoration: none; font-size: 0.875rem; font-weight: 500;">OpenAPI JSON &rarr;</a>
+      <a href="/api/docs/openapi.yaml" target="_blank" style="color: #38bdf8; text-decoration: none; font-size: 0.875rem; font-weight: 500;">OpenAPI YAML &rarr;</a>
     </div>
   </div>
   <div id="swagger-ui"></div>

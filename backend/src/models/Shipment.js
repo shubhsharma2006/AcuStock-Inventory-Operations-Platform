@@ -193,6 +193,10 @@ const shipmentSchema = new mongoose.Schema({
     trim: true,
     maxlength: 1000
   },
+  labelUrl: {
+    type: String,
+    trim: true
+  },
 
   // Delivery Status Tracking
   status: {

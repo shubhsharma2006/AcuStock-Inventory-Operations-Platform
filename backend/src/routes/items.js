@@ -7,16 +7,31 @@ const path = require('path');
 const Item = require('../models/Item');
 const Counter = require('../models/Counter');
 const Tenant = require('../models/Tenant');
+const ImportHistory = require('../models/ImportHistory');
 const { requireAuth, requireRole, requireTenantId, validateObjectId } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
+const { requireModuleAccess } = require('../middleware/requireModuleAccess');
 const checkPlanLimits = require('../middleware/checkPlanLimits');
 const storageService = require('../services/storage.service');
 const { validateCsvBuffer } = storageService;
 const { logBusinessEvent } = require('../utils/auditHelper');
 const { validateUpload } = require('../middleware/uploadValidation');
+const redisService = require('../services/redis.service');
+
+const ITEM_CACHE_TTL_SECONDS = 120; // 2 minutes TTL
+const invalidateItemCache = async (tenantId) => {
+  if (!tenantId) return;
+  try {
+    await redisService.delPrefix(`cache:tenant:${tenantId}:items:`);
+  } catch (err) {
+    console.error('Failed to invalidate item cache:', err);
+  }
+};
 
 const router = express.Router();
 router.use(requireTenantId);
+router.use(requireAuth);
+router.use(requireModuleAccess('products', 'FULL_ACCESS'));
 
 // ============================================================
 // MULTER CONFIGURATION FOR CSV UPLOAD
@@ -536,6 +551,24 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
       }
     }).catch(() => {});
     
+    // Record in ImportHistory
+    if (insertedProducts.length > 0) {
+      ImportHistory.create({
+        importNumber: `IMP-${Date.now().toString().slice(-6)}`,
+        tenantId: req.tenantId,
+        entityType: 'PRODUCTS',
+        originalFileName: req.file?.originalname || 'products_upload.csv',
+        fileSize: req.file?.size || 0,
+        mimeType: isExcel ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+        totalRows: rawRows.length,
+        successCount: insertedProducts.length,
+        errorCount: errors.length,
+        importedRecordIds: insertedProducts.map(p => p._id),
+        status: 'COMPLETED',
+        createdBy: req.userId
+      }).catch(err => console.error('Failed to save ImportHistory:', err.message));
+    }
+
     res.status(201).json({
       success: true,
       message: `Successfully uploaded ${insertedProducts.length} products`,
@@ -567,6 +600,12 @@ router.post('/bulk-upload', requireAuth, requireRole(['ADMIN']), handleCsvUpload
 // GET /api/items
 router.get('/', requireAuth, async (req, res) => {
   try {
+    const cacheKey = `cache:tenant:${req.tenantId}:items:list`;
+    const cached = await redisService.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const filter = { isActive: true, tenantId: req.tenantId };
 
     const items = await Item.find(filter)
@@ -582,6 +621,7 @@ router.get('/', requireAuth, async (req, res) => {
       return itemObj;
     }));
 
+    await redisService.set(cacheKey, itemsWithStock, ITEM_CACHE_TTL_SECONDS);
     res.json(itemsWithStock);
   } catch (error) {
     console.error('Error fetching items:', error);
@@ -798,6 +838,7 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddP
       }
     }).catch(() => {});
     
+    await invalidateItemCache(req.tenantId);
     res.status(201).json(item);
   } catch (error) {
     console.error('Error creating item:', error);
@@ -919,6 +960,7 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
       }
     }).catch(() => {});
 
+    await invalidateItemCache(req.tenantId);
     res.json(item);
   } catch (error) {
     console.error('Error updating item:', error);
@@ -956,6 +998,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), req
       severity: 'WARNING'
     }).catch(() => {});
 
+    await invalidateItemCache(req.tenantId);
     res.json({ message: 'Item deleted successfully' });
   } catch (error) {
     console.error('Error deleting item:', error);
@@ -1056,6 +1099,24 @@ router.post('/:id/images', requireAuth, validateObjectId, requirePermission('can
         totalGalleryCount: item.gallery.length
       }
     });
+
+    // Record in ImportHistory
+    if (insertedProducts.length > 0) {
+      ImportHistory.create({
+        importNumber: `IMP-${Date.now().toString().slice(-6)}`,
+        tenantId: req.tenantId,
+        entityType: 'PRODUCTS',
+        originalFileName: req.file?.originalname || 'products_upload.csv',
+        fileSize: req.file?.size || 0,
+        mimeType: isExcel ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'text/csv',
+        totalRows: rawRows.length,
+        successCount: insertedProducts.length,
+        errorCount: errors.length,
+        importedRecordIds: insertedProducts.map(p => p._id),
+        status: 'COMPLETED',
+        createdBy: req.userId
+      }).catch(err => console.error('Failed to save ImportHistory:', err.message));
+    }
 
     res.status(201).json({
       success: true,

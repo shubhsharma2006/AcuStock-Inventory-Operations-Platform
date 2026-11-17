@@ -5,7 +5,8 @@
 
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
+const { logBusinessEvent } = require('../utils/auditHelper');
 const User = require('../models/User');
 const Tenant = require('../models/Tenant');
 const Item = require('../models/Item');
@@ -85,7 +86,7 @@ router.get('/plans', (req, res) => {
 /**
  * GET /api/billing/status — Returns tenant subscription status, limits, and plan details.
  */
-router.get('/status', requireAuth, async (req, res) => {
+router.get('/status', requireAuth, requireTenantId, async (req, res) => {
   try {
     let tenant = await getOrResolveTenant(req);
 
@@ -125,7 +126,7 @@ router.get('/status', requireAuth, async (req, res) => {
 /**
  * GET /api/billing/usage — Live utilization metering against plan limits
  */
-router.get('/usage', requireAuth, async (req, res) => {
+router.get('/usage', requireAuth, requireTenantId, async (req, res) => {
   try {
     const tenant = await getOrResolveTenant(req);
     if (!tenant) {
@@ -199,7 +200,7 @@ router.get('/usage', requireAuth, async (req, res) => {
  * Server-authoritative: client passes planId, currency, and optional gateway preference.
  * Amount is strictly resolved by the backend PlanCatalog to prevent tampering.
  */
-router.post('/checkout', checkoutLimiter, requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+router.post('/checkout', checkoutLimiter, requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { planId, currency = 'INR', gateway } = req.body;
 
@@ -236,9 +237,40 @@ router.post('/checkout', checkoutLimiter, requireAuth, requireRole(['ADMIN', 'SU
 });
 
 /**
+ * POST /api/billing/customer-portal — Open Stripe self-serve billing portal
+ */
+router.post('/customer-portal', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const tenant = await getOrResolveTenant(req);
+    if (!tenant) return res.status(404).json({ success: false, error: 'Tenant not found' });
+
+    const stripeCustomerId = tenant.billing?.stripeCustomerId || tenant.stripeCustomerId;
+    if (!stripeCustomerId) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active Stripe customer account linked to this organization. Please subscribe or checkout via Stripe first.'
+      });
+    }
+
+    const appBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const returnUrl = `${appBaseUrl}/dashboard/admin/billing`;
+
+    const GatewayResolver = require('../services/payment/GatewayResolver');
+    const resolver = new GatewayResolver();
+    const stripeGateway = resolver.stripe;
+    const portalUrl = await stripeGateway.createBillingPortalSession({ customerId: stripeCustomerId, returnUrl });
+
+    res.json({ success: true, url: portalUrl });
+  } catch (err) {
+    logger.error('Customer portal error:', err.message);
+    res.status(500).json({ success: false, error: err.message || 'Failed to create customer portal session' });
+  }
+});
+
+/**
  * POST /api/billing/verify — Verify client-side payment completion (e.g. Razorpay modal or Demo simulation).
  */
-router.post('/verify', verifyLimiter, requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+router.post('/verify', verifyLimiter, requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { transactionId, orderId, paymentId, signature, gateway } = req.body;
 
@@ -254,6 +286,21 @@ router.post('/verify', verifyLimiter, requireAuth, requireRole(['ADMIN', 'SUPER_
       gateway
     });
 
+    if (result.success) {
+      await logBusinessEvent({
+        req,
+        action: 'PAYMENT_COMPLETED',
+        entityType: 'PaymentTransaction',
+        entityId: result.transaction?._id || transactionId,
+        metadata: {
+          gateway: gateway || result.transaction?.gateway,
+          amount: result.transaction?.amount,
+          currency: result.transaction?.currency,
+          planId: result.transaction?.planId
+        }
+      });
+    }
+
     res.json(result);
   } catch (err) {
     logger.error('Payment verification failed:', err);
@@ -264,7 +311,7 @@ router.post('/verify', verifyLimiter, requireAuth, requireRole(['ADMIN', 'SUPER_
 /**
  * GET /api/billing/transactions — Return payment history for current tenant.
  */
-router.get('/transactions', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+router.get('/transactions', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const tenant = await getOrResolveTenant(req);
     const tenantId = tenant?._id;
@@ -279,7 +326,7 @@ router.get('/transactions', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), 
 /**
  * GET /api/billing/transactions/:id — Return single transaction details with strict tenant isolation.
  */
-router.get('/transactions/:id', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+router.get('/transactions/:id', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const tenant = await getOrResolveTenant(req);
     const tenantId = tenant?._id;
@@ -290,7 +337,7 @@ router.get('/transactions/:id', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN'
         { transactionId: id },
         ...(id.match(/^[0-9a-fA-F]{24}$/) ? [{ _id: id }] : [])
       ]
-    });
+    }, null, { skipTenantIsolation: true });
 
     if (!transaction) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
@@ -317,7 +364,7 @@ router.get('/transactions/:id', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN'
  * Strict Tenant Isolation: Verifies transaction belongs to calling tenant.
  * Status Guard: Transaction must be SUCCESS or REFUNDED to produce an invoice.
  */
-router.get('/transactions/:id/invoice', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+router.get('/transactions/:id/invoice', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const tenant = await getOrResolveTenant(req);
     const tenantId = tenant?._id;
@@ -328,7 +375,7 @@ router.get('/transactions/:id/invoice', requireAuth, requireRole(['ADMIN', 'SUPE
         { transactionId: id },
         ...(id.match(/^[0-9a-fA-F]{24}$/) ? [{ _id: id }] : [])
       ]
-    });
+    }, null, { skipTenantIsolation: true });
 
     if (!transaction) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
@@ -371,7 +418,7 @@ router.get('/transactions/:id/invoice', requireAuth, requireRole(['ADMIN', 'SUPE
  * Strict RBAC: ADMIN or SUPER_ADMIN only.
  * Strict Tenant Isolation: Verifies transaction belongs to calling tenant.
  */
-router.post('/refund', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+router.post('/refund', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
   try {
     const { transactionId, reason, amountMinor } = req.body;
 
@@ -388,6 +435,19 @@ router.post('/refund', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN']), async
       amountMinor,
       tenantId: req.user.role === 'SUPER_ADMIN' ? undefined : tenantId
     });
+
+    await logBusinessEvent({
+      req,
+      action: 'PAYMENT_REFUNDED',
+      entityType: 'PaymentTransaction',
+      entityId: transactionId,
+      metadata: {
+        reason,
+        amountMinor
+      }
+    });
+
+    res.json({ success: true, ...result });
 
     res.json({ success: true, ...result });
   } catch (err) {
@@ -431,6 +491,90 @@ router.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
   } catch (err) {
     logger.error('Stripe legacy webhook error:', err);
     res.status(400).json({ received: false, error: err.message });
+  }
+});
+
+// ============================================================
+// AUTOMATED OVERAGE METERING ROUTES (Item 1.3)
+// ============================================================
+
+const { calculateTenantOverage, reconcileTenantOverage } = require('../services/overageMetering.service');
+
+/**
+ * GET /api/billing/overage-status
+ * Returns current tenant resource utilization, surplus, and accrued overage charge
+ */
+router.get('/overage-status', requireAuth, requireTenantId, async (req, res) => {
+  try {
+    const tenant = await Tenant.findById(req.tenantId);
+    if (!tenant) return res.status(404).json({ success: false, error: 'Tenant not found' });
+
+    const status = calculateTenantOverage(tenant);
+    res.json({
+      success: true,
+      tenantId: tenant._id,
+      plan: tenant.plan,
+      ...status
+    });
+  } catch (err) {
+    logger.error('Get overage status error:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve overage status' });
+  }
+});
+
+/**
+ * POST /api/billing/configure-overage
+ * Configures unit overage pricing and opt-in status (Admin only)
+ */
+router.post('/configure-overage', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const { enabled, itemUnitRate, aiQueryUnitRate, ocrScanUnitRate, currency } = req.body;
+    const tenant = await Tenant.findById(req.tenantId);
+    if (!tenant) return res.status(404).json({ success: false, error: 'Tenant not found' });
+
+    tenant.overageConfig = {
+      enabled: enabled !== undefined ? !!enabled : tenant.overageConfig?.enabled,
+      itemUnitRate: typeof itemUnitRate === 'number' ? Math.max(0, itemUnitRate) : (tenant.overageConfig?.itemUnitRate || 0.05),
+      aiQueryUnitRate: typeof aiQueryUnitRate === 'number' ? Math.max(0, aiQueryUnitRate) : (tenant.overageConfig?.aiQueryUnitRate || 0.02),
+      ocrScanUnitRate: typeof ocrScanUnitRate === 'number' ? Math.max(0, ocrScanUnitRate) : (tenant.overageConfig?.ocrScanUnitRate || 0.10),
+      currency: currency || tenant.overageConfig?.currency || 'USD'
+    };
+
+    await tenant.save();
+
+    res.json({
+      success: true,
+      message: 'Overage configuration updated successfully.',
+      overageConfig: tenant.overageConfig
+    });
+  } catch (err) {
+    logger.error('Configure overage error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update overage configuration' });
+  }
+});
+
+/**
+ * POST /api/billing/reconcile-overage
+ * Performs immediate cycle reconciliation and creates overage invoice/transaction (Admin only)
+ */
+router.post('/reconcile-overage', requireAuth, requireTenantId, requireRole(['ADMIN', 'SUPER_ADMIN']), async (req, res) => {
+  try {
+    const result = await reconcileTenantOverage(req.tenantId);
+    if (!result.reconciled) {
+      return res.status(400).json({
+        success: false,
+        message: result.reason || 'No overage surplus to reconcile.'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully reconciled overage charges of ${result.amount} ${result.currency}.`,
+      invoice: result
+    });
+  } catch (err) {
+    logger.error('Reconcile overage error:', err);
+    res.status(500).json({ success: false, error: 'Failed to reconcile overage billing' });
   }
 });
 
@@ -501,7 +645,7 @@ async function processBillingEvent(event) {
     const result = await applyBillingEvent(event);
     await BillingEvent.findByIdAndUpdate(billingRecord._id, {
       $set: { status: 'PROCESSED', processedAt: new Date() }
-    });
+    }, { skipTenantIsolation: true });
     return result;
   } catch (err) {
     const attempts = (billingRecord.attempts || 0) + 1;
@@ -515,7 +659,7 @@ async function processBillingEvent(event) {
     if (attempts >= maxAttempts) {
       update.$set.deadLetterAt = new Date();
     }
-    await BillingEvent.findByIdAndUpdate(billingRecord._id, update);
+    await BillingEvent.findByIdAndUpdate(billingRecord._id, update, { skipTenantIsolation: true });
     throw err;
   }
 }

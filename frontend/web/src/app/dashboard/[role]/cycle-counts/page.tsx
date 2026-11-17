@@ -72,12 +72,15 @@ export default function CycleCountsPage() {
   const [reconcileSuccessMsg, setReconcileSuccessMsg] = useState<string | null>(null);
 
   // Queries
-  const { data: warehouses = [] } = useQuery<Warehouse[]>({
+  const { data: rawWarehouses = [] } = useQuery<Warehouse[]>({
     queryKey: ["warehouses"],
     queryFn: () => apiFetch("/api/warehouses"),
   });
+  const warehouses: Warehouse[] = Array.isArray(rawWarehouses)
+    ? rawWarehouses
+    : ((rawWarehouses as any)?.warehouses || (rawWarehouses as any)?.data || []);
 
-  const { data: sessions = [], isLoading } = useQuery<CycleCountSession[]>({
+  const { data: rawSessions = [], isLoading } = useQuery<CycleCountSession[]>({
     queryKey: ["cycle-counts", statusFilter, warehouseFilter],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -86,6 +89,9 @@ export default function CycleCountsPage() {
       return apiFetch(`/api/cycle-counts?${params.toString()}`);
     },
   });
+  const sessions: CycleCountSession[] = Array.isArray(rawSessions)
+    ? rawSessions
+    : ((rawSessions as any)?.sessions || (rawSessions as any)?.data || []);
 
   const { data: selectedSession, isLoading: isLoadingSession } = useQuery<CycleCountSession>({
     queryKey: ["cycle-count", selectedSessionId],
@@ -268,8 +274,8 @@ export default function CycleCountsPage() {
                 className="rounded-lg border border-white/10 bg-slate-950 px-2.5 py-1 text-xs text-white focus:outline-none focus:border-amber-400"
               >
                 <option value="ALL">All Facilities</option>
-                {warehouses.map((w) => (
-                  <option key={w._id} value={w._id}>
+                {warehouses.map((w, idx) => (
+                  <option key={`wh-filter-${w._id || w.name || idx}-${idx}`} value={w._id}>
                     {w.name}
                   </option>
                 ))}
@@ -290,11 +296,12 @@ export default function CycleCountsPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredSessions.map((session) => {
+              {filteredSessions.map((session, idx) => {
                 const isSelected = session._id === selectedSessionId;
+                const sKey = `session-${session._id || session.countNumber || idx}-${idx}`;
                 return (
                   <div
-                    key={session._id}
+                    key={sKey}
                     onClick={() => {
                       setSelectedSessionId(session._id);
                       setEditedCounts({});
@@ -438,7 +445,8 @@ export default function CycleCountsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5 text-slate-300">
-                      {selectedSession.items.map((item) => {
+                      {(selectedSession.items || []).map((item, idx) => {
+                        const itemKey = `item-${item._id || item.productId || idx}-${idx}`;
                         const edit = editedCounts[item._id];
                         const countedVal =
                           edit !== undefined ? edit.countedQuantity : item.countedQuantity;
@@ -454,7 +462,7 @@ export default function CycleCountsPage() {
                         const isLocked = selectedSession.status === "RECONCILED";
 
                         return (
-                          <tr key={item._id} className="hover:bg-white/5 transition">
+                          <tr key={itemKey} className="hover:bg-white/5 transition">
                             <td className="p-3">
                               <div className="font-semibold text-white">{item.productName}</div>
                               <div className="font-mono text-[10px] text-slate-400">{item.sku}</div>
@@ -511,8 +519,8 @@ export default function CycleCountsPage() {
                                   onChange={(e) => handleCountChange(item._id, countedVal, e.target.value)}
                                   className="rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-400"
                                 >
-                                  {REASON_CODES.map((r) => (
-                                    <option key={r.value} value={r.value}>
+                                  {REASON_CODES.map((r, rIdx) => (
+                                    <option key={`reason-${r.value || rIdx}-${rIdx}`} value={r.value}>
                                       {r.label}
                                     </option>
                                   ))}
@@ -578,8 +586,8 @@ export default function CycleCountsPage() {
                     className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-400"
                   >
                     <option value="">Select a warehouse facility…</option>
-                    {warehouses.map((w) => (
-                      <option key={w._id} value={w._id}>
+                    {warehouses.map((w, idx) => (
+                      <option key={`create-wh-${w._id || w.name || idx}-${idx}`} value={w._id}>
                         {w.name} {w.code ? `(${w.code})` : ""}
                       </option>
                     ))}

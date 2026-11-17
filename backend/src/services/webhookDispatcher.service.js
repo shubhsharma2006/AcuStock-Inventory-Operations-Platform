@@ -1,8 +1,7 @@
-const http = require('http');
-const https = require('https');
 const crypto = require('crypto');
 const { URL } = require('url');
 const mongoose = require('mongoose');
+const { safeRequest } = require('../utils/safeHttpClient');
 
 const WebhookSubscription = require('../models/WebhookSubscription');
 const WebhookDeliveryLog = require('../models/WebhookDeliveryLog');
@@ -19,85 +18,42 @@ function computeSignature(payloadString, secret) {
 }
 
 /**
- * Sends a single HTTP POST request with timeout
+ * Sends a single HTTP POST request with timeout and SSRF/DNS protection
  */
-function sendHttpPost({ url, payloadString, signature, event, deliveryId, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    try {
-      const parsedUrl = new URL(url);
-      const isHttps = parsedUrl.protocol === 'https:';
-      const client = isHttps ? https : http;
+async function sendHttpPost({ url, payloadString, signature, event, deliveryId, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+  const startTime = Date.now();
+  try {
+    const res = await safeRequest(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-AcuStock-Event': event,
+        'X-AcuStock-Delivery': deliveryId,
+        'X-AcuStock-Signature': `sha256=${signature}`
+      },
+      body: payloadString,
+      timeoutMs
+    });
 
-      const req = client.request({
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payloadString),
-          'User-Agent': 'AcuStock-WebhookDispatcher/2.0',
-          'X-AcuStock-Event': event,
-          'X-AcuStock-Delivery': deliveryId,
-          'X-AcuStock-Signature': `sha256=${signature}`
-        },
-        timeout: timeoutMs
-      }, (res) => {
-        let responseBody = '';
-        res.on('data', chunk => {
-          if (responseBody.length < 2048) {
-            responseBody += chunk;
-          }
-        });
-        res.on('end', () => {
-          const durationMs = Date.now() - startTime;
-          const isSuccess = res.statusCode >= 200 && res.statusCode < 300;
-          resolve({
-            success: isSuccess,
-            statusCode: res.statusCode,
-            responseBody: responseBody.substring(0, 1024),
-            durationMs,
-            error: isSuccess ? null : `HTTP status code ${res.statusCode}`
-          });
-        });
-      });
-
-      req.on('error', (err) => {
-        const durationMs = Date.now() - startTime;
-        resolve({
-          success: false,
-          statusCode: null,
-          responseBody: null,
-          durationMs,
-          error: err.message
-        });
-      });
-
-      req.on('timeout', () => {
-        req.destroy();
-        const durationMs = Date.now() - startTime;
-        resolve({
-          success: false,
-          statusCode: null,
-          responseBody: null,
-          durationMs,
-          error: 'Connection timed out'
-        });
-      });
-
-      req.write(payloadString);
-      req.end();
-    } catch (err) {
-      resolve({
-        success: false,
-        statusCode: null,
-        responseBody: null,
-        durationMs: 0,
-        error: err.message
-      });
-    }
-  });
+    const durationMs = Date.now() - startTime;
+    const isSuccess = res.status >= 200 && res.status < 300;
+    return {
+      success: isSuccess,
+      statusCode: res.status,
+      responseBody: res.data ? res.data.substring(0, 1024) : null,
+      durationMs,
+      error: isSuccess ? null : `HTTP status code ${res.status}`
+    };
+  } catch (err) {
+    const durationMs = Date.now() - startTime;
+    return {
+      success: false,
+      statusCode: null,
+      responseBody: null,
+      durationMs,
+      error: err.message
+    };
+  }
 }
 
 /**

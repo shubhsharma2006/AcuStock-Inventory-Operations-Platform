@@ -7,11 +7,12 @@
 
 const express = require('express');
 const Report  = require('../models/Report');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { generateDailySummary, generateWeeklyLowStock } = require('../services/reportScheduler');
 const logger  = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // GET /api/reports/scheduled — list reports with pagination + type filter
 router.get('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
@@ -24,14 +25,36 @@ router.get('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
       tenantId: req.tenantId
     };
 
-    const [reports, total] = await Promise.all([
+    const [rawReports, total] = await Promise.all([
       Report.find(typeFilter)
-        .select('-data') // omit heavy payload in list view
         .sort({ generatedAt: -1 })
         .skip(skip)
-        .limit(limit),
+        .limit(limit)
+        .lean(),
       Report.countDocuments(typeFilter)
     ]);
+
+    const reports = rawReports.map(r => {
+      let itemCount = 0;
+      if (r.type === 'weekly_low_stock') {
+        itemCount = r.data?.totalLowStock ?? (Array.isArray(r.data?.items) ? r.data.items.length : 0);
+      } else {
+        itemCount = r.data?.totalTxns ?? (Array.isArray(r.data?.byProduct) ? r.data.byProduct.length : 0);
+      }
+
+      const { data, ...rest } = r;
+      return {
+        ...rest,
+        itemCount,
+        triggeredBy: r.generatedBy || 'scheduler',
+        summaryPreview: {
+          totalIn: data?.totalIn,
+          totalOut: data?.totalOut,
+          totalTxns: data?.totalTxns,
+          totalLowStock: data?.totalLowStock
+        }
+      };
+    });
 
     res.set('X-Total-Count', total);
     res.set('X-Total-Pages', Math.ceil(total / limit));

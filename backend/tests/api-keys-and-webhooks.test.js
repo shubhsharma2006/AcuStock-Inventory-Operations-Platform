@@ -135,6 +135,7 @@ test('Item 3: Developer API Keys & Outbound Webhook Engine', async (t) => {
   });
 
   await t.test('5. Webhook HTTP Dispatcher: Sends POST with custom AcuStock headers', async () => {
+    process.env.ALLOW_PRIVATE_NETWORK_WEBHOOKS = 'true';
     let receivedHeaders = null;
     let receivedBody = '';
 
@@ -174,6 +175,7 @@ test('Item 3: Developer API Keys & Outbound Webhook Engine', async (t) => {
       assert.equal(receivedHeaders['x-acustock-signature'], 'sha256=test_signature_hex');
       assert.equal(receivedBody, payloadString);
     } finally {
+      delete process.env.ALLOW_PRIVATE_NETWORK_WEBHOOKS;
       await new Promise((resolve) => testServer.close(resolve));
     }
   });

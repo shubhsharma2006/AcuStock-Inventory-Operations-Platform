@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useTheme } from "@/components/theme-provider";
-import { login, authenticate2fa } from "@/lib/api";
+import { login, authenticate2fa, apiFetch } from "@/lib/api";
 import { getRoleHome, getRoleWelcome, type Role, ACUSTOCK_API_BASE_URL } from "@/lib/acustock";
 
 const roles: Role[] = ["SUPER_ADMIN", "ADMIN", "MANAGER", "USER"];
@@ -49,6 +49,44 @@ function LoginForm() {
   const [useRecoveryCode, setUseRecoveryCode] = useState(false);
 
   const oauthError = searchParams.get("error");
+
+  // Enterprise SAML SSO State (SAP Cloud Identity / Okta standard)
+  const [showSsoModal, setShowSsoModal] = useState(false);
+  const [ssoEmail, setSsoEmail] = useState("");
+  const [ssoLoading, setSsoLoading] = useState(false);
+  const [ssoFeedback, setSsoFeedback] = useState<string | null>(null);
+
+  async function handleSsoLookup(e: FormEvent) {
+    e.preventDefault();
+    if (!ssoEmail.trim() || !ssoEmail.includes("@")) {
+      setSsoFeedback("Please enter a valid corporate email address.");
+      return;
+    }
+    setSsoLoading(true);
+    setSsoFeedback(null);
+    try {
+      const res = await apiFetch<{
+        success: boolean;
+        ssoAvailable: boolean;
+        enforced?: boolean;
+        tenantSlug?: string;
+        tenantName?: string;
+      }>(`/auth/sso/lookup?email=${encodeURIComponent(ssoEmail.trim())}`);
+
+      if (res.ssoAvailable && res.tenantSlug) {
+        setSsoFeedback(`Workspace "${res.tenantName}" found. Redirecting to Enterprise Identity Provider...`);
+        setTimeout(() => {
+          window.location.href = `${ACUSTOCK_API_BASE_URL}/auth/sso/login/${res.tenantSlug}`;
+        }, 800);
+      } else {
+        setSsoFeedback("No Enterprise SSO found for this domain. Please log in with password.");
+      }
+    } catch (err: any) {
+      setSsoFeedback(err.message || "SSO lookup failed.");
+    } finally {
+      setSsoLoading(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -299,7 +337,9 @@ function LoginForm() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 transition hover:text-slate-300"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 transition hover:text-slate-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/40 rounded-lg p-1"
                   >
                     {showPassword ? (
                       <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>
@@ -347,7 +387,75 @@ function LoginForm() {
               >
                 {loading ? "Signing in…" : "Sign in"}
               </button>
+
+              {/* Enterprise SAML SSO Trigger */}
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSsoModal(true);
+                    setSsoFeedback(null);
+                  }}
+                  className="w-full rounded-xl border border-indigo-500/30 bg-indigo-950/20 px-4 py-2.5 text-xs font-bold text-indigo-300 hover:bg-indigo-900/30 transition flex items-center justify-center gap-2"
+                >
+                  <span>🛡️ Sign in with Enterprise SSO (SAML / Okta)</span>
+                </button>
+              </div>
             </form>
+          )}
+
+          {/* Enterprise SAML SSO Modal */}
+          {showSsoModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+              <div className="w-full max-w-sm rounded-3xl border border-indigo-500/30 bg-slate-950 p-6 shadow-2xl text-white space-y-4">
+                <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                  <div>
+                    <h3 className="font-bold text-base">🏢 Enterprise SSO Login</h3>
+                    <div className="text-[11px] text-slate-400">SAML 2.0 / Okta / Azure AD</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSsoModal(false)}
+                    className="rounded-full p-1 text-slate-400 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleSsoLookup} className="space-y-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300 block mb-1">
+                      Enter Corporate Work Email
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      autoFocus
+                      value={ssoEmail}
+                      onChange={(e) => setSsoEmail(e.target.value)}
+                      placeholder="name@company.com"
+                      className="w-full rounded-xl border border-white/10 bg-slate-900 px-3.5 py-2.5 text-xs text-white font-mono outline-none focus:border-indigo-400"
+                    />
+                  </div>
+
+                  {ssoFeedback && (
+                    <div className={`p-3 rounded-xl text-xs font-semibold ${
+                      ssoFeedback.includes("found") ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"
+                    }`}>
+                      {ssoFeedback}
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={ssoLoading}
+                    className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 py-2.5 text-xs font-bold text-white transition disabled:opacity-50"
+                  >
+                    {ssoLoading ? "Locating Identity Provider..." : "Continue to Company IdP →"}
+                  </button>
+                </form>
+              </div>
+            </div>
           )}
 
           <p className="mt-6 text-center text-sm text-slate-500">

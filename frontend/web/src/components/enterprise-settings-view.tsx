@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import type { Role } from "@/lib/acustock";
 import { apiFetch } from "@/lib/api";
+import { TypeaheadInput } from "@/components/ui/typeahead-input";
+import { ALL_INDIAN_STATES, INDIAN_STATES_AND_CITIES, TOP_ALL_INDIAN_CITIES } from "@/lib/india-geo-data";
 import {
   useAccountStats,
   useProductsData,
@@ -13,6 +15,7 @@ import {
 import { useRealtimeState } from "@/components/realtime-provider";
 import TwoFactorSettings from "@/components/TwoFactorSettings";
 import { WhatsAppSimulatorModal } from "@/components/ai/whatsapp-simulator-modal";
+import { CustomDomainSettingsPanel, EnterpriseSsoSettingsPanel } from "@/components/enterprise-domain-sso-panels";
 
 interface WarehouseOption {
   _id: string;
@@ -67,7 +70,7 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
   const { items: products } = useProductsData(refreshToken);
 
   const [activeTab, setActiveTab] = useState<
-    "organization" | "operations" | "security" | "alerts" | "serials" | "permissions" | "compliance"
+    "organization" | "operations" | "security" | "alerts" | "serials" | "permissions" | "compliance" | "custom-domain" | "enterprise-sso"
   >("organization");
 
   // Organization settings state
@@ -87,6 +90,13 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
   const [city, setCity] = useState("");
   const [stateName, setStateName] = useState("");
   const [zipCode, setZipCode] = useState("");
+
+  const settingsCityOptions = useMemo(() => {
+    if (stateName && INDIAN_STATES_AND_CITIES[stateName]) {
+      return INDIAN_STATES_AND_CITIES[stateName];
+    }
+    return TOP_ALL_INDIAN_CITIES;
+  }, [stateName]);
   const [country, setCountry] = useState("India");
   const [currency, setCurrency] = useState("INR");
   const [timezone, setTimezone] = useState("Asia/Kolkata");
@@ -295,8 +305,8 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
     }
   }
 
-  // Compliance CSV Exporter
-  async function handleExportData(type: "products" | "ledger" | "audit") {
+  // Compliance CSV & Disaster Recovery Exporter
+  async function handleExportData(type: "products" | "ledger" | "audit" | "enterprise") {
     setExportingType(type);
     try {
       let csvContent = "";
@@ -347,6 +357,18 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
         ]);
         csvContent = [headers.join(","), ...rows.map((r: any) => r.join(","))].join("\n");
         filename = `AcuStock_Audit_Trail_${new Date().toISOString().slice(0, 10)}.csv`;
+      } else if (type === "enterprise") {
+        const data = await apiFetch<any>("/gdpr/tenant-export");
+        const jsonContent = JSON.stringify(data, null, 2);
+        const blob = new Blob([jsonContent], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `AcuStock_Enterprise_Archive_${new Date().toISOString().slice(0, 10)}.json`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
       }
 
       const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
@@ -371,9 +393,11 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
     { key: "alerts", label: "Alerts & WhatsApp", icon: "🔔" },
     canEditManagerSettings ? { key: "serials", label: "Serial Policies", icon: "🏷️" } : null,
     canEditAdminSettings ? { key: "permissions", label: "Role Permissions", icon: "👥" } : null,
+    canEditAdminSettings ? { key: "custom-domain", label: "Custom Domain", icon: "🌐" } : null,
+    canEditAdminSettings ? { key: "enterprise-sso", label: "SAML 2.0 SSO", icon: "🔐" } : null,
     { key: "compliance", label: "Data & Compliance", icon: "💾" },
   ].filter(Boolean) as {
-    key: "organization" | "operations" | "security" | "alerts" | "serials" | "permissions" | "compliance";
+    key: "organization" | "operations" | "security" | "alerts" | "serials" | "permissions" | "compliance" | "custom-domain" | "enterprise-sso";
     label: string;
     icon: string;
   }[];
@@ -549,24 +573,22 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
                       placeholder="Unit 402, Business Bay, Central Hub"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">City</label>
-                    <input
-                      type="text"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      className="w-full rounded-xl border border-white/10 bg-slate-900/80 px-3.5 py-2.5 text-sm text-white focus:border-amber-400/60 focus:outline-none"
-                      placeholder="Mumbai"
+                  <div>
+                    <TypeaheadInput
+                      label="State / Province"
+                      value={stateName}
+                      onChange={(val) => setStateName(val)}
+                      options={ALL_INDIAN_STATES}
+                      placeholder="Type or select State…"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">State / Province</label>
-                    <input
-                      type="text"
-                      value={stateName}
-                      onChange={(e) => setStateName(e.target.value)}
-                      className="w-full rounded-xl border border-white/10 bg-slate-900/80 px-3.5 py-2.5 text-sm text-white focus:border-amber-400/60 focus:outline-none"
-                      placeholder="Maharashtra"
+                  <div>
+                    <TypeaheadInput
+                      label="City"
+                      value={city}
+                      onChange={(val) => setCity(val)}
+                      options={settingsCityOptions}
+                      placeholder="Type or select City…"
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -1159,6 +1181,29 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
                     {exportingType === "audit" ? "Generating..." : "Download CSV"}
                   </button>
                 </div>
+
+                <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 p-5 space-y-3 sm:col-span-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">🏛️</span>
+                      <div>
+                        <div className="font-semibold text-white text-sm">Enterprise Disaster Recovery Archive (JSON / SHA-256)</div>
+                        <div className="text-[11px] text-slate-400">Complete multi-collection snapshot: Products, Warehouses, Bins, Lots, Adjustments, Orders & Ledger</div>
+                      </div>
+                    </div>
+                    <span className="rounded-full bg-indigo-500/20 px-2.5 py-0.5 text-[10px] font-bold text-indigo-300 border border-indigo-500/30">
+                      SAP NetWeaver / GDPR Article 20
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={exportingType === "enterprise"}
+                    onClick={() => handleExportData("enterprise")}
+                    className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-xs font-bold text-white transition-all disabled:opacity-50"
+                  >
+                    {exportingType === "enterprise" ? "Packaging Enterprise Archive..." : "📦 Download Full Enterprise Disaster Recovery Archive"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1182,6 +1227,24 @@ export function EnterpriseSettingsView({ role }: { role: Role }) {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* TAB 8: WHITE-LABEL CUSTOM DOMAIN (ZOHO ONE STANDARD) */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {activeTab === "custom-domain" && canEditAdminSettings && (
+        <div className="glass-panel rounded-2xl border border-white/10 bg-slate-950/60 p-6">
+          <CustomDomainSettingsPanel />
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* TAB 9: ENTERPRISE SAML 2.0 / SSO (SAP CLOUD IDENTITY STANDARD) */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {activeTab === "enterprise-sso" && canEditAdminSettings && (
+        <div className="glass-panel rounded-2xl border border-white/10 bg-slate-950/60 p-6">
+          <EnterpriseSsoSettingsPanel />
         </div>
       )}
 

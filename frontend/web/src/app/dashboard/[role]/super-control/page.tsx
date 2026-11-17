@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Role } from "@/lib/acustock";
 import { ImpersonateModal } from "@/components/impersonate-modal";
 import { OffboardingModal } from "@/components/offboarding-modal";
+import { ModuleGovernanceView } from "./module-governance";
 
 type SystemUser = {
   _id: string;
@@ -65,7 +66,7 @@ const PERMISSION_KEYS = [
 
 export default function SuperAdminControlPage() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"users" | "permissions" | "sessions" | "ownership">("users");
+  const [activeTab, setActiveTab] = useState<"governance" | "users" | "permissions" | "sessions" | "ownership">("governance");
 
   // User filter states
   const [search, setSearch] = useState("");
@@ -287,7 +288,16 @@ export default function SuperAdminControlPage() {
         </div>
 
         {/* Tab switcher */}
-        <div className="flex rounded-2xl border border-white/10 bg-slate-900/60 p-1 backdrop-blur-xl">
+        <div className="flex flex-wrap rounded-2xl border border-white/10 bg-slate-900/60 p-1 backdrop-blur-xl">
+          <button
+            type="button"
+            onClick={() => setActiveTab("governance")}
+            className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+              activeTab === "governance" ? "bg-amber-400 text-slate-950 font-bold shadow" : "text-slate-400 hover:text-white"
+            }`}
+          >
+            🛡️ Module & Persona Governance
+          </button>
           <button
             type="button"
             onClick={() => setActiveTab("users")}
@@ -326,6 +336,9 @@ export default function SuperAdminControlPage() {
           </button>
         </div>
       </div>
+
+      {/* TAB 0: ENTERPRISE MODULE & PERSONA GOVERNANCE */}
+      {activeTab === "governance" && <ModuleGovernanceView />}
 
       {/* TAB 1: ALL USERS & ACTIVATION STATUS */}
       {activeTab === "users" && (

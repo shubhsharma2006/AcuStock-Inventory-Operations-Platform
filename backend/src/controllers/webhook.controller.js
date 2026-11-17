@@ -22,13 +22,19 @@ class WebhookController {
         return res.status(400).json({ success: false, error: 'Valid URL is required' });
       }
 
+      const { validateAndResolveHost } = require('../utils/safeHttpClient');
+
       try {
         const parsed = new URL(url);
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
           return res.status(400).json({ success: false, error: 'URL must use http or https' });
         }
-      } catch {
-        return res.status(400).json({ success: false, error: 'Invalid webhook URL' });
+        await validateAndResolveHost(parsed.hostname);
+      } catch (err) {
+        if (err.message && err.message.startsWith('SSRF_DETECTED')) {
+          return res.status(400).json({ success: false, error: err.message, code: 'SSRF_BLOCKED' });
+        }
+        return res.status(400).json({ success: false, error: err.message || 'Invalid webhook URL' });
       }
 
       if (!Array.isArray(events) || events.length === 0) {

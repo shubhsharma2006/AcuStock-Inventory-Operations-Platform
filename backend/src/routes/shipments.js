@@ -5,12 +5,15 @@ const Item = require('../models/Item');
 const StockLedger = require('../models/StockLedger');
 const SerialAudit = require('../models/SerialAudit');
 const Transporter = require('../models/Transporter');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { generateShipmentChallanPdf } = require('../services/pdfGenerator');
+const { logBusinessEvent } = require('../utils/auditHelper');
 const logger = require('../utils/logger');
 const { validateRequest, schemas, escapeRegex } = require('../middleware/validateRequest');
+const shiprocketService = require('../services/courier/ShiprocketService');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // GET /api/shipments - Get all shipments (with filters)
 router.get('/', requireAuth, async (req, res) => {
@@ -301,6 +304,9 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
     // Auto-compute trackingUrl from transporter tracking pattern
     let finalCourier = courier;
     let finalTrackingUrl = trackingUrl || null;
+    let finalAwb = awb;
+    let finalLabelUrl = null;
+
     if (transporterId) {
       const tFilter = { _id: transporterId, tenantId: req.tenantId };
       const carrier = await Transporter.findOne(tFilter).session(session);
@@ -309,6 +315,36 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
         if (!finalTrackingUrl && carrier.trackingUrlPattern && awb) {
           finalTrackingUrl = carrier.trackingUrlPattern.replace(/\{awb\}|\{trackingNumber\}|\{tracking_number\}/gi, awb.trim());
         }
+      }
+    }
+
+    // Automated courier integration (Shiprocket / Delhivery)
+    if (!finalAwb && carrierType !== 'PORTER' && carrierType !== 'IN_HOUSE') {
+      try {
+        const courierResult = await shiprocketService.createAndAssignShipment({
+          orderId: `SHP-${Date.now().toString().slice(-6)}`,
+          customerName,
+          phone,
+          email,
+          address,
+          city,
+          state,
+          pincode,
+          productName: item.name,
+          sku: item.sku,
+          quantity,
+          price: item.price || item.salesPrice || 100,
+          weight,
+          carrierType,
+          deliveryType
+        });
+        if (courierResult) {
+          finalAwb = courierResult.awb;
+          finalCourier = finalCourier || courierResult.courierName;
+          finalLabelUrl = courierResult.labelUrl;
+        }
+      } catch (cErr) {
+        logger.warn('Automated courier booking failed, using fallback:', cErr.message);
       }
     }
 
@@ -337,7 +373,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
       originWarehouse,
       destinationGstin,
       trackingUrl: finalTrackingUrl,
-      awb,
+      awb: finalAwb || awb,
+      labelUrl: finalLabelUrl,
       dispatchDate: dispatchDate ? new Date(dispatchDate) : null,
       deliveryType,
       codAmount: deliveryType === 'COD' ? codAmount : null,
@@ -412,6 +449,19 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
     }
     
     await session.commitTransaction();
+
+    await logBusinessEvent({
+      req,
+      action: 'SHIPMENT_CREATED',
+      entityType: 'Shipment',
+      entityId: shipment._id,
+      metadata: {
+        type: shipment.type,
+        productId: shipment.productId,
+        quantity: shipment.quantity,
+        customerName: shipment.customerName
+      }
+    });
     
     res.status(201).json({
       message: type === 'OUT' ? 'Shipment created successfully' : 'Supply recorded successfully',
@@ -465,6 +515,18 @@ router.patch('/:id/status', requireAuth, requireRole(['ADMIN', 'MANAGER']), vali
     }
     
     await shipment.save();
+
+    await logBusinessEvent({
+      req,
+      action: 'SHIPMENT_STATUS_CHANGED',
+      entityType: 'Shipment',
+      entityId: shipment._id,
+      metadata: {
+        newStatus: status,
+        notes,
+        receivedBy
+      }
+    });
 
     // Trigger WhatsApp notification on dispatch (non-blocking)
     if (status === 'DISPATCHED' && shipment.phone) {
@@ -537,6 +599,18 @@ router.put('/:id', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, r
     }
     
     await shipment.save();
+
+    await logBusinessEvent({
+      req,
+      action: 'SHIPMENT_STATUS_CHANGED',
+      entityType: 'Shipment',
+      entityId: shipment._id,
+      metadata: {
+        action: 'UPDATED',
+        carrierType: shipment.carrierType,
+        awb: shipment.awb
+      }
+    });
     
     res.json({
       message: 'Shipment updated successfully',
@@ -564,6 +638,17 @@ router.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
     }
     
     await Shipment.findOneAndDelete(filter);
+
+    await logBusinessEvent({
+      req,
+      action: 'SHIPMENT_STATUS_CHANGED',
+      entityType: 'Shipment',
+      entityId: shipment._id,
+      metadata: {
+        action: 'DELETED',
+        status: shipment.status
+      }
+    });
     
     res.json({ message: 'Shipment deleted successfully' });
   } catch (error) {

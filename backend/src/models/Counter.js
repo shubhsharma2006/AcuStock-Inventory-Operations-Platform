@@ -20,7 +20,7 @@ const counterSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['SALES_ORDER', 'PURCHASE_ORDER', 'SHIPMENT', 'INVOICE', 'SKU', 'TRANSFER'],
+    enum: ['SALES_ORDER', 'PURCHASE_ORDER', 'SHIPMENT', 'INVOICE', 'SKU', 'TRANSFER', 'ADJUSTMENT', 'WORK_ORDER', 'IMPORT', 'CRM_DEAL', 'QUOTATION', 'PAYMENT_RECEIPT', 'RMA', 'CREDIT_NOTE', 'VENDOR_BILL', 'PAYMENT_VOUCHER', 'ASN', 'PICKING_WAVE', 'JOURNAL_ENTRY', 'PURCHASE_REQUISITION'],
     index: true
   },
   sequence: {

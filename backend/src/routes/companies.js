@@ -13,6 +13,17 @@ const { logBusinessEvent } = require('../utils/auditHelper');
 const logger = require('../utils/logger');
 const { escapeRegex } = require('../utils/regex');
 const { validateUpload } = require('../middleware/uploadValidation');
+const redisService = require('../services/redis.service');
+
+const COMPANY_CACHE_TTL_SECONDS = 300; // 5 minutes TTL
+const invalidateCompanyCache = async (tenantId) => {
+  if (!tenantId) return;
+  try {
+    await redisService.delPrefix(`cache:tenant:${tenantId}:companies:`);
+  } catch (err) {
+    logger.error('Failed to invalidate company cache:', err);
+  }
+};
 
 const router = express.Router();
 router.use(requireTenantId);
@@ -161,6 +172,12 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), async (r
     const { search = '', industry = '' } = req.query;
     const { page, limit } = normalizePaginationQuery(req.query);
 
+    const cacheKey = `cache:tenant:${req.tenantId}:companies:${search}:${industry}:${page}:${limit}`;
+    const cached = await redisService.get(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const query = { isActive: true, tenantId: req.tenantId };
 
     if (search) {
@@ -181,12 +198,15 @@ router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER', 'USER']), async (r
 
     const total = await Company.countDocuments(query);
 
-    res.json({
+    const responsePayload = {
       companies,
       totalPages: Math.ceil(total / limit),
       currentPage: page,
       total
-    });
+    };
+
+    await redisService.set(cacheKey, responsePayload, COMPANY_CACHE_TTL_SECONDS);
+    res.json(responsePayload);
   } catch (error) {
     logger.error('Error fetching companies:', error);
     res.status(500).json({ message: 'Server error' });
@@ -493,7 +513,11 @@ router.get('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
 // POST /api/companies - Create new company (Admin only)
 router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddCompany'), async (req, res) => {
   try {
-    let { name, email, phone, address, industry, website, taxId } = req.body;
+    let {
+      name, legalName, shortName, type, email, phone, address, shippingAddress,
+      industry, website, taxId, pan, cin, msme, contactPerson, paymentTerms,
+      creditLimit, currency, notes
+    } = req.body;
 
     // Gracefully handle string address or partial address
     if (typeof address === 'string') {
@@ -514,8 +538,27 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
       };
     }
 
+    if (shippingAddress && typeof shippingAddress === 'object') {
+      shippingAddress = {
+        street: shippingAddress.street?.trim() || address.street,
+        city: shippingAddress.city?.trim() || address.city,
+        state: shippingAddress.state?.trim() || address.state,
+        zipCode: shippingAddress.zipCode?.trim() || address.zipCode,
+        country: shippingAddress.country?.trim() || address.country || 'India'
+      };
+    }
+
     if (!industry) {
       industry = 'Technology';
+    }
+
+    if (website && typeof website === 'string' && website.trim()) {
+      website = website.trim();
+      if (!/^https?:\/\//i.test(website)) {
+        website = 'https://' + website;
+      }
+    } else {
+      website = undefined;
     }
 
     // Explicitly check for required fields from the Company model
@@ -538,13 +581,26 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
     }
 
     const company = new Company({
-      name,
-      email: email.toLowerCase(),
-      phone,
+      name: name.trim(),
+      legalName: legalName ? legalName.trim() : undefined,
+      shortName: shortName ? shortName.trim() : undefined,
+      type: type || 'SUPPLIER',
+      email: email.toLowerCase().trim(),
+      phone: phone.trim(),
       address,
+      shippingAddress,
       industry,
       website,
-      taxId,
+      taxId: taxId ? taxId.trim() : undefined,
+      pan: pan ? pan.trim().toUpperCase() : undefined,
+      cin: cin ? cin.trim().toUpperCase() : undefined,
+      msme: msme ? msme.trim() : undefined,
+      contactPerson: contactPerson ? contactPerson.trim() : undefined,
+      paymentTerms: paymentTerms || 'Net 30',
+      creditLimit: creditLimit !== undefined ? Number(creditLimit) : 0,
+      currency: currency || 'INR',
+      notes: notes ? notes.trim() : undefined,
+      isSupplier: type === 'SUPPLIER' || type === 'MANUFACTURER',
       createdBy: req.user._id,
       tenantId: req.tenantId
     });
@@ -582,6 +638,8 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
       }
     }).catch(() => {});
 
+    await invalidateCompanyCache(req.tenantId);
+
     res.status(201).json({
       message: 'Company created successfully',
       company: populatedCompany
@@ -598,7 +656,11 @@ router.post('/', requireAuth, requireRole(['ADMIN']), requirePermission('canAddC
 // PUT /api/companies/:id - Update company (Admin only)
 router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requirePermission('canEditCompany'), async (req, res) => {
   try {
-    const { name, email, phone, address, industry, website, taxId, isActive } = req.body;
+    const {
+      name, legalName, shortName, type, email, phone, address, shippingAddress,
+      industry, website, taxId, pan, cin, msme, contactPerson, paymentTerms,
+      creditLimit, currency, notes, isActive
+    } = req.body;
     const { id } = req.params;
 
     // Validation
@@ -636,12 +698,28 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
       };
     }
 
+    let normalizedShipping = shippingAddress;
+    if (shippingAddress && typeof shippingAddress === 'object') {
+      normalizedShipping = {
+        street: shippingAddress.street?.trim() || 'N/A',
+        city: shippingAddress.city?.trim() || 'N/A',
+        state: shippingAddress.state?.trim() || 'N/A',
+        zipCode: shippingAddress.zipCode?.trim() || '00000',
+        country: shippingAddress.country?.trim() || 'India'
+      };
+    }
+
     if (industry !== undefined && (!allowedIndustries.includes(industry) || industry.trim() === '')) {
       return res.status(400).json({ message: 'Invalid or empty industry specified' });
     }
 
-    if (website !== undefined && website.trim() === '') return res.status(400).json({ message: 'Website cannot be empty' });
-    if (taxId !== undefined && taxId.trim() === '') return res.status(400).json({ message: 'Tax ID cannot be empty' });
+    let normalizedWebsite = website;
+    if (website && typeof website === 'string' && website.trim()) {
+      normalizedWebsite = website.trim();
+      if (!/^https?:\/\//i.test(normalizedWebsite)) {
+        normalizedWebsite = 'https://' + normalizedWebsite;
+      }
+    }
 
     const filter = { _id: req.params.id, tenantId: req.tenantId };
 
@@ -667,14 +745,29 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
       isActive: company.isActive
     };
 
-    company.name     = name     !== undefined ? name     : company.name;
-    company.email    = email    !== undefined ? email.toLowerCase() : company.email;
-    company.phone    = phone    !== undefined ? phone    : company.phone;
-    company.address  = normalizedAddress !== undefined ? normalizedAddress : company.address;
-    company.industry = industry !== undefined ? industry : company.industry;
-    company.website  = website  !== undefined ? website  : company.website;
-    company.taxId    = taxId    !== undefined ? taxId    : company.taxId;
-    company.isActive = isActive !== undefined ? isActive : company.isActive;
+    company.name            = name            !== undefined ? name            : company.name;
+    company.legalName       = legalName       !== undefined ? legalName       : company.legalName;
+    company.shortName       = shortName       !== undefined ? shortName       : company.shortName;
+    company.type            = type            !== undefined ? type            : company.type;
+    company.email           = email           !== undefined ? email.toLowerCase() : company.email;
+    company.phone           = phone           !== undefined ? phone           : company.phone;
+    company.address         = normalizedAddress !== undefined ? normalizedAddress : company.address;
+    company.shippingAddress = normalizedShipping !== undefined ? normalizedShipping : company.shippingAddress;
+    company.industry        = industry        !== undefined ? industry        : company.industry;
+    company.website         = normalizedWebsite !== undefined ? normalizedWebsite : company.website;
+    company.taxId           = taxId           !== undefined ? taxId           : company.taxId;
+    company.pan             = pan             !== undefined ? pan.toUpperCase() : company.pan;
+    company.cin             = cin             !== undefined ? cin.toUpperCase() : company.cin;
+    company.msme            = msme            !== undefined ? msme            : company.msme;
+    company.contactPerson   = contactPerson   !== undefined ? contactPerson   : company.contactPerson;
+    company.paymentTerms    = paymentTerms    !== undefined ? paymentTerms    : company.paymentTerms;
+    company.creditLimit     = creditLimit     !== undefined ? Number(creditLimit) : company.creditLimit;
+    company.currency        = currency        !== undefined ? currency        : company.currency;
+    company.notes           = notes           !== undefined ? notes           : company.notes;
+    company.isActive        = isActive        !== undefined ? isActive        : company.isActive;
+    if (type !== undefined) {
+      company.isSupplier = type === 'SUPPLIER' || type === 'MANUFACTURER';
+    }
 
     await company.save();
 
@@ -699,6 +792,8 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), requir
         summary: `Updated company "${company.name}"`
       }
     }).catch(() => {});
+
+    await invalidateCompanyCache(req.tenantId);
 
     res.json({
       message: 'Company updated successfully',
@@ -736,6 +831,8 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
       },
       severity: 'WARNING'
     }).catch(() => {});
+
+    await invalidateCompanyCache(req.tenantId);
 
     res.json({ message: 'Company deleted successfully' });
   } catch (error) {

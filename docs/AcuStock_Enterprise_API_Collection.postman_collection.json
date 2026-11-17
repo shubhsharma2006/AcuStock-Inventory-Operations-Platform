@@ -1,0 +1,238 @@
+{
+  "info": {
+    "name": "AcuStock Enterprise WMS & Supply Chain API Collection",
+    "description": "Comprehensive REST API collection for AcuStock Enterprise WMS & ERP Suite. Covers multi-tenant authentication, catalog management, barcode scanning, stock ledger transactions, automated courier dispatch (Shiprocket / Porter / Delhivery), Tally Prime XML bridges, Stripe & Razorpay billing portals, e-commerce webhooks, and GDPR / DPDP Act 2023 compliance.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "2.4.0"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5001/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "tenantId",
+      "value": "default-org",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication & Security",
+      "item": [
+        {
+          "name": "Login (Password / 2FA Challenge)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"dexter.fem@gmail.com\",\n  \"password\": \"shubhsharma@123\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Verify 2FA TOTP Token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"USER_ID_HERE\",\n  \"token\": \"123456\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/two-factor/verify-login", "host": ["{{baseUrl}}"], "path": ["two-factor", "verify-login"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Products & Inventory Lots",
+      "item": [
+        {
+          "name": "List Catalog Products",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/items?page=1&limit=25", "host": ["{{baseUrl}}"], "path": ["items"] }
+          }
+        },
+        {
+          "name": "Validate Serial Numbers (Pre-check)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serialNumbers\": [\"SN-1001\", \"SN-1002\"],\n  \"productId\": \"PRODUCT_ID\",\n  \"action\": \"IN\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/stock/validate-serials", "host": ["{{baseUrl}}"], "path": ["stock", "validate-serials"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Stock In & Out Ledger",
+      "item": [
+        {
+          "name": "Record Stock IN (Supplier Receiving)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"PRODUCT_ID\",\n  \"warehouseId\": \"WAREHOUSE_ID\",\n  \"quantity\": 10,\n  \"companyName\": \"Arrow Electronics Asia\",\n  \"serialNumbers\": [\"SN-1001\", \"SN-1002\"],\n  \"remarks\": \"PO-2026-001 Inward\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/stock/in", "host": ["{{baseUrl}}"], "path": ["stock", "in"] }
+          }
+        },
+        {
+          "name": "Record Stock OUT (Customer Dispatch)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"PRODUCT_ID\",\n  \"warehouseId\": \"WAREHOUSE_ID\",\n  \"quantity\": 5,\n  \"serialNumbers\": [\"SN-1001\"],\n  \"companyName\": \"Bharat Tech Systems\",\n  \"remarks\": \"Dispatch SO-8921\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/stock/out", "host": ["{{baseUrl}}"], "path": ["stock", "out"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Shipments & Automated Courier API",
+      "item": [
+        {
+          "name": "Create & Dispatch Shipment (Shiprocket / Porter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"orderId\": \"SO-2026-901\",\n  \"carrierType\": \"DELHIVERY\",\n  \"shippingMode\": \"SURFACE\",\n  \"deliveryType\": \"Prepaid\",\n  \"companyName\": \"Consignee Enterprises\",\n  \"phone\": \"+91 98765 43210\",\n  \"address\": \"42 Ind Area Phase 2, Okhla\",\n  \"city\": \"New Delhi\",\n  \"state\": \"Delhi\",\n  \"pincode\": \"110020\",\n  \"productId\": \"PRODUCT_ID\",\n  \"quantity\": 2,\n  \"price\": 1200\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/shipments", "host": ["{{baseUrl}}"], "path": ["shipments"] }
+          }
+        },
+        {
+          "name": "Live Track AWB",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/tracking/DEL-97169440", "host": ["{{baseUrl}}"], "path": ["tracking", "DEL-97169440"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Compliance, Tally XML & Reports",
+      "item": [
+        {
+          "name": "Export Tally Prime XML (Vouchers & Masters)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/reports/tally-xml?kind=both", "host": ["{{baseUrl}}"], "path": ["reports", "tally-xml"], "query": [{ "key": "kind", "value": "both" }] }
+          }
+        },
+        {
+          "name": "Stock Velocity & Movements",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/reports/stock-movement", "host": ["{{baseUrl}}"], "path": ["reports", "stock-movement"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Billing & Payment Gateways",
+      "item": [
+        {
+          "name": "Open Stripe / Razorpay Customer Billing Portal",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"returnUrl\": \"http://localhost:3000/dashboard/admin/billing\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/billing/customer-portal", "host": ["{{baseUrl}}"], "path": ["billing", "customer-portal"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. E-commerce Inbound Webhooks",
+      "item": [
+        {
+          "name": "Shopify Orders Create Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Shopify-Topic", "value": "orders/create" },
+              { "key": "X-Shopify-Shop-Domain", "value": "acustock-demo.myshopify.com" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": 9821048123,\n  \"name\": \"#1042\",\n  \"customer\": {\n    \"first_name\": \"Kavita\",\n    \"last_name\": \"Shah\",\n    \"email\": \"kavita@example.com\"\n  },\n  \"line_items\": [\n    {\n      \"sku\": \"MCU-STM32-407VGT6\",\n      \"name\": \"STM32 Microcontroller\",\n      \"quantity\": 2,\n      \"price\": \"480.00\"\n    }\n  ],\n  \"shipping_address\": {\n    \"address1\": \"Flat 4B, Lotus Heights\",\n    \"city\": \"Bengaluru\",\n    \"province\": \"Karnataka\",\n    \"zip\": \"560001\",\n    \"country\": \"India\"\n  }\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/webhooks/shopify/orders-create", "host": ["{{baseUrl}}"], "path": ["webhooks", "shopify", "orders-create"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Enterprise GDPR & DPDP Act Portability",
+      "item": [
+        {
+          "name": "Tenant Full Data Export (.JSON Archive)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/gdpr/tenant-full-export", "host": ["{{baseUrl}}"], "path": ["gdpr", "tenant-full-export"] }
+          }
+        },
+        {
+          "name": "Tenant Permanent Data Purge (Right to be Forgotten)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"confirmPhrase\": \"DELETE_TENANT_DATA\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/gdpr/tenant-purge", "host": ["{{baseUrl}}"], "path": ["gdpr", "tenant-purge"] }
+          }
+        }
+      ]
+    }
+  ]
+}
+

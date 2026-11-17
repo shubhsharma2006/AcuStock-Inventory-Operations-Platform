@@ -19,6 +19,9 @@ type AuditItem = {
   userAgent?: string;
   createdAt: string;
   severity?: "INFO" | "WARNING" | "CRITICAL";
+  sequenceNumber?: number;
+  previousHash?: string;
+  currentHash?: string;
   changes?: {
     before?: Record<string, unknown>;
     after?: Record<string, unknown>;
@@ -35,6 +38,22 @@ type ActivityResponse = {
   totalPages: number;
 };
 
+type MerkleVerificationResult = {
+  success: boolean;
+  valid: boolean;
+  status: "VERIFIED" | "TAMPER_DETECTED" | "ERROR";
+  count: number;
+  rootHash?: string;
+  firstHash?: string;
+  verifiedAt: string;
+  durationMs: number;
+  brokenAtSequence?: number;
+  expectedSequence?: number;
+  logId?: string;
+  reason?: string;
+  message?: string;
+};
+
 export default function AuditLogsPage() {
   const [activeTab, setActiveTab] = useState<"BUSINESS" | "SECURITY">("BUSINESS");
   const [actionFilter, setActionFilter] = useState("ALL");
@@ -45,6 +64,11 @@ export default function AuditLogsPage() {
   const [page, setPage] = useState(1);
   const [selectedLogForDetails, setSelectedLogForDetails] = useState<AuditItem | null>(null);
   const [copiedJson, setCopiedJson] = useState(false);
+
+  // Merkle Cryptographic Verification State
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [merkleResult, setMerkleResult] = useState<MerkleVerificationResult | null>(null);
+  const [showCertificateModal, setShowCertificateModal] = useState(false);
 
   // Compute startDate based on dateRange
   const startDate = useMemo(() => {
@@ -87,6 +111,26 @@ export default function AuditLogsPage() {
 
   const logs = activityData?.activities || [];
   const totalPages = activityData?.totalPages || 1;
+
+  async function handleVerifyMerkleChain() {
+    setIsVerifying(true);
+    try {
+      const res = await apiFetch<MerkleVerificationResult>("/auth/audit-logs/verify-integrity");
+      setMerkleResult(res);
+    } catch (err: any) {
+      setMerkleResult({
+        success: false,
+        valid: false,
+        status: "TAMPER_DETECTED",
+        count: 0,
+        verifiedAt: new Date().toISOString(),
+        durationMs: 0,
+        reason: err?.message || "Cryptographic verification network failure or verification rejected."
+      });
+    } finally {
+      setIsVerifying(false);
+    }
+  }
 
   const getActionBadgeClass = (action: string, severity?: string) => {
     if (severity === "CRITICAL" || action.includes("DELETE") || action.includes("CANCEL") || action.includes("BLOCKED")) {
@@ -154,16 +198,18 @@ export default function AuditLogsPage() {
   function handleExportCsv() {
     if (logs.length === 0) return;
 
-    const headers = ["Timestamp", "Action", "Severity", "Entity Type", "Summary", "Performed By", "Role", "IP Address"];
+    const headers = ["Sequence", "Timestamp", "Action", "Severity", "Entity Type", "Summary", "Current Hash", "Performed By", "Role", "IP Address"];
     const rows = logs.map((log) => {
       const actorName = log.performedByName || (typeof log.performedBy === "object" ? log.performedBy?.name || log.performedBy?.email : undefined) || "SYSTEM";
       const actorRole = log.performedByRole || (typeof log.performedBy === "object" ? log.performedBy?.role : undefined) || "SYSTEM";
       return [
+        `"${log.sequenceNumber || ""}"`,
         `"${new Date(log.createdAt).toISOString()}"`,
         `"${log.action}"`,
         `"${log.severity || "INFO"}"`,
         `"${log.entityType || ""}"`,
         `"${formatAuditSummary(log).replace(/"/g, '""')}"`,
+        `"${log.currentHash || ""}"`,
         `"${actorName}"`,
         `"${actorRole}"`,
         `"${log.ipAddress || ""}"`,
@@ -197,10 +243,15 @@ export default function AuditLogsPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-xs uppercase tracking-[0.25em] text-indigo-400 font-semibold">Regulatory Compliance</div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mt-1">📋 Audit Trail & Compliance Log</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Immutable, cryptographically verifiable ledger of all stock transactions, logins, security changes, and AI operations.
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.25em] text-indigo-400 font-semibold">SAP GRC & 21 CFR Part 11 Standard</span>
+            <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400 border border-emerald-500/20">
+              SHA-256 Chained
+            </span>
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight mt-1">📋 Audit Trail & Cryptographic Ledger</h1>
+          <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+            Immutable, mathematically tamper-evident record of all physical inventory movements, user security events, AI copilot tool actions, and master data changes.
           </p>
         </div>
 
@@ -240,6 +291,106 @@ export default function AuditLogsPage() {
           >
             <span>📥 Export CSV</span>
           </button>
+        </div>
+      </div>
+
+      {/* SAP GRC Standard Cryptographic Merkle Hash Chain Verification Banner */}
+      <div className="relative overflow-hidden rounded-3xl border border-indigo-500/20 bg-gradient-to-r from-slate-900/90 via-indigo-950/30 to-slate-900/90 p-5 sm:p-6 backdrop-blur-2xl shadow-2xl shadow-indigo-500/5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-2 max-w-2xl">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-3 w-3 relative">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                  merkleResult?.valid ? "bg-emerald-400" : merkleResult?.valid === false ? "bg-rose-400" : "bg-amber-400"
+                }`}></span>
+                <span className={`relative inline-flex rounded-full h-3 w-3 ${
+                  merkleResult?.valid ? "bg-emerald-500" : merkleResult?.valid === false ? "bg-rose-500" : "bg-amber-500"
+                }`}></span>
+              </span>
+              <span className="text-xs uppercase tracking-wider font-bold text-indigo-300">
+                Merkle Cryptographic Chain Verification
+              </span>
+              {merkleResult?.valid && (
+                <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-bold text-emerald-400 border border-emerald-500/30">
+                  MATHEMATICALLY VERIFIED
+                </span>
+              )}
+              {merkleResult?.valid === false && (
+                <span className="rounded-full bg-rose-500/20 px-2.5 py-0.5 text-[11px] font-bold text-rose-400 border border-rose-500/30">
+                  CHAIN TAMPERING DETECTED
+                </span>
+              )}
+            </div>
+
+            <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+              Every audit record is bound by a sequential SHA-256 cryptographic hash pointer (<code className="text-indigo-300">H[i] = SHA256(H[i-1] + record[i])</code>).
+              Running mathematical verification guarantees that zero records have been altered, backdated, or purged.
+            </p>
+
+            {merkleResult && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-xs">
+                <div className="rounded-xl border border-white/5 bg-slate-950/60 p-2.5">
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Verified Records</div>
+                  <div className="text-sm font-bold text-emerald-400 mt-0.5">{merkleResult.count.toLocaleString()} blocks</div>
+                </div>
+                <div className="rounded-xl border border-white/5 bg-slate-950/60 p-2.5">
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Execution Speed</div>
+                  <div className="text-sm font-bold text-indigo-300 mt-0.5">{merkleResult.durationMs}ms</div>
+                </div>
+                <div className="rounded-xl border border-white/5 bg-slate-950/60 p-2.5 col-span-2">
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Root Cryptographic Hash</div>
+                  <div className="text-[11px] font-mono text-slate-300 mt-0.5 truncate" title={merkleResult.rootHash}>
+                    {merkleResult.rootHash || "0000000000000000000000000000000000000000000000000000000000000000"}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {merkleResult?.valid === false && (
+              <div className="rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-300 space-y-1">
+                <div className="font-bold flex items-center gap-1.5 text-rose-400">
+                  <span>⚠️ Integrity Breach:</span>
+                  <span>{merkleResult.reason}</span>
+                </div>
+                {merkleResult.brokenAtSequence && (
+                  <div>Broken at Sequence Number: <strong>#{merkleResult.brokenAtSequence}</strong></div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col sm:flex-row lg:flex-col gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={handleVerifyMerkleChain}
+              disabled={isVerifying}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 px-5 py-3 text-xs sm:text-sm font-bold text-white shadow-lg shadow-indigo-600/30 transition active:scale-95 disabled:opacity-50"
+            >
+              {isVerifying ? (
+                <>
+                  <svg className="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                  </svg>
+                  <span>Computing Hashes...</span>
+                </>
+              ) : (
+                <>
+                  <span>🔐 Verify Chain Integrity</span>
+                </>
+              )}
+            </button>
+
+            {merkleResult?.valid && (
+              <button
+                type="button"
+                onClick={() => setShowCertificateModal(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-950/20 hover:bg-emerald-900/30 px-5 py-3 text-xs sm:text-sm font-bold text-emerald-400 transition"
+              >
+                <span>📜 View Audit Certificate</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -302,19 +453,13 @@ export default function AuditLogsPage() {
                 onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}
                 className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2.5 text-xs sm:text-sm text-white outline-none focus:border-indigo-400/50"
               >
-                <option value="ALL">All Operations</option>
-                <option value="STOCK_IN">Stock IN</option>
-                <option value="STOCK_OUT">Stock OUT</option>
-                <option value="STOCK_ADJUSTED">Stock Adjusted</option>
-                <option value="AI_TOOL_EXECUTED">AI Tool Executed</option>
-                <option value="AI_COPILOT_QUERY">AI Copilot Query</option>
-                <option value="AI_OCR_PROCESSED">AI OCR Extraction</option>
-                <option value="ITEM_CREATED">Item Created</option>
-                <option value="ITEM_UPDATED">Item Updated</option>
-                <option value="PO_CREATED">PO Created</option>
-                <option value="SO_CREATED">SO Created</option>
-                <option value="COMPANY_CREATED">Company Created</option>
-                <option value="PERMISSION_UPDATED">Permission Updated</option>
+                <option value="ALL">All Business Actions</option>
+                <option value="STOCK_IN">STOCK_IN (Receiving)</option>
+                <option value="STOCK_OUT">STOCK_OUT (Dispatch)</option>
+                <option value="STOCK_TRANSFER_CREATED">STOCK_TRANSFER</option>
+                <option value="CYCLE_COUNT_COMPLETED">CYCLE_COUNT</option>
+                <option value="ADJUSTMENT_POSTED">ADJUSTMENT</option>
+                <option value="AI_TOOL_EXECUTED">AI_TOOL_CALL</option>
               </select>
             ) : (
               <select
@@ -322,180 +467,202 @@ export default function AuditLogsPage() {
                 onChange={(e) => { setActionFilter(e.target.value); setPage(1); }}
                 className="w-full rounded-xl border border-white/10 bg-slate-950/80 px-3 py-2.5 text-xs sm:text-sm text-white outline-none focus:border-indigo-400/50"
               >
-                <option value="ALL">All Security Events</option>
-                <option value="LOGIN_SUCCESS">Login Success</option>
-                <option value="LOGIN_FAILED">Login Failed</option>
-                <option value="PASSWORD_CHANGED">Password Changed</option>
-                <option value="PASSWORD_RESET_BY_ADMIN">Password Reset by Admin</option>
-                <option value="2FA_ENABLED">2FA Enabled</option>
-                <option value="2FA_DISABLED">2FA Disabled</option>
-                <option value="ACCOUNT_CREATED">Account Created</option>
+                <option value="ALL">All Security Actions</option>
+                <option value="LOGIN_SUCCESS">LOGIN_SUCCESS</option>
+                <option value="LOGIN_FAILED">LOGIN_FAILED</option>
+                <option value="PASSWORD_RESET_REQUEST">PASSWORD_RESET</option>
+                <option value="TWO_FACTOR_ENABLED">2FA_CHANGE</option>
+                <option value="ROLE_CHANGED">ROLE_CHANGED</option>
+                <option value="API_KEY_CREATED">API_KEY_CHANGE</option>
               </select>
             )}
           </div>
         </div>
 
-        {/* Filter Footer */}
-        <div className="flex flex-wrap items-center justify-between text-xs text-slate-400 pt-1">
-          <div className="flex items-center gap-3">
-            <span>
-              Showing <strong className="text-white">{logs.length}</strong> of <strong className="text-white">{activityData?.total || 0}</strong> events
-            </span>
+        {hasActiveFilters && (
+          <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-white/5">
+            <span>Filtered results active</span>
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="text-indigo-400 hover:text-indigo-300 font-semibold"
+            >
+              Reset Filters
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Main Table */}
+      <div className="rounded-2xl border border-white/10 bg-slate-900/60 backdrop-blur-xl overflow-hidden">
+        {isLoading ? (
+          <div className="py-20 text-center space-y-3">
+            <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-indigo-500 border-r-transparent"></div>
+            <div className="text-sm text-slate-400">Loading audit records...</div>
+          </div>
+        ) : error ? (
+          <div className="py-16 text-center text-rose-400 space-y-2">
+            <div>Failed to load audit logs.</div>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="text-xs text-indigo-400 underline hover:text-indigo-300"
+            >
+              Try again
+            </button>
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="py-20 text-center text-slate-400 space-y-2">
+            <div className="text-3xl">📭</div>
+            <div className="text-sm font-semibold text-white">No Audit Events Found</div>
+            <div className="text-xs text-slate-500 max-w-sm mx-auto">
+              No audit logs matched your current filters. Try resetting the search or broadening the date range.
+            </div>
             {hasActiveFilters && (
               <button
                 type="button"
                 onClick={handleResetFilters}
-                className="text-amber-400 hover:text-amber-300 font-medium underline"
+                className="mt-3 inline-block rounded-xl bg-white/10 px-4 py-2 text-xs font-semibold text-white hover:bg-white/20 transition"
               >
-                Reset filters
+                Clear all filters
               </button>
             )}
           </div>
-
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="text-slate-400 hover:text-white transition flex items-center gap-1"
-          >
-            <span>🔄 Refresh Stream</span>
-          </button>
-        </div>
-      </div>
-
-      {isLoading && (
-        <div className="flex h-48 items-center justify-center rounded-2xl border border-white/10 bg-slate-900/40 p-8 backdrop-blur-xl">
-          <div className="flex items-center gap-3 text-slate-400 text-sm">
-            <span className="h-5 w-5 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-            Loading compliance audit stream...
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded-xl border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-200">
-          {(error as Error).message}
-        </div>
-      )}
-
-      {!isLoading && !error && (
-        <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/40 backdrop-blur-xl shadow-2xl shadow-black/40">
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="border-b border-white/10 bg-slate-950/70 text-xs font-semibold uppercase tracking-wider text-slate-400">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead className="bg-white/5 text-[11px] font-bold uppercase tracking-wider text-slate-400 border-b border-white/10">
                 <tr>
-                  <th className="px-6 py-4">Timestamp</th>
-                  <th className="px-6 py-4">Action & Entity</th>
-                  <th className="px-6 py-4">Summary Description</th>
-                  <th className="px-6 py-4">Performed By</th>
-                  <th className="px-6 py-4 text-right">Inspection</th>
+                  <th className="py-3 px-4">Seq / Hash</th>
+                  <th className="py-3 px-4">Timestamp</th>
+                  <th className="py-3 px-4">Action</th>
+                  <th className="py-3 px-4">Event Summary</th>
+                  <th className="py-3 px-4">Actor</th>
+                  <th className="py-3 px-4">IP / Client</th>
+                  <th className="py-3 px-4 text-right">Details</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5 font-sans">
+              <tbody className="divide-y divide-white/5">
                 {logs.map((log) => {
-                  const actorName =
-                    log.performedByName ||
-                    (typeof log.performedBy === "object" ? log.performedBy?.name || log.performedBy?.email : undefined) ||
-                    "SYSTEM";
-                  const actorRole =
-                    log.performedByRole ||
-                    (typeof log.performedBy === "object" ? log.performedBy?.role : undefined) ||
-                    "SYSTEM";
-
-                  const summary = formatAuditSummary(log);
+                  const actorName = log.performedByName || (typeof log.performedBy === "object" ? log.performedBy?.name || log.performedBy?.email : undefined) || "SYSTEM";
+                  const actorRole = log.performedByRole || (typeof log.performedBy === "object" ? log.performedBy?.role : undefined) || "SYSTEM";
+                  const badgeClass = getActionBadgeClass(log.action, log.severity);
 
                   return (
-                    <tr key={log._id} className="group transition hover:bg-white/[0.03]">
-                      <td className="px-6 py-4 text-xs font-mono text-slate-400 whitespace-nowrap">
-                        <div>{new Date(log.createdAt).toLocaleDateString()}</div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">{new Date(log.createdAt).toLocaleTimeString()}</div>
+                    <tr
+                      key={log._id}
+                      className="hover:bg-white/[0.03] transition group cursor-pointer"
+                      onClick={() => setSelectedLogForDetails(log)}
+                    >
+                      <td className="py-3 px-4 font-mono text-xs">
+                        <div className="text-indigo-400 font-bold">
+                          #{log.sequenceNumber || "—"}
+                        </div>
+                        <div className="text-[10px] text-slate-500 truncate max-w-[90px]" title={log.currentHash}>
+                          {log.currentHash ? log.currentHash.slice(0, 10) + "…" : "0x000…"}
+                        </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold font-mono ${getActionBadgeClass(log.action, log.severity)}`}>
+
+                      <td className="py-3 px-4 whitespace-nowrap text-slate-400 font-mono text-xs">
+                        <div>{new Date(log.createdAt).toLocaleDateString()}</div>
+                        <div className="text-[11px] text-slate-500">{new Date(log.createdAt).toLocaleTimeString()}</div>
+                      </td>
+
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className={`inline-block rounded-lg px-2.5 py-1 text-[11px] font-bold tracking-tight ${badgeClass}`}>
                           {log.action}
                         </span>
+                      </td>
+
+                      <td className="py-3 px-4 max-w-md text-slate-300">
+                        <div className="font-medium text-white truncate" title={formatAuditSummary(log)}>
+                          {formatAuditSummary(log)}
+                        </div>
                         {log.entityType && (
-                          <div className="text-[11px] font-mono text-slate-400 mt-1">
-                            {log.entityType} {log.entityId ? `· #${log.entityId.slice(-6)}` : ""}
+                          <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                            {log.entityType} {log.entityId ? `· ${String(log.entityId).slice(-6)}` : ""}
                           </div>
                         )}
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="font-medium text-slate-200 leading-snug line-clamp-2 max-w-xl">
-                          {summary}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+
+                      <td className="py-3 px-4 whitespace-nowrap">
                         <div className="font-semibold text-white">{actorName}</div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">{actorRole}</div>
+                        <div className="text-[11px] text-slate-500 font-mono">{actorRole}</div>
                       </td>
-                      <td className="px-6 py-4 text-right whitespace-nowrap">
+
+                      <td className="py-3 px-4 whitespace-nowrap font-mono text-xs text-slate-400">
+                        <div>{log.ipAddress || "127.0.0.1"}</div>
+                        {log.userAgent && (
+                          <div className="text-[10px] text-slate-600 truncate max-w-[120px]" title={log.userAgent}>
+                            {log.userAgent}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
                         <button
                           type="button"
-                          onClick={() => setSelectedLogForDetails(log)}
-                          className="rounded-xl border border-white/10 bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-indigo-300 transition hover:bg-indigo-600 hover:text-white"
-                          title="Inspect complete event telemetry and snapshot diff"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedLogForDetails(log);
+                          }}
+                          className="rounded-xl border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition"
                         >
-                          👁️ Inspect
+                          Inspect →
                         </button>
                       </td>
                     </tr>
                   );
                 })}
-
-                {logs.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="p-12 text-center text-slate-500">
-                      No activity logs match the selected filter criteria.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
+        )}
 
-          {/* Pagination Controls */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-white/10 bg-slate-950/60 px-6 py-4">
+        {/* Pagination Footer */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-white/10 px-4 py-3 sm:px-6">
+            <div className="text-xs text-slate-400">
+              Page <span className="font-bold text-white">{page}</span> of <span className="font-bold text-white">{totalPages}</span>
+            </div>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="rounded-xl border border-white/10 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-30 hover:bg-white/10 transition"
+                disabled={page <= 1}
+                className="rounded-xl border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/5 hover:text-white transition disabled:opacity-40"
               >
-                ← Previous
+                Previous
               </button>
-              <div className="text-xs text-slate-400">
-                Page <span className="font-bold text-white">{page}</span> of {totalPages}
-              </div>
               <button
                 type="button"
-                disabled={page >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                className="rounded-xl border border-white/10 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-30 hover:bg-white/10 transition"
+                disabled={page >= totalPages}
+                className="rounded-xl border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/5 hover:text-white transition disabled:opacity-40"
               >
-                Next →
+                Next
               </button>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
 
-      {/* Event Inspection Modal */}
+      {/* Audit Detail Inspector Modal */}
       {selectedLogForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
-          <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[2rem] border border-white/15 bg-slate-900 p-6 sm:p-8 shadow-2xl">
-            {/* Header */}
-            <div className="flex items-start justify-between border-b border-white/10 pb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="relative w-full max-w-3xl rounded-3xl border border-white/20 bg-slate-900 p-6 sm:p-8 shadow-2xl overflow-y-auto max-h-[90vh] custom-scrollbar">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between pb-4 border-b border-white/10">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-3 py-0.5 text-xs font-bold font-mono ${getActionBadgeClass(selectedLogForDetails.action, selectedLogForDetails.severity)}`}>
+                  <span className={`inline-block rounded-lg px-2.5 py-1 text-xs font-bold ${getActionBadgeClass(selectedLogForDetails.action, selectedLogForDetails.severity)}`}>
                     {selectedLogForDetails.action}
                   </span>
-                  <span className="text-xs font-mono text-slate-400">
-                    {new Date(selectedLogForDetails.createdAt).toLocaleString()}
+                  <span className="text-xs font-mono text-indigo-400 font-bold">
+                    Sequence #{selectedLogForDetails.sequenceNumber || "—"}
                   </span>
                 </div>
-                <h3 className="text-lg font-bold text-white mt-2">
+                <h3 className="text-xl font-bold text-white mt-2">
                   {formatAuditSummary(selectedLogForDetails)}
                 </h3>
               </div>
@@ -506,6 +673,27 @@ export default function AuditLogsPage() {
               >
                 ✕
               </button>
+            </div>
+
+            {/* Cryptographic Hash Chaining Metadata */}
+            <div className="mt-4 rounded-2xl border border-indigo-500/20 bg-indigo-950/20 p-4 space-y-2">
+              <div className="text-xs uppercase tracking-wider font-bold text-indigo-400 flex items-center gap-2">
+                <span>🔒 Cryptographic SHA-256 Hash Chain Proof</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Previous Block Hash (H[i-1])</div>
+                  <div className="text-slate-300 break-all bg-black/30 p-2 rounded-lg mt-0.5">
+                    {selectedLogForDetails.previousHash || "0000000000000000000000000000000000000000000000000000000000000000"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-slate-500">Current Block Hash (H[i])</div>
+                  <div className="text-indigo-300 break-all bg-black/30 p-2 rounded-lg mt-0.5">
+                    {selectedLogForDetails.currentHash || "0000000000000000000000000000000000000000000000000000000000000000"}
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Event Meta Cards */}
@@ -590,6 +778,79 @@ export default function AuditLogsPage() {
                 className="rounded-xl bg-white/10 px-5 py-2 text-sm font-semibold text-white hover:bg-white/20 transition"
               >
                 Close Inspection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SOC 2 / FDA 21 CFR Part 11 Official Audit Certificate Modal */}
+      {showCertificateModal && merkleResult && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+          <div className="relative w-full max-w-2xl rounded-3xl border border-indigo-500/30 bg-slate-950 p-8 shadow-2xl text-white space-y-6">
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-indigo-600/20 p-2.5 border border-indigo-500/30 text-xl">
+                  🏛️
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold tracking-tight">Audit Chain Integrity Certificate</h3>
+                  <div className="text-xs text-slate-400 font-mono">SOC 2 Type II & FDA 21 CFR Part 11 Compliance Proof</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCertificateModal(false)}
+                className="rounded-full p-2 text-slate-400 hover:bg-white/10 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-950/20 p-5 space-y-3">
+              <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                <span>✅ Cryptographic Verification Verdict: VALID & UNBROKEN</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                This certifies that the AcuStock cryptographic verification engine performed full mathematical induction across all {merkleResult.count.toLocaleString()} sequential event blocks. No intermediate block deletions, backdated records, or payload mutations were detected.
+              </p>
+            </div>
+
+            <div className="space-y-3 font-mono text-xs">
+              <div className="flex justify-between border-b border-white/5 pb-2">
+                <span className="text-slate-400">Verification Timestamp:</span>
+                <span className="text-slate-200">{new Date(merkleResult.verifiedAt).toUTCString()}</span>
+              </div>
+              <div className="flex justify-between border-b border-white/5 pb-2">
+                <span className="text-slate-400">Total Sequential Blocks:</span>
+                <span className="text-emerald-400 font-bold">{merkleResult.count.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between border-b border-white/5 pb-2">
+                <span className="text-slate-400">Verification Engine Speed:</span>
+                <span className="text-slate-200">{merkleResult.durationMs}ms</span>
+              </div>
+              <div className="flex flex-col gap-1 border-b border-white/5 pb-2">
+                <span className="text-slate-400">Cryptographic Root Hash (H[N]):</span>
+                <span className="text-indigo-300 break-all bg-black/40 p-2 rounded-lg text-[11px]">
+                  {merkleResult.rootHash}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-white/10">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition"
+              >
+                🖨️ Print Certificate
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCertificateModal(false)}
+                className="rounded-xl bg-indigo-600 px-5 py-2 text-xs font-bold text-white hover:bg-indigo-500 transition"
+              >
+                Close Certificate
               </button>
             </div>
           </div>

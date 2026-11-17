@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import { useMyModules } from "@/hooks/use-module-permission";
 
 /* ─── Types ──────────────────────────────────────────────────────────────── */
 
@@ -156,6 +157,7 @@ export function CommandMenu() {
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const pathname = usePathname();
+  const myModules = useMyModules();
 
   const debouncedQuery = useDebounce(query, 250);
 
@@ -216,10 +218,20 @@ export function CommandMenu() {
     return () => { cancelled = true; };
   }, [debouncedQuery, open]);
 
+  // ── Filter categories against governance permissions ────────
+  const filteredProducts  = (results?.products ?? []).filter(() => !myModules.isModuleHidden("products"));
+  const filteredSerials   = (results?.serials ?? []).filter(() => !myModules.isModuleHidden("serials"));
+  const filteredCompanies = (results?.companies ?? []).filter(() => !myModules.isModuleHidden("companies"));
+  const filteredOrders    = (results?.orders ?? []).filter(() => !myModules.isModuleHidden("sales-orders"));
+  const filteredActions   = (results?.actions ?? []).filter((a) => {
+    const raw = (a.url || "").replace(/^\//, "").split("/")[0];
+    return !raw || !myModules.isModuleHidden(raw);
+  });
+
   // ── Flat list for keyboard nav ───────────────────────────────
   const flatItems: Array<{ url: string }> = [];
   if (results) {
-    const cats = [results.products, results.serials, results.companies, results.orders, results.actions];
+    const cats = [filteredProducts, filteredSerials, filteredCompanies, filteredOrders, filteredActions];
     for (const cat of cats) {
       for (const item of cat) {
         flatItems.push({ url: (item as SearchResultItem).url ?? (item as ActionItem).url ?? "/" });
@@ -255,11 +267,11 @@ export function CommandMenu() {
   if (!open) return null;
 
   // ── Section offsets ──────────────────────────────────────────
-  const secProducts  = results?.products  ?? [];
-  const secSerials   = results?.serials   ?? [];
-  const secCompanies = results?.companies ?? [];
-  const secOrders    = results?.orders    ?? [];
-  const secActions   = results?.actions   ?? [];
+  const secProducts  = filteredProducts;
+  const secSerials   = filteredSerials;
+  const secCompanies = filteredCompanies;
+  const secOrders    = filteredOrders;
+  const secActions   = filteredActions;
 
   const off0 = 0;
   const off1 = off0 + secProducts.length;

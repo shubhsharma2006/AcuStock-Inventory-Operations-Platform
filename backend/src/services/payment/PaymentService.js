@@ -97,7 +97,7 @@ class PaymentService {
    */
   async verifyClientPayment({ transactionId, orderId, paymentId, signature, gateway: requestedGateway }) {
     const query = transactionId ? { transactionId } : { gatewayOrderId: orderId };
-    const transaction = await PaymentTransaction.findOne(query);
+    const transaction = await PaymentTransaction.findOne(query, null, { skipTenantIsolation: true });
 
     if (!transaction) {
       throw new Error('Transaction record not found');
@@ -163,7 +163,7 @@ class PaymentService {
       gateway: gateway.name,
       webhookEventId: normalized.eventId,
       status: 'SUCCESS'
-    });
+    }, null, { skipTenantIsolation: true });
 
     if (existingSuccess) {
       logger.info(`Idempotent webhook: event ${normalized.eventId} already processed for transaction ${existingSuccess.transactionId}`);
@@ -173,13 +173,13 @@ class PaymentService {
     // Match transaction by transactionId, gatewayOrderId, or gatewayPaymentId
     let transaction = null;
     if (normalized.metadata?.transactionId) {
-      transaction = await PaymentTransaction.findOne({ transactionId: normalized.metadata.transactionId });
+      transaction = await PaymentTransaction.findOne({ transactionId: normalized.metadata.transactionId }, null, { skipTenantIsolation: true });
     }
     if (!transaction && normalized.orderId) {
-      transaction = await PaymentTransaction.findOne({ gatewayOrderId: normalized.orderId });
+      transaction = await PaymentTransaction.findOne({ gatewayOrderId: normalized.orderId }, null, { skipTenantIsolation: true });
     }
     if (!transaction && normalized.paymentId) {
-      transaction = await PaymentTransaction.findOne({ gatewayPaymentId: normalized.paymentId });
+      transaction = await PaymentTransaction.findOne({ gatewayPaymentId: normalized.paymentId }, null, { skipTenantIsolation: true });
     }
 
     if (!transaction) {
@@ -215,7 +215,7 @@ class PaymentService {
           paidAt: new Date()
         }
       },
-      { new: true }
+      { new: true, skipTenantIsolation: true }
     );
 
     if (!updated) {
@@ -267,7 +267,7 @@ class PaymentService {
   async processRefund({ transactionId, reason, amountMinor, tenantId }) {
     if (!transactionId) throw new Error('transactionId is required');
 
-    const transaction = await PaymentTransaction.findOne({ transactionId });
+    const transaction = await PaymentTransaction.findOne({ transactionId }, null, { skipTenantIsolation: true });
     if (!transaction) {
       const err = new Error(`Transaction not found with ID: ${transactionId}`);
       err.statusCode = 404;

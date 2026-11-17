@@ -89,13 +89,15 @@ async function chat(req, res) {
     logger.error('Copilot Chat Error:', error);
 
     if (res.headersSent) {
-      res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+      res.write(`event: error\ndata: ${JSON.stringify({ error: error.message, code: error.code })}\n\n`);
       return res.end();
     }
 
-    return res.status(500).json({
+    const statusCode = error.statusCode || 500;
+    return res.status(statusCode).json({
       success: false,
-      error: error.message || 'An error occurred during AI processing'
+      error: error.message || 'An error occurred during AI processing',
+      code: error.code
     });
   }
 }

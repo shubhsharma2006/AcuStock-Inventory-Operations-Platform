@@ -98,6 +98,38 @@ const tenantSchema = new mongoose.Schema({
     logoUrl:      { type: String, trim: true },
     invoiceTerms: { type: String, trim: true, default: 'Payment is due within 30 days of invoice date. Thank you for your business!' }
   },
+  // ── Custom Domain Configuration (Item 1.1) ──────────────────────────
+  customDomain: {
+    domain:             { type: String, trim: true, lowercase: true, index: true },
+    verificationToken:  { type: String }, // Random challenge token for TXT record
+    cnameTarget:        { type: String, default: 'cname.acustock.com' },
+    status:             { type: String, enum: ['NONE', 'PENDING_DNS', 'VERIFIED', 'FAILED'], default: 'NONE' },
+    verifiedAt:         Date,
+    lastCheckedAt:      Date,
+    sslStatus:          { type: String, enum: ['NONE', 'ACTIVE', 'PROVISIONING'], default: 'NONE' }
+  },
+
+  // ── Enterprise SAML 2.0 / SSO Configuration (Item 1.2) ──────────────
+  sso: {
+    enabled:             { type: Boolean, default: false },
+    enforced:            { type: Boolean, default: false }, // Enforce SSO-only login for matching email domains
+    domainPatterns:      [{ type: String, lowercase: true, trim: true }], // e.g. ['acme.com', 'acme.org']
+    idpIssuer:           { type: String, trim: true },
+    idpSsoUrl:           { type: String, trim: true }, // IdP Single Sign-On HTTP-Redirect URL
+    idpCertificate:      { type: String, trim: true }, // PEM X.509 Certificate string
+    allowJitProvisioning:{ type: Boolean, default: true }, // Just-In-Time user creation
+    defaultRole:         { type: String, enum: ['USER', 'MANAGER'], default: 'USER' }
+  },
+
+  // ── Automated Overage Metering Configuration (Item 1.3) ──────────────
+  overageConfig: {
+    enabled:          { type: Boolean, default: false },
+    itemUnitRate:     { type: Number, default: 0.05 }, // Currency rate per extra inventory item
+    aiQueryUnitRate:  { type: Number, default: 0.02 }, // Rate per extra AI query
+    ocrScanUnitRate:   { type: Number, default: 0.10 }, // Rate per extra OCR scan
+    currency:         { type: String, default: 'USD' }
+  },
+
   ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 

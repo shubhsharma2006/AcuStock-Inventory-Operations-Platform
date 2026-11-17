@@ -102,7 +102,23 @@ export function MobileBarcodeScanner({
         }
       } catch (err) {
         if (isMounted) {
-          console.warn("Camera access failed:", err);
+          console.warn("Camera primary constraint failed, attempting fallback to any video source:", err);
+          try {
+            const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            if (!isMounted) {
+              fallbackStream.getTracks().forEach((t) => t.stop());
+              return;
+            }
+            setStream(fallbackStream);
+            if (videoRef.current) {
+              videoRef.current.srcObject = fallbackStream;
+              videoRef.current.play().catch(() => {});
+            }
+            setCameraActive(true);
+            return;
+          } catch (fbErr) {
+            console.warn("Fallback camera failed:", fbErr);
+          }
           setErrorMessage(err instanceof Error ? err.message : "Camera access denied. Use manual entry below.");
           setCameraActive(false);
         }
@@ -207,10 +223,28 @@ export function MobileBarcodeScanner({
             {cameraActive ? (
               <>
                 <video
-                  ref={videoRef}
+                  ref={(el) => {
+                    videoRef.current = el;
+                    if (el) {
+                      el.muted = true;
+                      el.defaultMuted = true;
+                      el.setAttribute("playsinline", "true");
+                      el.setAttribute("webkit-playsinline", "true");
+                      if (stream && el.srcObject !== stream) {
+                        el.srcObject = stream;
+                      }
+                      el.play().catch(() => {});
+                    }
+                  }}
+                  autoPlay
                   playsInline
                   muted
-                  className="h-full w-full object-cover"
+                  onLoadedMetadata={() => {
+                    if (videoRef.current) {
+                      videoRef.current.play().catch(console.error);
+                    }
+                  }}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                 />
 
                 {/* Viewfinder Target Framing */}
@@ -251,8 +285,23 @@ export function MobileBarcodeScanner({
             )}
           </div>
 
+          {/* Quick Click Sample Barcodes for Desktop Testing */}
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] text-slate-400">Sample Barcodes:</span>
+            {["8901361333337", "MCU-STM32-407VGT6", "BAT-LFP-32100", "LOC-WH1-Z01-B12"].map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => handleDetected(c)}
+                className="rounded bg-slate-800/90 border border-white/5 px-2 py-0.5 text-[10px] font-mono text-amber-300 hover:bg-slate-700 hover:text-white transition cursor-pointer"
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+
           {/* Manual Entry Fallback Form */}
-          <form onSubmit={handleManualSubmit} className="mt-4 pt-3 border-t border-slate-800/80">
+          <form onSubmit={handleManualSubmit} className="mt-3 pt-3 border-t border-slate-800/80">
             <label className="text-[11px] font-semibold text-slate-400 block mb-1">
               Manual Barcode / Serial / SKU Input
             </label>

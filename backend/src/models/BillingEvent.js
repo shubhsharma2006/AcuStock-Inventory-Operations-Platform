@@ -36,4 +36,7 @@ const billingEventSchema = new mongoose.Schema({
 
 billingEventSchema.index({ tenantId: 1, createdAt: -1 });
 
+const tenantIsolationPlugin = require('../middleware/tenantIsolationPlugin');
+billingEventSchema.plugin(tenantIsolationPlugin);
+
 module.exports = mongoose.model('BillingEvent', billingEventSchema);

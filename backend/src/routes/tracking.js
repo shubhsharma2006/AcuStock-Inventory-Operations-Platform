@@ -10,10 +10,11 @@ const Tenant = require('../models/Tenant');
 const Transporter = require('../models/Transporter');
 const carriers = require('../services/tracking/carriers');
 const { getCarrierTrackingUrl } = require('../services/tracking/carriers/portalLinks');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireTenantId } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 /**
  * GET /api/tracking/:shipmentId

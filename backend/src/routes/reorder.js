@@ -5,10 +5,11 @@ const PurchaseOrder = require('../models/PurchaseOrder');
 const StockLedger = require('../models/StockLedger');
 const Company = require('../models/Company');
 const Warehouse = require('../models/Warehouse');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { logBusinessEvent } = require('../utils/auditHelper');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 /**
  * GET /api/reorder/alerts

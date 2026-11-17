@@ -1,10 +1,11 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const AuditLog = require('../models/AuditLog');
-const { requireAuth, requireRole, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 /**
  * GET /api/activity

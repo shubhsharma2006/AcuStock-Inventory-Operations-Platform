@@ -76,6 +76,17 @@ class StripeGateway extends PaymentGateway {
     throw new Error(`Stripe session not paid. Current status: ${session.payment_status}`);
   }
 
+  async createBillingPortalSession({ customerId, returnUrl }) {
+    if (!this.stripe) {
+      throw new Error('Stripe client not initialized');
+    }
+    const session = await this.stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: returnUrl || process.env.FRONTEND_URL || 'http://localhost:3000/dashboard/admin/billing',
+    });
+    return session.url;
+  }
+
   verifyWebhookSignature(rawBody, signature, secret = this.webhookSecret) {
     if (!this.stripe) {
       throw new Error('Stripe client not initialized');

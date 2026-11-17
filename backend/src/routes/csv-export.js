@@ -16,9 +16,6 @@ const logger      = require('../utils/logger');
 
 const router = express.Router();
 
-// Fail-closed tenant isolation guard for all CSV exports
-router.use(requireTenantId);
-
 // ── Shared CSV helpers ─────────────────────────────────────────
 
 function escapeCsv(value) {
@@ -50,7 +47,7 @@ function sendCsvStream(res, filename) {
  * Query params: startDate, endDate, type (IN|OUT), productId
  * ADMIN sees all; MANAGER sees own entries.
  */
-router.get('/stock/export/csv', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+router.get('/stock/export/csv', requireAuth, requireTenantId, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
   try {
     const filter = { tenantId: req.tenantId };
     if (req.query.startDate) filter.createdAt = { $gte: new Date(req.query.startDate) };
@@ -122,7 +119,7 @@ router.get('/stock/export/csv', requireAuth, requireRole(['ADMIN', 'MANAGER']), 
  * GET /api/users/export/csv
  * ADMIN only.
  */
-router.get('/users/export/csv', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+router.get('/users/export/csv', requireAuth, requireTenantId, requireRole(['ADMIN']), async (req, res) => {
   try {
     const filename = `users-${new Date().toISOString().slice(0, 10)}.csv`;
     sendCsvStream(res, filename);
@@ -177,7 +174,7 @@ router.get('/users/export/csv', requireAuth, requireRole(['ADMIN']), async (req,
  * GET /api/items/export/csv
  * ADMIN only.
  */
-router.get('/items/export/csv', requireAuth, requireRole(['ADMIN']), async (req, res) => {
+router.get('/items/export/csv', requireAuth, requireTenantId, requireRole(['ADMIN']), async (req, res) => {
   try {
     const filename = `items-${new Date().toISOString().slice(0, 10)}.csv`;
     sendCsvStream(res, filename);

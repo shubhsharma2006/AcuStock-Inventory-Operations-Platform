@@ -83,6 +83,8 @@ const auditLogSchema = new mongoose.Schema({
       'USER_INVITED',
       'PLAN_UPGRADED',
       'PLAN_DOWNGRADED',
+      'PAYMENT_COMPLETED',
+      'PAYMENT_REFUNDED',
       'WARRANTY_CLAIMED',
       // Batch & Lot Events
       'LOT_CREATED',
@@ -243,12 +245,30 @@ const auditLogSchema = new mongoose.Schema({
     required: false,
     default: null,
     index: true
+  },
+
+  // ── Cryptographic Merkle Hash Chain Fields ──────────────────────────
+  sequenceNumber: {
+    type: Number,
+    required: true,
+    index: true
+  },
+  previousHash: {
+    type: String,
+    required: true,
+    default: '0000000000000000000000000000000000000000000000000000000000000000'
+  },
+  currentHash: {
+    type: String,
+    required: true,
+    index: true
   }
 }, {
   timestamps: false // We manage createdAt manually
 });
 
 // Compound indexes for efficient queries
+auditLogSchema.index({ tenantId: 1, sequenceNumber: 1 });
 auditLogSchema.index({ tenantId: 1, createdAt: -1 });
 auditLogSchema.index({ tenantId: 1, action: 1, createdAt: -1 });
 auditLogSchema.index({ tenantId: 1, entityType: 1, entityId: 1, createdAt: -1 });
@@ -256,18 +276,71 @@ auditLogSchema.index({ action: 1, createdAt: -1 });
 auditLogSchema.index({ targetUser: 1, action: 1, createdAt: -1 });
 auditLogSchema.index({ performedBy: 1, createdAt: -1 });
 
+// Immutability Hook: Prevent update mutations on existing AuditLog entries
+const blockMutation = function (next) {
+  if (this.getOptions && this.getOptions().allowAuditLogMutation) {
+    return next();
+  }
+  const err = new Error('AUDIT_LOG_IMMUTABLE: Audit logs are tamper-proof and cannot be modified.');
+  err.code = 'AUDIT_LOG_IMMUTABLE';
+  return next(err);
+};
+
+auditLogSchema.pre('updateOne', blockMutation);
+auditLogSchema.pre('updateMany', blockMutation);
+auditLogSchema.pre('findOneAndUpdate', blockMutation);
+auditLogSchema.pre('replaceOne', blockMutation);
+
 // TTL index - Auto delete logs after 1 year (configurable)
 auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 365 * 24 * 60 * 60 });
 
 /**
- * Static method to log an audit event
+ * Static method to log an audit event with cryptographic chaining
  */
 auditLogSchema.statics.logEvent = async function(data) {
   try {
+    const tenantId = data.tenantId || null;
+    const createdAt = data.createdAt ? new Date(data.createdAt) : new Date();
+
+    // Find the latest log in the chain for this tenant to establish linkage
+    const query = tenantId ? { tenantId } : { tenantId: null };
+    const latest = await this.findOne(query)
+      .sort({ sequenceNumber: -1, createdAt: -1 })
+      .setOptions({ skipTenantIsolation: true })
+      .lean();
+
+    const sequenceNumber = latest && typeof latest.sequenceNumber === 'number'
+      ? latest.sequenceNumber + 1
+      : 1;
+
+    const previousHash = latest && latest.currentHash
+      ? latest.currentHash
+      : '0000000000000000000000000000000000000000000000000000000000000000';
+
+    const { computeAuditHash } = require('../services/auditIntegrity.service');
+
+    const currentHash = computeAuditHash({
+      tenantId,
+      sequenceNumber,
+      previousHash,
+      createdAt,
+      action: data.action,
+      performedBy: data.performedBy,
+      targetUser: data.targetUser,
+      entityId: data.entityId,
+      details: data.details,
+      ipAddress: data.ipAddress
+    });
+
     const payload = {
       ...data,
-      tenantId: data.tenantId || null
+      tenantId,
+      createdAt,
+      sequenceNumber,
+      previousHash,
+      currentHash
     };
+
     const log = new this(payload);
     if (!payload.tenantId) {
       log.$locals = { skipTenantIsolation: true };
@@ -276,7 +349,7 @@ auditLogSchema.statics.logEvent = async function(data) {
     
     // Also log to console for development
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[AUDIT] ${data.action}: ${data.targetUserName || 'N/A'} by ${data.performedByName || 'SYSTEM'}`);
+      console.log(`[AUDIT #seq:${sequenceNumber}] ${data.action}: ${data.targetUserName || 'N/A'} by ${data.performedByName || 'SYSTEM'}`);
     }
     
     return log;

@@ -133,6 +133,40 @@ export default function BillingPage() {
 
   const metrics = usageData?.metrics;
 
+  // 2c. Fetch Real-time Overage Telemetry (SAP BRIM / Zoho Subscriptions Standard)
+  const { data: overageData, refetch: refetchOverage } = useQuery<{
+    success: boolean;
+    enabled: boolean;
+    currency: string;
+    totalOverageAmount: number;
+    highestUtilizationPct: number;
+    thresholdWarning?: { level: string; percent: number; message: string };
+    breakdown: {
+      items: { used: number; limit: number; surplus: number; rate: number; amount: number };
+      aiQueries: { used: number; limit: number; surplus: number; rate: number; amount: number };
+      ocrScans: { used: number; limit: number; surplus: number; rate: number; amount: number };
+    };
+  }>({
+    queryKey: ["billing-overage-status"],
+    queryFn: () => apiFetch("/billing/overage-status"),
+  });
+
+  const [reconciling, setReconciling] = useState(false);
+  const handleReconcileOverage = async () => {
+    if (!confirm("Reconcile and generate invoice for current accrued overages?")) return;
+    setReconciling(true);
+    try {
+      const res = await apiFetch<any>("/billing/reconcile-overage", { method: "POST" });
+      setFeedbackMessage({ text: res.message || "Overage reconciled successfully!", type: "success" });
+      queryClient.invalidateQueries({ queryKey: ["billing-overage-status"] });
+      queryClient.invalidateQueries({ queryKey: ["billing-transactions"] });
+    } catch (err: any) {
+      setFeedbackMessage({ text: err.message || "Failed to reconcile overage.", type: "error" });
+    } finally {
+      setReconciling(false);
+    }
+  };
+
   // 3. Fetch Transaction History Ledger
   const { data: transactionsData, isLoading: loadingTransactions } = useQuery<{ success: boolean; transactions: PaymentTransaction[] }>({
     queryKey: ["billing-transactions"],
@@ -402,6 +436,131 @@ export default function BillingPage() {
             <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
               <span>Warehouses: <strong className="text-white">{metrics?.activeWarehouses ?? 1}</strong></span>
               <span>Stock Holds: <strong className="text-amber-400">{metrics?.activeReservations ?? 0} active</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SAP BRIM / Zoho Billing Standard: Real-Time Usage Overage & Reconciler Hub */}
+      <div className="rounded-3xl border border-indigo-500/20 bg-gradient-to-r from-slate-900/80 via-slate-950/90 to-indigo-950/30 p-6 backdrop-blur-xl space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs uppercase tracking-wider font-bold text-indigo-400">SAP BRIM Standard</span>
+              <span className="rounded-full bg-indigo-500/10 px-2.5 py-0.5 text-[10px] font-bold text-indigo-400 border border-indigo-500/20">
+                Usage-Based Metering & Soft Limits
+              </span>
+            </div>
+            <h3 className="text-xl font-bold text-white mt-1">📊 Dynamic Overage Metering & Reconciler</h3>
+            <p className="text-xs text-slate-400 mt-1 max-w-2xl">
+              Soft quota enforcement allows your warehouse operations to proceed without disruption during peak spikes. Surplus usage is measured in real-time and reconciled at cycle end.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <div className="text-[10px] uppercase font-bold text-slate-500">Accrued Mid-Cycle Overage</div>
+              <div className="text-xl font-mono font-bold text-amber-400">
+                ${(overageData?.totalOverageAmount || 0).toFixed(2)} {overageData?.currency || "USD"}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleReconcileOverage}
+              disabled={reconciling || (overageData?.totalOverageAmount || 0) <= 0}
+              className="rounded-2xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-600/30 transition disabled:opacity-40"
+            >
+              {reconciling ? "Reconciling..." : "⚡ Reconcile Cycle Now"}
+            </button>
+          </div>
+        </div>
+
+        {/* Threshold Warning Banner if triggered */}
+        {overageData?.thresholdWarning && (
+          <div className={`p-4 rounded-2xl text-xs font-semibold border flex items-center justify-between ${
+            overageData.thresholdWarning.level === "CRITICAL"
+              ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+              : "bg-amber-500/15 text-amber-300 border-amber-500/30"
+          }`}>
+            <span>⚠️ {overageData.thresholdWarning.message}</span>
+            <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-mono">
+              {overageData.thresholdWarning.percent}% Plan Limit
+            </span>
+          </div>
+        )}
+
+        {/* 3 Overage Component Gauges */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Catalog SKUs */}
+          <div className="rounded-2xl border border-white/5 bg-slate-950/60 p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>📦</span>
+                <span>Product Catalog SKUs</span>
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">$0.05 / surplus SKU</span>
+            </div>
+            <div className="flex items-baseline justify-between pt-1">
+              <span className="text-xs text-slate-400">
+                Surplus: <strong className={overageData?.breakdown?.items?.surplus ? "text-amber-400" : "text-slate-300"}>
+                  +{overageData?.breakdown?.items?.surplus || 0}
+                </strong>
+              </span>
+              <span className="text-xs font-mono font-bold text-white">
+                ${(overageData?.breakdown?.items?.amount || 0).toFixed(2)}
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500">
+              {overageData?.breakdown?.items?.used || 0} utilized / {overageData?.breakdown?.items?.limit || 100} plan quota
+            </div>
+          </div>
+
+          {/* AI Copilot Queries */}
+          <div className="rounded-2xl border border-white/5 bg-slate-950/60 p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>🤖</span>
+                <span>AI Copilot Queries</span>
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">$0.02 / query</span>
+            </div>
+            <div className="flex items-baseline justify-between pt-1">
+              <span className="text-xs text-slate-400">
+                Surplus: <strong className={overageData?.breakdown?.aiQueries?.surplus ? "text-amber-400" : "text-slate-300"}>
+                  +{overageData?.breakdown?.aiQueries?.surplus || 0}
+                </strong>
+              </span>
+              <span className="text-xs font-mono font-bold text-white">
+                ${(overageData?.breakdown?.aiQueries?.amount || 0).toFixed(2)}
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500">
+              {overageData?.breakdown?.aiQueries?.used || 0} utilized / {overageData?.breakdown?.aiQueries?.limit || 1000} plan quota
+            </div>
+          </div>
+
+          {/* Vision OCR Invoices */}
+          <div className="rounded-2xl border border-white/5 bg-slate-950/60 p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>🔍</span>
+                <span>Vision OCR Invoice Scans</span>
+              </span>
+              <span className="text-[10px] font-mono text-slate-400">$0.10 / scan</span>
+            </div>
+            <div className="flex items-baseline justify-between pt-1">
+              <span className="text-xs text-slate-400">
+                Surplus: <strong className={overageData?.breakdown?.ocrScans?.surplus ? "text-amber-400" : "text-slate-300"}>
+                  +{overageData?.breakdown?.ocrScans?.surplus || 0}
+                </strong>
+              </span>
+              <span className="text-xs font-mono font-bold text-white">
+                ${(overageData?.breakdown?.ocrScans?.amount || 0).toFixed(2)}
+              </span>
+            </div>
+            <div className="text-[10px] text-slate-500">
+              {overageData?.breakdown?.ocrScans?.used || 0} utilized / {overageData?.breakdown?.ocrScans?.limit || 500} plan quota
             </div>
           </div>
         </div>

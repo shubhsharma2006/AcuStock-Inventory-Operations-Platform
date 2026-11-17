@@ -1,0 +1,146 @@
+# ============================================================
+# AcuStock Enterprise Production Stack (Docker Compose)
+# 
+# One-Click Deployment for M&A Due Diligence / Turnkey Hosting
+# Includes:
+# - MongoDB 7.0 with Replica Set (rs0) & Automatic Transactions
+# - Redis 7.0 Alpine (Distributed Session & Rate-Limiting Cache)
+# - AcuStock API Engine (Node.js 20 LTS)
+# - Next.js 16 Production Web App (Turbopack SSR / PWA)
+# - Nginx SSL Reverse Proxy & Security Headers
+# ============================================================
+
+version: '3.8'
+
+services:
+  # ── MONGODB REPLICA SET ───────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: acustock-mongo
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_DATABASE: acustock
+    volumes:
+      - mongo-production-data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: >
+        mongosh --quiet --eval "
+          try {
+            if (rs.status().ok === 1) quit(0);
+          } catch(e) {}
+          try {
+            rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] });
+            quit(0);
+          } catch(e) {
+            quit(1);
+          }
+        "
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    networks:
+      - acustock-internal
+
+  # ── REDIS DISTRIBUTED CACHE ──────────────────────────────
+  redis:
+    image: redis:7.0-alpine
+    container_name: acustock-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-acustock_redis_secret}"]
+    volumes:
+      - redis-production-data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-acustock_redis_secret}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - acustock-internal
+
+  # ── BACKEND API SERVER ────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: acustock-backend
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 5001
+      MONGODB_URI: mongodb://mongo:27017/acustock?replicaSet=rs0
+      REDIS_URL: redis://:${REDIS_PASSWORD:-acustock_redis_secret}@redis:6379
+      JWT_SECRET: ${JWT_SECRET:-acustock_production_jwt_secret_key_9999}
+      FRONTEND_URL: ${FRONTEND_URL:-https://app.acustock.com}
+      PAYMENT_MODE: ${PAYMENT_MODE:-live}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      WHATSAPP_API_TOKEN: ${WHATSAPP_API_TOKEN}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID}
+      SHIPROCKET_EMAIL: ${SHIPROCKET_EMAIL}
+      SHIPROCKET_PASSWORD: ${SHIPROCKET_PASSWORD}
+      DELHIVERY_API_KEY: ${DELHIVERY_API_KEY}
+    ports:
+      - "127.0.0.1:5001:5001"
+    networks:
+      - acustock-internal
+      - acustock-edge
+
+  # ── NEXT.JS WEB APP ───────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend/web
+      dockerfile: Dockerfile
+    container_name: acustock-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${BACKEND_PUBLIC_URL:-https://app.acustock.com/api}
+      NEXT_PUBLIC_APP_URL: ${FRONTEND_URL:-https://app.acustock.com}
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - acustock-edge
+
+  # ── NGINX EDGE REVERSE PROXY & SSL ────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: acustock-proxy
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - certs-data:/etc/letsencrypt
+    networks:
+      - acustock-edge
+
+networks:
+  acustock-internal:
+    driver: bridge
+  acustock-edge:
+    driver: bridge
+
+volumes:
+  mongo-production-data:
+  redis-production-data:
+  certs-data:
+

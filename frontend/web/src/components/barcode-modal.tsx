@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 type BarcodeModalProps = {
   isOpen: boolean;
@@ -19,6 +19,17 @@ export function BarcodeModal({
 }: BarcodeModalProps) {
   const [labelFormat, setLabelFormat] = useState<"thermal" | "grid">("thermal");
 
+  useEffect(() => {
+    if (!isOpen) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   function handlePrint() {
@@ -29,11 +40,28 @@ export function BarcodeModal({
   const mockBars = [3, 1, 2, 1, 3, 2, 1, 2, 3, 1, 1, 2, 3, 2, 1, 3, 1, 2, 2, 1, 3, 1, 2, 3, 1];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm print:p-0 print:bg-white">
-      <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl print:border-none print:bg-white print:p-0 print:shadow-none">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm print:p-0 print:bg-white"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="barcode-modal-title"
+        className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl print:border-none print:bg-white print:p-0 print:shadow-none"
+      >
         <div className="flex items-center justify-between print:hidden">
-          <h2 className="text-xl font-bold text-white">🏷️ Printable Barcode Label Generator</h2>
-          <button type="button" onClick={onClose} className="text-slate-400 hover:text-white">
+          <h2 id="barcode-modal-title" className="text-xl font-bold text-white">
+            🏷️ Printable Barcode Label Generator
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close barcode dialog"
+            className="rounded-lg p-1 text-slate-400 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/40"
+          >
             ✕
           </button>
         </div>

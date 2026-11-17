@@ -56,9 +56,11 @@ export default function StockInPage() {
   const [productId, setProductId] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [quantity, setQuantity] = useState<number>(1);
-  const [serialInputMode, setSerialInputMode] = useState<"individual" | "bulk">("individual");
+  const [serialInputMode, setSerialInputMode] = useState<"individual" | "bulk" | "csv">("individual");
   const [individualSerials, setIndividualSerials] = useState<string[]>([""]);
   const [bulkSerials, setBulkSerials] = useState("");
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [csvStats, setCsvStats] = useState<{ total: number; duplicatesInFile: number } | null>(null);
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("BANK_TRANSFER");
@@ -213,10 +215,84 @@ export default function StockInPage() {
     if (comp) setSelectedCompanyId(comp._id);
   }
 
+  // CSV File upload handler
+  function handleCsvFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setCsvFileName(file.name);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      const lines = text.split(/\r?\n/);
+      const parsed: string[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const tokens = line
+          .split(/[,;\t]/)
+          .map((t) => t.trim().replace(/^["']|["']$/g, ""))
+          .filter(Boolean);
+
+        for (const token of tokens) {
+          if (
+            i === 0 &&
+            ["serial", "serials", "serial_number", "serial number", "sn", "barcode", "imei"].includes(
+              token.toLowerCase()
+            )
+          ) {
+            continue;
+          }
+          parsed.push(token.toUpperCase());
+        }
+      }
+
+      const uniqueParsed = Array.from(new Set(parsed));
+      const dups = parsed.length - uniqueParsed.length;
+      setCsvStats({ total: uniqueParsed.length, duplicatesInFile: dups });
+
+      const joined = uniqueParsed.join("\n");
+      setBulkSerials(joined);
+      if (uniqueParsed.length > 0) {
+        setQuantity(uniqueParsed.length);
+      }
+
+      // Automatically pre-validate parsed serials if product selected
+      if (uniqueParsed.length > 0 && productId) {
+        apiFetch<{ valid: boolean; alreadyUsed?: string[]; message?: string }>("/stock/validate-serials", {
+          method: "POST",
+          body: JSON.stringify({
+            serialNumbers: uniqueParsed,
+            productId,
+            action: "IN",
+          }),
+        })
+          .then((res) => setValidationResult(res))
+          .catch(() => {});
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function handleDownloadTemplate() {
+    const csvContent = "serial_number\nSN-2026-001\nSN-2026-002\nSN-2026-003\nSN-2026-004\nSN-2026-005";
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "acustock_serials_template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   // Pre-submission Serial Validation
   async function handleValidateSerials() {
     let serialsToValidate: string[] = [];
-    if (serialInputMode === "bulk") {
+    if (serialInputMode === "bulk" || serialInputMode === "csv") {
       serialsToValidate = bulkSerials.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
     } else {
       serialsToValidate = individualSerials.map((s) => s.trim()).filter(Boolean);
@@ -263,7 +339,7 @@ export default function StockInPage() {
     // Process serials
     let finalSerials: string[] = [];
     if (serialPolicy.enableSerial) {
-      if (serialInputMode === "bulk") {
+      if (serialInputMode === "bulk" || serialInputMode === "csv") {
         finalSerials = bulkSerials.split(/[\n,]/).map((s) => s.trim().toUpperCase()).filter(Boolean);
       } else {
         finalSerials = individualSerials.map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -571,6 +647,15 @@ export default function StockInPage() {
                 >
                   Bulk Paste / Scanner
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setSerialInputMode("csv")}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold ${
+                    serialInputMode === "csv" ? "bg-white text-slate-950" : "text-slate-400"
+                  }`}
+                >
+                  📁 Upload CSV / File
+                </button>
               </div>
             </div>
 
@@ -606,43 +691,162 @@ export default function StockInPage() {
                   ))}
                 </div>
               </div>
-            ) : (
+            ) : serialInputMode === "bulk" ? (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="block text-xs font-medium text-slate-300">
                     Paste / Scan Barcodes (One per line or comma-separated)
                   </label>
-                  {(() => {
-                    const count = bulkSerials.split(/[\n,]/).map(s => s.trim()).filter(Boolean).length;
-                    return (
-                      <span className={`text-xs font-mono font-bold ${
-                        count === quantity ? "text-emerald-400" : "text-amber-400"
-                      }`}>
-                        {count} / {quantity} scanned
-                      </span>
-                    );
-                  })()}
+                  <div className="flex items-center gap-3">
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-400/20 transition">
+                      <input
+                        type="file"
+                        accept=".csv, .txt, text/csv, text/plain"
+                        onChange={handleCsvFileUpload}
+                        className="hidden"
+                      />
+                      <span>📁 Quick Upload CSV / TXT</span>
+                    </label>
+                    {(() => {
+                      const count = bulkSerials.split(/[\n,]/).map(s => s.trim()).filter(Boolean).length;
+                      return (
+                        <span className={`text-xs font-mono font-bold ${
+                          count === quantity ? "text-emerald-400" : "text-amber-400"
+                        }`}>
+                          {count} / {quantity} scanned
+                        </span>
+                      );
+                    })()}
+                  </div>
                 </div>
                 <textarea
                   value={bulkSerials}
-                  onChange={(e) => setBulkSerials(e.target.value)}
+                  onChange={(e) => {
+                    setBulkSerials(e.target.value);
+                    if (validationResult) setValidationResult(null);
+                  }}
                   rows={4}
                   placeholder={"SN-1001\nSN-1002\nSN-1003"}
                   className="w-full rounded-xl border border-white/10 bg-slate-950 p-4 font-mono text-xs text-white uppercase outline-none focus:border-amber-300/40"
                 />
+              </div>
+            ) : (
+              /* CSV Upload Mode */
+              <div className="space-y-4">
+                <div className="rounded-2xl border-2 border-dashed border-white/15 bg-slate-950/60 p-6 text-center hover:border-amber-400/40 transition group">
+                  <input
+                    type="file"
+                    id="csvSerialUpload"
+                    accept=".csv, .txt, text/csv, text/plain"
+                    onChange={handleCsvFileUpload}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="csvSerialUpload"
+                    className="flex flex-col items-center justify-center cursor-pointer space-y-2"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-400 group-hover:scale-110 transition shadow-inner">
+                      📁
+                    </div>
+                    <div className="text-sm font-semibold text-white">
+                      {csvFileName ? `File Selected: ${csvFileName}` : "Click to Browse or Drag & Drop Serial CSV / TXT"}
+                    </div>
+                    <p className="text-xs text-slate-400 max-w-sm">
+                      Upload .CSV or .TXT file with one serial number per row or comma-separated. Column headers like "serial_number" are automatically stripped.
+                    </p>
+                    <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-1 text-xs font-medium text-amber-300">
+                      Browse Computer
+                    </span>
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    {csvStats ? (
+                      <span className="font-mono text-emerald-400 font-semibold">
+                        ✓ Ingested {csvStats.total} serials
+                        {csvStats.duplicatesInFile > 0 && ` (${csvStats.duplicatesInFile} duplicates removed)`}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400">Ready for file ingestion</span>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadTemplate}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition"
+                  >
+                    📥 Download CSV Template
+                  </button>
+                </div>
+
+                {bulkSerials && (
+                  <div className="rounded-xl border border-white/5 bg-slate-950/80 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-semibold text-slate-300">
+                        Parsed Serials Preview ({bulkSerials.split(/[\n,]/).filter(Boolean).length} total):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkSerials("");
+                          setCsvFileName(null);
+                          setCsvStats(null);
+                          setQuantity(1);
+                        }}
+                        className="text-[11px] text-rose-400 hover:text-rose-300"
+                      >
+                        Clear Parsed Serials
+                      </button>
+                    </div>
+                    <div className="max-h-28 overflow-y-auto font-mono text-xs text-slate-400 flex flex-wrap gap-1.5">
+                      {bulkSerials
+                        .split(/[\n,]/)
+                        .map((s) => s.trim())
+                        .filter(Boolean)
+                        .slice(0, 30)
+                        .map((s, idx) => (
+                          <span
+                            key={idx}
+                            className="rounded border border-white/10 bg-white/5 px-2 py-0.5 text-white text-[11px]"
+                          >
+                            {s}
+                          </span>
+                        ))}
+                      {bulkSerials.split(/[\n,]/).filter(Boolean).length > 30 && (
+                        <span className="text-[11px] text-slate-400 self-center">
+                          +{bulkSerials.split(/[\n,]/).filter(Boolean).length - 30} more…
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
             {/* Validation button & results */}
             <div className="space-y-3 border-t border-white/10 pt-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={handleValidateSerials}
-                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition"
-                >
-                  🔍 Pre-Validate Serials
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleValidateSerials}
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition flex items-center gap-1.5"
+                  >
+                    <span>🔍</span>
+                    <span>Pre-Validate Serials</span>
+                  </button>
+                  {validationResult && (
+                    <button
+                      type="button"
+                      onClick={() => setValidationResult(null)}
+                      className="text-[11px] text-slate-400 hover:text-white"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
 
                 {validationResult && (
                   <span className={`text-xs font-semibold ${validationResult.valid ? "text-emerald-400" : "text-rose-400"}`}>
@@ -651,12 +855,12 @@ export default function StockInPage() {
                 )}
               </div>
 
-              {/* Tag display for problematic serials */}
-              {validationResult && !validationResult.valid && (
+              {/* Tag display for problematic serials - ONLY if specific serial conflicts exist */}
+              {validationResult && !validationResult.valid && Boolean((validationResult.alreadyUsed && validationResult.alreadyUsed.length > 0) || (validationResult.internalDuplicates && validationResult.internalDuplicates.length > 0)) && (
                 <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 space-y-2 text-xs">
                   {validationResult.alreadyUsed && validationResult.alreadyUsed.length > 0 && (
                     <div>
-                      <span className="font-semibold text-rose-300">Already in stock: </span>
+                      <span className="font-semibold text-rose-300">Already in stock ({validationResult.alreadyUsed.length}): </span>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {validationResult.alreadyUsed.map((sn) => (
                           <span key={sn} className="rounded bg-rose-950/80 px-2 py-0.5 font-mono text-[10px] text-rose-200 border border-rose-500/30">
@@ -669,7 +873,7 @@ export default function StockInPage() {
 
                   {validationResult.internalDuplicates && validationResult.internalDuplicates.length > 0 && (
                     <div>
-                      <span className="font-semibold text-amber-300">Duplicate entries in form: </span>
+                      <span className="font-semibold text-amber-300">Duplicate entries in form ({validationResult.internalDuplicates.length}): </span>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {validationResult.internalDuplicates.map((sn) => (
                           <span key={sn} className="rounded bg-amber-950/80 px-2 py-0.5 font-mono text-[10px] text-amber-200 border border-amber-500/30">

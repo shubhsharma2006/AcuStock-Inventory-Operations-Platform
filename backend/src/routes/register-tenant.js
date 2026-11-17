@@ -222,15 +222,17 @@ router.post('/register-tenant', async (req, res) => {
 
       // ── 6. Issue JWT Token ──────────────────────────────────
       const tokenPayload = {
+        _id:          adminUser._id,
         userId:       adminUser._id,
         role:         adminUser.role,
         tenantId:     tenant._id,
-        tokenVersion: adminUser.tokenVersion || 0
+        tokenVersion: adminUser.tokenVersion || 0,
+        type:         'access'
       };
 
       const accessToken = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '15m' });
       const refreshToken = jwt.sign(
-        { userId: adminUser._id, tokenVersion: adminUser.tokenVersion || 0 },
+        { _id: adminUser._id, userId: adminUser._id, tokenVersion: adminUser.tokenVersion || 0, type: 'refresh' },
         process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );

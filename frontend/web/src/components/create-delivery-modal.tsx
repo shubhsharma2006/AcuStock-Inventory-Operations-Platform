@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { apiFetch } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
+import { TypeaheadInput } from "@/components/ui/typeahead-input";
+import { ALL_INDIAN_STATES, INDIAN_STATES_AND_CITIES, TOP_ALL_INDIAN_CITIES } from "@/lib/india-geo-data";
 
 type ProductItem = {
   _id: string;
@@ -134,6 +136,13 @@ export function CreateDeliveryModal({
   const [state, setState] = useState("");
   const [pincode, setPincode] = useState("");
   const [destinationGstin, setDestinationGstin] = useState("");
+
+  const deliveryCityOptions = useMemo(() => {
+    if (state && INDIAN_STATES_AND_CITIES[state]) {
+      return INDIAN_STATES_AND_CITIES[state];
+    }
+    return TOP_ALL_INDIAN_CITIES;
+  }, [state]);
 
   // Form State - Step 3: Warranty & Quality
   const [warrantyStatus, setWarrantyStatus] = useState("STANDARD");
@@ -302,67 +311,71 @@ export function CreateDeliveryModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-6 backdrop-blur-md overflow-y-auto">
-      <div className="relative w-full max-w-4xl rounded-3xl border border-white/15 bg-slate-900/95 p-6 sm:p-8 shadow-2xl backdrop-blur-2xl text-slate-200 my-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4 backdrop-blur-md">
+      <div className="relative w-full max-w-4xl max-h-[86vh] sm:max-h-[84vh] flex flex-col rounded-3xl border border-white/15 bg-slate-900/95 shadow-2xl backdrop-blur-2xl text-slate-200 overflow-hidden">
         {/* Glow ambient background element */}
         <div className="absolute right-0 top-0 -mr-20 -mt-20 h-60 w-60 rounded-full bg-amber-500/10 blur-3xl pointer-events-none" />
 
-        {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-white/10 pb-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-amber-400/30 bg-amber-400/10 text-xl shadow-inner">
-              🚚
-            </span>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
-                Create Delivery Dispatch
-              </h2>
-              <p className="text-xs text-slate-400">
-                Logistics manifest, carrier dispatching (Porter, Delhivery, DTDC, DMRC) & tracking.
-              </p>
+        {/* Modal Header & Stepper (Sticky Top) */}
+        <div className="flex-shrink-0 p-4 sm:p-6 pb-3 border-b border-white/10 bg-slate-900/90 backdrop-blur-md z-10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl border border-amber-400/30 bg-amber-400/10 text-xl shadow-inner">
+                🚚
+              </span>
+              <div>
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+                  Create Delivery Dispatch
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Logistics manifest, carrier dispatching (Porter, Delhivery, DTDC, DMRC) & tracking.
+                </p>
+              </div>
             </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:bg-white/10 hover:text-white"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* 5-Step Progress Stepper */}
-        <div className="mt-5 grid grid-cols-5 gap-2 border-b border-white/10 pb-5 text-center text-xs">
-          {[
-            { num: 1, label: "1. Cargo & Items" },
-            { num: 2, label: "2. Consignee" },
-            { num: 3, label: "3. Warranty" },
-            { num: 4, label: "4. Carrier Mode" },
-            { num: 5, label: "5. Review & Authorize" },
-          ].map((s) => (
             <button
-              key={s.num}
               type="button"
-              onClick={() => setStep(s.num as any)}
-              className={`rounded-xl py-2 px-1 font-semibold transition ${
-                step === s.num
-                  ? "bg-amber-400/20 text-amber-200 border border-amber-400/40 shadow-sm"
-                  : step > s.num
-                  ? "text-emerald-400 border border-emerald-400/20 bg-emerald-400/5"
-                  : "text-slate-500 hover:text-slate-300 border border-transparent"
-              }`}
+              onClick={onClose}
+              className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:bg-white/10 hover:text-white"
             >
-              {s.label}
+              ✕
             </button>
-          ))}
+          </div>
+
+          {/* 5-Step Progress Stepper */}
+          <div className="mt-4 grid grid-cols-5 gap-2 text-center text-xs">
+            {[
+              { num: 1, label: "1. Cargo & Items" },
+              { num: 2, label: "2. Consignee" },
+              { num: 3, label: "3. Warranty" },
+              { num: 4, label: "4. Carrier Mode" },
+              { num: 5, label: "5. Review & Authorize" },
+            ].map((s) => (
+              <button
+                key={s.num}
+                type="button"
+                onClick={() => setStep(s.num as any)}
+                className={`rounded-xl py-2 px-1 font-semibold transition ${
+                  step === s.num
+                    ? "bg-amber-400/20 text-amber-200 border border-amber-400/40 shadow-sm"
+                    : step > s.num
+                    ? "text-emerald-400 border border-emerald-400/20 bg-emerald-400/5"
+                    : "text-slate-500 hover:text-slate-300 border border-transparent"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Error message */}
-        {errorMessage && (
-          <div className="mt-4 rounded-xl border border-rose-400/30 bg-rose-950/60 p-3 text-xs text-rose-300">
-            ❌ {errorMessage}
-          </div>
-        )}
+        {/* Scrollable Modal Content */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 space-y-5">
+          {/* Error message */}
+          {errorMessage && (
+            <div className="rounded-xl border border-rose-400/30 bg-rose-950/60 p-3 text-xs text-rose-300">
+              ❌ {errorMessage}
+            </div>
+          )}
 
         {/* STEP 1: CARGO & ITEMS DETAILS */}
         {step === 1 && (
@@ -609,33 +622,31 @@ export function CreateDeliveryModal({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300">City</label>
-                <input
-                  type="text"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="e.g. New Delhi"
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm text-white outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-300">State</label>
-                <input
-                  type="text"
+                <TypeaheadInput
+                  label="State"
                   value={state}
-                  onChange={(e) => setState(e.target.value)}
-                  placeholder="e.g. Delhi NCR"
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm text-white outline-none"
+                  onChange={(val) => setState(val)}
+                  options={ALL_INDIAN_STATES}
+                  placeholder="Type or select State…"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-300">Pincode</label>
+                <TypeaheadInput
+                  label="City"
+                  value={city}
+                  onChange={(val) => setCity(val)}
+                  options={deliveryCityOptions}
+                  placeholder="Type or select City…"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Pincode</label>
                 <input
                   type="text"
                   value={pincode}
                   onChange={(e) => setPincode(e.target.value)}
                   placeholder="110001"
-                  className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm text-white outline-none"
+                  className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none"
                 />
               </div>
             </div>
@@ -1053,8 +1064,10 @@ export function CreateDeliveryModal({
           </div>
         )}
 
-        {/* Modal Stepper Navigation Controls */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-4">
+        </div>
+
+        {/* Modal Stepper Navigation Controls (Sticky Footer) */}
+        <div className="flex-shrink-0 border-t border-white/10 bg-slate-950/95 p-4 sm:px-7 flex flex-wrap items-center justify-between gap-3 rounded-b-3xl">
           <div>
             {step > 1 && (
               <button
@@ -1111,3 +1124,4 @@ export function CreateDeliveryModal({
     </div>
   );
 }
+

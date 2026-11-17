@@ -8,6 +8,15 @@ import {
   SettingsView,
 } from "@/components/feature-shells";
 
+import AdjustmentsPage from "../adjustments/page";
+import ReconciliationPage from "../reconciliation/page";
+import KitsPage from "../kits/page";
+import SuppliersPerformancePage from "../suppliers/page";
+import ValuationPage from "../valuation/page";
+import ImportHistoryPage from "../import-history/page";
+import MobileWarehouseScanPage from "../scan/page";
+import ReorderHubPage from "../reorder-hub/page";
+
 function normalizeRole(value: string | undefined | null): Role | null {
   if (!value) return null;
   const upper = value.toUpperCase().replace(/-/g, "_");
@@ -34,6 +43,22 @@ export default async function RoleSectionRoute({
   }
 
   switch (section) {
+    case "adjustments":
+      return <AdjustmentsPage />;
+    case "reconciliation":
+      return <ReconciliationPage />;
+    case "kits":
+      return <KitsPage />;
+    case "suppliers":
+      return <SuppliersPerformancePage />;
+    case "valuation":
+      return <ValuationPage />;
+    case "import-history":
+      return <ImportHistoryPage />;
+    case "scan":
+      return <MobileWarehouseScanPage />;
+    case "reorder-hub":
+      return <ReorderHubPage />;
     case "products":
       return <ProductsView role={role} />;
     case "stock-in":

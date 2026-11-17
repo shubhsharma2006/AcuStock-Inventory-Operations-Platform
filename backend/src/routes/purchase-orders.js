@@ -18,13 +18,14 @@ const StockLedger   = require('../models/StockLedger');
 const SerialAudit   = require('../models/SerialAudit');
 const InventoryLot  = require('../models/InventoryLot');
 const lotService    = require('../services/lot.service');
-const { requireAuth, requireRole } = require('../middleware/auth');
+const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { generatePurchaseOrderPdf } = require('../services/pdfGenerator');
 const { logBusinessEvent } = require('../utils/auditHelper');
 const { notifyRoles }    = require('../services/notificationHelper');
 const logger        = require('../utils/logger');
 
 const router = express.Router();
+router.use(requireTenantId);
 
 // ── List ───────────────────────────────────────────────────────
 router.get('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
