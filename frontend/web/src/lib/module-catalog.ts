@@ -41,7 +41,7 @@ export const SYSTEM_SECTIONS: SectionDefinition[] = [
     id: 'OPERATIONS_WMS',
     label: 'Operations & WMS',
     description: 'Warehouse catalog, bins, receiving, picking, and lot FEFO',
-    moduleIds: ['products', 'warehouses', 'lots', 'stock-transfers', 'units', 'stock-in', 'stock-out', 'picking-waves'],
+    moduleIds: ['products', 'warehouses', 'warehouse-twin', 'lots', 'stock-transfers', 'units', 'stock-in', 'stock-out', 'picking-waves'],
   },
   {
     id: 'STOCK_CONTROL',

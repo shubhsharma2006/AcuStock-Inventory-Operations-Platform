@@ -111,6 +111,7 @@ function buildNavGroups(
       items: [
         { label: "Products & Catalog", href: `${basePath}/products`, icon: "products" },
         { label: "Warehouses & Bins", href: `${basePath}/warehouses`, icon: "companies" },
+        { label: "3D Digital Twin & Routing", href: `${basePath}/warehouse-twin`, icon: "scan" },
         { label: "Batches, Lots & FEFO", href: `${basePath}/lots`, icon: "ledger" },
         { label: "Stock Transfers", href: `${basePath}/stock-transfers`, icon: "so" },
         { label: "Units of Measure", href: `${basePath}/units`, icon: "products" },
@@ -260,7 +261,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
     if (!user || user.role === "SUPER_ADMIN" || !myModules.data) return;
 
     const roleSlug =
-      user.role === "SUPER_ADMIN" || user.role === "ADMIN"
+      user.role === "ADMIN"
         ? "admin"
         : user.role.toLowerCase();
     const basePath = `/dashboard/${roleSlug}`;

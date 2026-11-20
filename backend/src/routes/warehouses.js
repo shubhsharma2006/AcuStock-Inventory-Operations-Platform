@@ -267,4 +267,263 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'SUPE
   }
 });
 
+// =========================================================================
+// 3D SPATIAL DIGITAL TWIN & PICK-PATH ROUTER ENDPOINTS
+// =========================================================================
+const WarehouseLocation = require('../models/WarehouseLocation');
+const Stock = require('../models/Stock');
+const PickingWave = require('../models/PickingWave');
+const { optimizePickPath } = require('../utils/pickPathRouter');
+const slottingOptimizer = require('../services/slottingOptimizer.service');
+
+// GET /api/warehouses/:id/digital-twin - Retrieve 3D layout, rack bins, and live stock density
+router.get('/:id/digital-twin', requireAuth, validateObjectId, async (req, res) => {
+  try {
+    const warehouse = await Warehouse.findOne({ _id: req.params.id, tenantId: req.tenantId, isActive: true });
+    if (!warehouse) {
+      return res.status(404).json({ message: 'Warehouse not found' });
+    }
+
+    // 1. Fetch all bins for this warehouse
+    let locations = await WarehouseLocation.find({
+      warehouseId: warehouse._id,
+      tenantId: req.tenantId,
+      type: 'BIN',
+      isActive: true
+    }).lean();
+
+    // If warehouse has no bins yet, generate a realistic default layout
+    if (locations.length === 0) {
+      const generatedBins = [];
+      const aisles = warehouse.dimensions?.numberOfAisles || 4;
+      const bays = warehouse.dimensions?.baysPerAisle || 6;
+      const shelves = warehouse.dimensions?.shelvesPerBay || 4;
+      const binsPerShelf = warehouse.dimensions?.binsPerShelf || 2;
+
+      for (let a = 1; a <= aisles; a++) {
+        for (let b = 1; b <= bays; b++) {
+          for (let s = 1; s <= shelves; s++) {
+            for (let bi = 1; bi <= binsPerShelf; bi++) {
+              const code = `A${String(a).padStart(2, '0')}-R${String(b).padStart(2, '0')}-S${String(s).padStart(2, '0')}-B${String(bi).padStart(2, '0')}`;
+              // 3D coordinates (meters): Aisle X, Shelf Y, Bay Z
+              const x = (a - 1) * 4.2 - ((aisles - 1) * 4.2) / 2;
+              const y = (s - 1) * 1.3 + 0.3;
+              const z = (b - 1) * 2.8 - ((bays - 1) * 2.8) / 2;
+
+              generatedBins.push({
+                warehouseId: warehouse._id,
+                tenantId: req.tenantId,
+                type: 'BIN',
+                code,
+                label: `Bin ${code}`,
+                capacity: { maxUnits: 100, maxWeight: 500, maxVolume: 1000 },
+                gridCoordinates: {
+                  aisleNumber: a,
+                  bayNumber: b,
+                  shelfLevel: s,
+                  binIndex: bi,
+                  x,
+                  y,
+                  z
+                },
+                zoneType: a <= 1 ? 'HIGH_VALUE' : 'AMBIENT',
+                velocityClassification: s <= 2 && a <= 2 ? 'FAST_A' : (s <= 3 ? 'MEDIUM_B' : 'SLOW_C'),
+                isActive: true
+              });
+            }
+          }
+        }
+      }
+
+      try {
+        locations = await WarehouseLocation.insertMany(generatedBins);
+      } catch (err) {
+        locations = await WarehouseLocation.find({ warehouseId: warehouse._id, tenantId: req.tenantId, type: 'BIN' }).lean();
+      }
+    }
+
+    // 2. Fetch live stock for this warehouse
+    const liveStock = await Stock.find({
+      warehouseId: warehouse._id,
+      tenantId: req.tenantId,
+      quantity: { $gt: 0 }
+    }).populate('itemId', 'name sku barcode category').lean();
+
+    const stockByLocation = {};
+    liveStock.forEach(st => {
+      if (st.locationId) {
+        const locKey = String(st.locationId);
+        if (!stockByLocation[locKey]) stockByLocation[locKey] = [];
+        stockByLocation[locKey].push({
+          stockId: st._id,
+          sku: st.itemId?.sku || 'UNKNOWN',
+          name: st.itemId?.name || 'Unnamed',
+          quantity: st.quantity,
+          category: st.itemId?.category
+        });
+      }
+    });
+
+    // 3. Enrich locations with 3D stats and occupancy
+    let totalCapacity = 0;
+    let totalStockUnits = 0;
+    let occupiedBins = 0;
+
+    const enrichedBins = locations.map(loc => {
+      const contents = stockByLocation[String(loc._id)] || [];
+      const currentUnits = contents.reduce((acc, c) => acc + c.quantity, 0);
+      const maxUnits = loc.capacity?.maxUnits || 100;
+      const occupancyPercent = Math.min(100, Math.round((currentUnits / maxUnits) * 100));
+
+      totalCapacity += maxUnits;
+      totalStockUnits += currentUnits;
+      if (currentUnits > 0) occupiedBins++;
+
+      // Compute standard spatial coords if missing
+      const aisle = loc.gridCoordinates?.aisleNumber || 1;
+      const bay = loc.gridCoordinates?.bayNumber || 1;
+      const shelf = loc.gridCoordinates?.shelfLevel || 1;
+      const x = loc.gridCoordinates?.x !== undefined ? loc.gridCoordinates.x : (aisle - 1) * 4.2 - 6;
+      const y = loc.gridCoordinates?.y !== undefined ? loc.gridCoordinates.y : (shelf - 1) * 1.3 + 0.3;
+      const z = loc.gridCoordinates?.z !== undefined ? loc.gridCoordinates.z : (bay - 1) * 2.8 - 8;
+
+      return {
+        _id: loc._id,
+        code: loc.code,
+        label: loc.label,
+        type: loc.type,
+        zoneType: loc.zoneType || 'AMBIENT',
+        velocityClassification: loc.velocityClassification || (shelf <= 2 ? 'FAST_A' : 'SLOW_C'),
+        gridCoordinates: {
+          aisleNumber: aisle,
+          bayNumber: bay,
+          shelfLevel: shelf,
+          binIndex: loc.gridCoordinates?.binIndex || 1,
+          x,
+          y,
+          z
+        },
+        capacity: {
+          maxUnits,
+          currentUnits,
+          occupancyPercent
+        },
+        contents,
+        isPickable: loc.isPickable !== false
+      };
+    });
+
+    res.json({
+      warehouse: {
+        _id: warehouse._id,
+        name: warehouse.name,
+        code: warehouse.code,
+        dimensions: warehouse.dimensions || {
+          lengthMeters: 60,
+          widthMeters: 30,
+          heightMeters: 10,
+          numberOfAisles: 4,
+          baysPerAisle: 6,
+          shelvesPerBay: 4,
+          binsPerShelf: 2
+        }
+      },
+      stats: {
+        totalBins: enrichedBins.length,
+        occupiedBins,
+        vacantBins: enrichedBins.length - occupiedBins,
+        utilizationRate: totalCapacity > 0 ? Math.round((totalStockUnits / totalCapacity) * 100) : 0,
+        totalStockUnits
+      },
+      bins: enrichedBins
+    });
+  } catch (error) {
+    console.error('Error fetching digital twin layout:', error);
+    res.status(500).json({ message: 'Failed to generate digital twin' });
+  }
+});
+
+// POST /api/warehouses/:id/optimize-pick-path - Calculate S-Shape & 2-Opt shortest picker path
+router.post('/:id/optimize-pick-path', requireAuth, validateObjectId, async (req, res) => {
+  try {
+    const { binIds, waveId, startPoint, endPoint } = req.body;
+    let targetBins = [];
+
+    if (waveId) {
+      const wave = await PickingWave.findOne({ _id: waveId, tenantId: req.tenantId });
+      if (wave && wave.pickItems) {
+        const itemBinCodes = wave.pickItems.map(p => p.binCode).filter(Boolean);
+        targetBins = await WarehouseLocation.find({
+          warehouseId: req.params.id,
+          tenantId: req.tenantId,
+          code: { $in: itemBinCodes }
+        }).lean();
+      }
+    } else if (Array.isArray(binIds) && binIds.length > 0) {
+      targetBins = await WarehouseLocation.find({
+        warehouseId: req.params.id,
+        tenantId: req.tenantId,
+        _id: { $in: binIds }
+      }).lean();
+    }
+
+    if (targetBins.length === 0) {
+      // Pick 5 random sample bins if none selected to demonstrate visual path
+      targetBins = await WarehouseLocation.find({
+        warehouseId: req.params.id,
+        tenantId: req.tenantId,
+        type: 'BIN',
+        isActive: true
+      }).limit(6).lean();
+    }
+
+    // Format stops
+    const stops = targetBins.map(bin => ({
+      id: bin._id,
+      code: bin.code,
+      aisleNumber: bin.gridCoordinates?.aisleNumber || 1,
+      bayNumber: bin.gridCoordinates?.bayNumber || 1,
+      shelfLevel: bin.gridCoordinates?.shelfLevel || 1,
+      x: bin.gridCoordinates?.x || 0,
+      y: bin.gridCoordinates?.y || 0,
+      z: bin.gridCoordinates?.z || 0
+    }));
+
+    const result = optimizePickPath(
+      stops,
+      startPoint || { x: 0, y: 0.1, z: -10 },
+      endPoint || { x: 0, y: 0.1, z: -10 },
+      { frontCrossAisleZ: -10, backCrossAisleZ: 10 }
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error optimizing pick path:', error);
+    res.status(500).json({ message: 'Failed to optimize pick route' });
+  }
+});
+
+// GET /api/warehouses/:id/slotting-recommendations - AI Slotting Recommendations
+router.get('/:id/slotting-recommendations', requireAuth, validateObjectId, async (req, res) => {
+  try {
+    const analysis = await slottingOptimizer.generateSlottingRecommendations(req.params.id, req.tenantId);
+    res.json(analysis);
+  } catch (error) {
+    console.error('Error generating slotting recommendations:', error);
+    res.status(500).json({ message: 'Failed to analyze slotting' });
+  }
+});
+
+// POST /api/warehouses/:id/apply-slotting-moves - Apply selected moves
+router.post('/:id/apply-slotting-moves', requireAuth, validateObjectId, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), async (req, res) => {
+  try {
+    const { moves } = req.body;
+    const result = await slottingOptimizer.applySlottingMoves(moves, req.params.id, req.tenantId, req.userId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error applying slotting moves:', error);
+    res.status(500).json({ message: 'Failed to apply slotting moves' });
+  }
+});
+
 module.exports = router;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { BinHierarchyExplorer } from "@/components/warehouse/bin-hierarchy-explorer";
@@ -229,22 +230,29 @@ export default function WarehousesPage() {
                 </div>
               </div>
 
-              <div className="mt-6 flex items-center justify-between border-t border-white/10 pt-4 gap-2">
-                <div className="flex items-center gap-2">
+              <div className="mt-6 flex flex-wrap items-center justify-between border-t border-white/10 pt-4 gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    href="warehouse-twin"
+                    className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/20 transition flex items-center gap-1.5"
+                  >
+                    <span>🏬</span>
+                    <span>3D Twin</span>
+                  </Link>
                   <button
                     type="button"
                     onClick={() => setSelectedWarehouseForTopology(wh)}
                     className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-semibold text-indigo-300 hover:bg-indigo-500/20 transition flex items-center gap-1.5"
                   >
                     <span>🗺️</span>
-                    <span>Bin Topology</span>
+                    <span>Topology</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedWarehouseForStock(wh)}
                     className="rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-400/20 transition"
                   >
-                    Stock Balances →
+                    Stock →
                   </button>
                 </div>
                 <span className="text-[10px] text-slate-500 font-mono">

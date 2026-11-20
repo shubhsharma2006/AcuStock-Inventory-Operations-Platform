@@ -14,7 +14,7 @@ const SYSTEM_SECTIONS = [
     id: 'OPERATIONS_WMS',
     label: 'Operations & WMS',
     description: 'Warehouse master catalog, bin locations, receiving, picking, and lot FEFO',
-    moduleIds: ['products', 'warehouses', 'lots', 'stock-transfers', 'units', 'stock-in', 'stock-out', 'picking-waves'],
+    moduleIds: ['products', 'warehouses', 'warehouse-twin', 'lots', 'stock-transfers', 'units', 'stock-in', 'stock-out', 'picking-waves'],
   },
   {
     id: 'STOCK_CONTROL',
@@ -58,6 +58,7 @@ const MODULE_REGISTRY = {
   // Operations & WMS
   products: { id: 'products', label: 'Products & Catalog', sectionId: 'OPERATIONS_WMS', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'FULL_ACCESS' } },
   warehouses: { id: 'warehouses', label: 'Warehouses & Bins', sectionId: 'OPERATIONS_WMS', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'READ_ONLY' } },
+  'warehouse-twin': { id: 'warehouse-twin', label: '3D Digital Twin & Routing', sectionId: 'OPERATIONS_WMS', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'FULL_ACCESS' } },
   lots: { id: 'lots', label: 'Batches, Lots & FEFO', sectionId: 'OPERATIONS_WMS', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'READ_ONLY' } },
   'stock-transfers': { id: 'stock-transfers', label: 'Stock Transfers', sectionId: 'OPERATIONS_WMS', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'FULL_ACCESS' } },
   units: { id: 'units', label: 'Units of Measure', sectionId: 'OPERATIONS_WMS', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'READ_ONLY' } },

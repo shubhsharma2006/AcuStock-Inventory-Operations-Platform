@@ -74,6 +74,25 @@ const warehouseLocationSchema = new mongoose.Schema({
     enum: ['AMBIENT', 'COLD', 'FROZEN', 'HAZMAT'],
     default: 'AMBIENT'
   },
+  gridCoordinates: {
+    aisleNumber: { type: Number, default: 1, index: true },
+    bayNumber: { type: Number, default: 1 },
+    shelfLevel: { type: Number, default: 1 },
+    binIndex: { type: Number, default: 1 },
+    x: { type: Number, default: 0 },
+    y: { type: Number, default: 0 },
+    z: { type: Number, default: 0 }
+  },
+  zoneType: {
+    type: String,
+    enum: ['AMBIENT', 'COLD_STORAGE', 'HAZMAT', 'HIGH_VALUE', 'STAGING_DOCK', 'PACKING_STATION'],
+    default: 'AMBIENT'
+  },
+  velocityClassification: {
+    type: String,
+    enum: ['FAST_A', 'MEDIUM_B', 'SLOW_C', 'UNASSIGNED'],
+    default: 'UNASSIGNED'
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

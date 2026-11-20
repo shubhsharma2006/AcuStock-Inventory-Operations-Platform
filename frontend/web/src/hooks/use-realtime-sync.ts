@@ -11,6 +11,7 @@ type UseRealtimeSyncOptions = {
 
 export function useRealtimeSync({ role, userId }: UseRealtimeSyncOptions) {
   const socketRef = useRef<Socket | null>(null);
+  const [socketInstance, setSocketInstance] = useState<Socket | null>(null);
   const [connected, setConnected] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -23,6 +24,7 @@ export function useRealtimeSync({ role, userId }: UseRealtimeSyncOptions) {
     });
 
     socketRef.current = socket;
+    setSocketInstance(socket);
 
     const bump = () => setRefreshToken((value) => value + 1);
 
@@ -71,6 +73,7 @@ export function useRealtimeSync({ role, userId }: UseRealtimeSyncOptions) {
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
+      setSocketInstance(null);
       setConnected(false);
     };
   }, [role, userId]);
@@ -79,5 +82,6 @@ export function useRealtimeSync({ role, userId }: UseRealtimeSyncOptions) {
     connected,
     refreshToken,
     refresh: () => setRefreshToken((value) => value + 1),
+    socket: socketInstance,
   };
 }

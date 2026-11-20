@@ -53,6 +53,15 @@ const warehouseSchema = new mongoose.Schema({
     trim: true,
     maxlength: 500
   },
+  dimensions: {
+    lengthMeters: { type: Number, default: 60 },
+    widthMeters: { type: Number, default: 30 },
+    heightMeters: { type: Number, default: 10 },
+    numberOfAisles: { type: Number, default: 6 },
+    baysPerAisle: { type: Number, default: 8 },
+    shelvesPerBay: { type: Number, default: 4 },
+    binsPerShelf: { type: Number, default: 2 }
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
