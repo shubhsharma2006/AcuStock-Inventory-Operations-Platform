@@ -48,8 +48,9 @@ interface Warehouse3DSceneProps {
   viewMode: 'occupancy' | 'velocity';
   highlightedBinId?: string | null;
   pathWaypoints?: Waypoint3D[];
+  cameraPreset?: 'iso' | 'top' | 'dock' | 'side';
   onSelectBin?: (bin: BinNode | null) => void;
-  simulationProgress?: number; // 0 to 1 for scrubber control
+  simulationProgress?: number;
   isPlaying?: boolean;
   className?: string;
 }
@@ -59,38 +60,51 @@ export function Warehouse3DScene({
   viewMode = 'occupancy',
   highlightedBinId,
   pathWaypoints = [],
+  cameraPreset = 'iso',
   onSelectBin,
   simulationProgress = 0,
   isPlaying = true,
   className = ''
 }: Warehouse3DSceneProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const miniMapRef = useRef<HTMLCanvasElement | null>(null);
   const [hoveredBin, setHoveredBin] = useState<BinNode | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
-  const [fps, setFps] = useState(60);
 
-  // Core Three.js Refs
+  // Core Three.js Refs (Persistent Across Renders)
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
 
+  // Stable Callback & State Refs (To prevent scene recreation)
+  const onSelectBinRef = useRef(onSelectBin);
+  useEffect(() => {
+    onSelectBinRef.current = onSelectBin;
+  }, [onSelectBin]);
+
+  const isPlayingRef = useRef(isPlaying);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  const animProgressRef = useRef(simulationProgress);
+  useEffect(() => {
+    animProgressRef.current = simulationProgress;
+  }, [simulationProgress]);
+
+  const prevHoveredIdRef = useRef<string | null>(null);
+  const hoveredBinRef = useRef<BinNode | null>(null);
+
   // Meshes & Objects
   const binMeshRef = useRef<THREE.InstancedMesh | null>(null);
   const palletMeshRef = useRef<THREE.InstancedMesh | null>(null);
+  const rackFramesGroupRef = useRef<THREE.Group | null>(null);
   const pathLineRef = useRef<THREE.Line | null>(null);
   const agvGroupRef = useRef<THREE.Group | null>(null);
   const curveRef = useRef<THREE.CatmullRomCurve3 | null>(null);
 
   const binLookupRef = useRef<Map<number, BinNode>>(new Map());
   const animationFrameId = useRef<number | null>(null);
-
-  // Real-time animation scrubber state
-  const animProgressRef = useRef(simulationProgress);
-  useEffect(() => {
-    animProgressRef.current = simulationProgress;
-  }, [simulationProgress]);
 
   // Color mapper for industrial bins
   const getColorForBin = useCallback((bin: BinNode, mode: 'occupancy' | 'velocity') => {
@@ -106,34 +120,11 @@ export function Warehouse3DScene({
     if (bin.zoneType === 'HIGH_VALUE') return new THREE.Color(0xa855f7);
 
     const pct = bin.capacity?.occupancyPercent || 0;
-    if (pct === 0) return new THREE.Color(0x1e293b); // Empty Slate Frame
+    if (pct === 0) return new THREE.Color(0x27354a); // Distinct Slate Frame for empty
     if (pct < 50) return new THREE.Color(0x10b981); // Emerald Light
     if (pct <= 85) return new THREE.Color(0xf59e0b); // Amber Moderate
     return new THREE.Color(0xef4444); // Crimson Critical / Near Full
   }, []);
-
-  // Camera preset switcher
-  const setCameraPreset = (preset: 'iso' | 'top' | 'dock' | 'side') => {
-    if (!cameraRef.current || !controlsRef.current) return;
-    const cam = cameraRef.current;
-    const ctrl = controlsRef.current;
-
-    if (preset === 'top') {
-      cam.position.set(0, 42, 0.1);
-      ctrl.target.set(0, 0, 0);
-    } else if (preset === 'dock') {
-      cam.position.set(0, 7, -22);
-      ctrl.target.set(0, 2, 0);
-    } else if (preset === 'side') {
-      cam.position.set(28, 12, 0);
-      ctrl.target.set(0, 2, 0);
-    } else {
-      // Isometric 3D
-      cam.position.set(24, 22, 24);
-      ctrl.target.set(0, 2, 0);
-    }
-    ctrl.update();
-  };
 
   // Helper: Create Aisle Overhead Signboard texture
   const createAisleSignTexture = (text: string, subtitle: string) => {
@@ -168,7 +159,7 @@ export function Warehouse3DScene({
     return texture;
   };
 
-  // 1. Initialize Master 3D Scene
+  // 1. Initialize Master 3D Scene (ONCE ON MOUNT)
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -239,7 +230,7 @@ export function Warehouse3DScene({
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // Grid markings
+    // Floor Grid lines
     const grid = new THREE.GridHelper(64, 32, 0x1e293b, 0x0f172a);
     grid.position.y = 0.01;
     scene.add(grid);
@@ -249,13 +240,13 @@ export function Warehouse3DScene({
     const zebraMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
 
     // Front Main Forklift Artery (Z = -10.5)
-    const frontArtery = new THREE.Mesh(new THREE.PlaneGeometry(50, 0.3), stripMat);
+    const frontArtery = new THREE.Mesh(new THREE.PlaneGeometry(50, 0.35), stripMat);
     frontArtery.rotation.x = -Math.PI / 2;
     frontArtery.position.set(0, 0.02, -10.5);
     scene.add(frontArtery);
 
     // Rear Staging Artery (Z = 10.5)
-    const rearArtery = new THREE.Mesh(new THREE.PlaneGeometry(50, 0.3), stripMat);
+    const rearArtery = new THREE.Mesh(new THREE.PlaneGeometry(50, 0.35), stripMat);
     rearArtery.rotation.x = -Math.PI / 2;
     rearArtery.position.set(0, 0.02, 10.5);
     scene.add(rearArtery);
@@ -322,16 +313,58 @@ export function Warehouse3DScene({
       scene.add(sign);
     });
 
-    // J. AMR / AGV Forklift Autonomous Robot
+    // J. Structural Pallet Racking Upright Columns & Beams
+    const rackFramesGroup = new THREE.Group();
+    const uprightColGeo = new THREE.BoxGeometry(0.08, 5.6, 0.08);
+    const uprightColMat = new THREE.MeshStandardMaterial({ color: 0x1e3a8a, metalness: 0.8, roughness: 0.3 }); // Safety Blue
+    const beamGeo = new THREE.BoxGeometry(1.4, 0.06, 0.08);
+    const beamMat = new THREE.MeshStandardMaterial({ color: 0xea580c, metalness: 0.7, roughness: 0.3 }); // Industrial Orange
+
+    const aislesCount = 4;
+    const baysCount = 6;
+    for (let a = 0; a < aislesCount; a++) {
+      const aisleX = a * 4.2 - ((aislesCount - 1) * 4.2) / 2;
+      for (let b = 0; b <= baysCount; b++) {
+        const bayZ = b * 2.8 - ((baysCount - 1) * 2.8) / 2 - 1.4;
+
+        // Front upright column
+        const colF = new THREE.Mesh(uprightColGeo, uprightColMat);
+        colF.position.set(aisleX - 0.75, 2.8, bayZ);
+        rackFramesGroup.add(colF);
+
+        // Back upright column
+        const colB = new THREE.Mesh(uprightColGeo, uprightColMat);
+        colB.position.set(aisleX + 0.75, 2.8, bayZ);
+        rackFramesGroup.add(colB);
+
+        // Horizontal shelf support beams across tiers
+        if (b < baysCount) {
+          const midZ = bayZ + 1.4;
+          for (let s = 1; s <= 4; s++) {
+            const shelfY = (s - 1) * 1.3 + 0.25;
+            const bF = new THREE.Mesh(beamGeo, beamMat);
+            bF.position.set(aisleX - 0.75, shelfY, midZ);
+            bF.rotation.y = Math.PI / 2;
+            const bB = new THREE.Mesh(beamGeo, beamMat);
+            bB.position.set(aisleX + 0.75, shelfY, midZ);
+            bB.rotation.y = Math.PI / 2;
+            rackFramesGroup.add(bF);
+            rackFramesGroup.add(bB);
+          }
+        }
+      }
+    }
+    scene.add(rackFramesGroup);
+    rackFramesGroupRef.current = rackFramesGroup;
+
+    // K. AMR / AGV Forklift Autonomous Robot
     const agvGroup = new THREE.Group();
-    // Chassis
     const chassisGeo = new THREE.BoxGeometry(1.4, 0.45, 1.8);
     const chassisMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.3, metalness: 0.4 });
     const chassis = new THREE.Mesh(chassisGeo, chassisMat);
     chassis.position.y = 0.35;
     agvGroup.add(chassis);
 
-    // Mast & Forks
     const mastGeo = new THREE.BoxGeometry(0.15, 1.4, 0.15);
     const mastMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8 });
     const mastL = new THREE.Mesh(mastGeo, mastMat);
@@ -341,14 +374,12 @@ export function Warehouse3DScene({
     agvGroup.add(mastL);
     agvGroup.add(mastR);
 
-    // Warning Beacon (Orange)
     const beaconGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.16, 16);
     const beaconMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
     const beacon = new THREE.Mesh(beaconGeo, beaconMat);
     beacon.position.set(0, 0.65, -0.4);
     agvGroup.add(beacon);
 
-    // Headlight cones
     const headlightMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
     const hl1 = new THREE.Mesh(new THREE.SphereGeometry(0.08), headlightMat);
     hl1.position.set(-0.45, 0.35, 0.9);
@@ -361,7 +392,7 @@ export function Warehouse3DScene({
     scene.add(agvGroup);
     agvGroupRef.current = agvGroup;
 
-    // K. Raycasting for hover & click
+    // L. Raycasting for hover & click
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -377,19 +408,27 @@ export function Warehouse3DScene({
       if (intersects.length > 0 && intersects[0].instanceId !== undefined) {
         const bin = binLookupRef.current.get(intersects[0].instanceId);
         if (bin) {
-          setHoveredBin(bin);
+          if (prevHoveredIdRef.current !== bin._id) {
+            prevHoveredIdRef.current = bin._id;
+            hoveredBinRef.current = bin;
+            setHoveredBin(bin);
+          }
           setTooltipPos({ x: event.clientX - rect.left, y: event.clientY - rect.top });
           container.style.cursor = 'pointer';
           return;
         }
       }
-      setHoveredBin(null);
+      if (prevHoveredIdRef.current !== null) {
+        prevHoveredIdRef.current = null;
+        hoveredBinRef.current = null;
+        setHoveredBin(null);
+      }
       container.style.cursor = 'default';
     };
 
     const handleClick = () => {
-      if (hoveredBin && onSelectBin) {
-        onSelectBin(hoveredBin);
+      if (hoveredBinRef.current && onSelectBinRef.current) {
+        onSelectBinRef.current(hoveredBinRef.current);
       }
     };
 
@@ -397,26 +436,15 @@ export function Warehouse3DScene({
     domElement.addEventListener('mousemove', handleMouseMove);
     domElement.addEventListener('click', handleClick);
 
-    // L. 60 FPS Render Loop & AGV Spline Simulation
-    let lastTime = performance.now();
-    let frameCount = 0;
+    // M. 60 FPS Render Loop & AGV Spline Simulation
     let tProgress = 0;
 
     const animate = () => {
       controls.update();
 
-      // FPS tracking
-      frameCount++;
-      const now = performance.now();
-      if (now - lastTime >= 1000) {
-        setFps(frameCount);
-        frameCount = 0;
-        lastTime = now;
-      }
-
       // Drive AGV along pick curve if waypoints exist
       if (curveRef.current && agvGroupRef.current) {
-        if (isPlaying) {
+        if (isPlayingRef.current) {
           tProgress = (tProgress + 0.002) % 1;
         } else {
           tProgress = animProgressRef.current;
@@ -426,12 +454,11 @@ export function Warehouse3DScene({
         const tangent = curveRef.current.getTangentAt(tProgress).normalize();
 
         agvGroupRef.current.position.set(point.x, 0, point.z);
-        // Face tangent direction
         const angle = Math.atan2(tangent.x, tangent.z);
         agvGroupRef.current.rotation.y = angle;
 
         // Flash orange beacon
-        beaconMat.color.setHex((Math.sin(now * 0.01) > 0) ? 0xf97316 : 0x7c2d12);
+        beaconMat.color.setHex((Math.sin(performance.now() * 0.01) > 0) ? 0xf97316 : 0x7c2d12);
       }
 
       renderer.render(scene, camera);
@@ -458,14 +485,37 @@ export function Warehouse3DScene({
       renderer.dispose();
       controls.dispose();
     };
-  }, [getColorForBin, onSelectBin, hoveredBin, isPlaying]);
+  }, []); // Run ONCE on mount! Zero unmount churn!
 
-  // 2. Render Instanced Pallet Racking & Detailed Bins
+  // 2. Camera Preset Switcher (Independent Effect)
+  useEffect(() => {
+    if (!cameraRef.current || !controlsRef.current) return;
+    const cam = cameraRef.current;
+    const ctrl = controlsRef.current;
+
+    if (cameraPreset === 'top') {
+      cam.position.set(0, 42, 0.1);
+      ctrl.target.set(0, 0, 0);
+    } else if (cameraPreset === 'dock') {
+      cam.position.set(0, 7, -22);
+      ctrl.target.set(0, 2, 0);
+    } else if (cameraPreset === 'side') {
+      cam.position.set(28, 12, 0);
+      ctrl.target.set(0, 2, 0);
+    } else {
+      // Isometric 3D
+      cam.position.set(24, 22, 24);
+      ctrl.target.set(0, 2, 0);
+    }
+    ctrl.update();
+  }, [cameraPreset]);
+
+  // 3. Render Instanced Pallet Racking & Detailed Bins
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene || bins.length === 0) return;
 
-    // Clean up old instances
+    // Clean up old instances safely
     if (binMeshRef.current) {
       scene.remove(binMeshRef.current);
       binMeshRef.current.geometry.dispose();
@@ -514,8 +564,7 @@ export function Warehouse3DScene({
 
       // 2. Position Cargo Carton (stacked on pallet)
       const occPct = bin.capacity?.occupancyPercent || 0;
-      // Adjust carton height based on fill percentage
-      const heightScale = Math.max(0.3, occPct / 100);
+      const heightScale = Math.max(0.35, occPct / 100);
       dummy.position.set(coords.x, coords.y + 0.1 + (heightScale * 0.85) / 2, coords.z);
 
       if (highlightedBinId && bin._id === highlightedBinId) {
@@ -546,7 +595,7 @@ export function Warehouse3DScene({
     binLookupRef.current = lookup;
   }, [bins, viewMode, highlightedBinId, getColorForBin]);
 
-  // 3. Render High-Voltage Glowing Pick Route
+  // 4. Render High-Voltage Glowing Pick Route
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -589,75 +638,10 @@ export function Warehouse3DScene({
       {/* 3D Canvas Mount Point */}
       <div ref={mountRef} className="w-full h-full min-h-[620px]" />
 
-      {/* Floating CAD HUD Overlay - Top Controls */}
-      <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2">
-        {/* Camera Views */}
-        <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-slate-900/90 p-1.5 backdrop-blur-md text-xs font-semibold text-slate-300 shadow-2xl">
-          <button
-            type="button"
-            onClick={() => setCameraPreset('iso')}
-            className="rounded-lg px-2.5 py-1 transition hover:bg-white/10 hover:text-white"
-          >
-            Isometric 3D
-          </button>
-          <button
-            type="button"
-            onClick={() => setCameraPreset('top')}
-            className="rounded-lg px-2.5 py-1 transition hover:bg-white/10 hover:text-white"
-          >
-            2D CAD Top
-          </button>
-          <button
-            type="button"
-            onClick={() => setCameraPreset('dock')}
-            className="rounded-lg px-2.5 py-1 transition hover:bg-white/10 hover:text-white"
-          >
-            Dispatch Dock
-          </button>
-          <button
-            type="button"
-            onClick={() => setCameraPreset('side')}
-            className="rounded-lg px-2.5 py-1 transition hover:bg-white/10 hover:text-white"
-          >
-            Profile
-          </button>
-        </div>
-
-        {/* Live Simulation Performance Pill */}
-        <div className="hidden sm:flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/90 px-3 py-2 text-[11px] font-mono text-slate-300 backdrop-blur-md shadow-2xl">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span>60 FPS</span>
-          <span className="text-slate-500">|</span>
-          <span className="text-cyan-400">AMR AGV Ready</span>
-        </div>
-      </div>
-
-      {/* Mode Indicator & Legend Pill (Top Right) */}
-      <div className="absolute top-4 right-4 z-10 rounded-xl border border-white/10 bg-slate-900/90 p-3 backdrop-blur-md text-[11px] text-slate-300 shadow-2xl space-y-1.5">
-        <div className="font-bold text-white uppercase tracking-wider text-[10px] flex items-center justify-between gap-4">
-          <span>{viewMode === 'occupancy' ? 'Capacity Utilization' : 'ABC Velocity Heatmap'}</span>
-          <span className="text-cyan-400 font-mono text-[10px]">384 LOCATIONS</span>
-        </div>
-        {viewMode === 'occupancy' ? (
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-slate-700 inline-block" /> Empty</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" /> &lt;50%</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> 50-85%</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-red-500 inline-block" /> &gt;85%</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-rose-500 inline-block" /> Class A (Fast)</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500 inline-block" /> Class B (Medium)</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-cyan-500 inline-block" /> Class C (Slow)</span>
-          </div>
-        )}
-      </div>
-
       {/* Floating Raycaster Tooltip */}
       {hoveredBin && tooltipPos && (
         <div
-          className="pointer-events-none absolute z-20 rounded-xl border border-cyan-500/40 bg-slate-950/95 p-3.5 shadow-2xl backdrop-blur-md text-xs text-slate-200 min-w-[210px]"
+          className="pointer-events-none absolute z-30 rounded-xl border border-cyan-500/40 bg-slate-950/95 p-3.5 shadow-2xl backdrop-blur-md text-xs text-slate-200 min-w-[210px]"
           style={{
             left: `${Math.min(window.innerWidth - 240, tooltipPos.x + 15)}px`,
             top: `${Math.max(10, tooltipPos.y - 75)}px`
