@@ -229,6 +229,26 @@ const shipmentSchema = new mongoose.Schema({
   deliveryProof: {
     type: String // URL or file path
   },
+  podDetails: {
+    signature: { type: String },
+    photoUrl: { type: String },
+    recipientName: { type: String, trim: true },
+    recipientPhone: { type: String, trim: true },
+    deliveredAt: { type: Date },
+    verifiedOtp: { type: String, trim: true }
+  },
+  currentLocation: {
+    lat: { type: Number },
+    lng: { type: Number },
+    speed: { type: Number },
+    heading: { type: Number },
+    updatedAt: { type: Date }
+  },
+  geofenceEvents: [{
+    eventType: { type: String },
+    timestamp: { type: Date, default: Date.now },
+    details: { type: String }
+  }],
   receivedBy: {
     type: String,
     trim: true

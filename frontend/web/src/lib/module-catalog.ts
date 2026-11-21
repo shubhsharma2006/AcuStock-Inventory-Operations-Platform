@@ -53,7 +53,7 @@ export const SYSTEM_SECTIONS: SectionDefinition[] = [
     id: 'CRM_SALES',
     label: 'CRM & Sales Pipeline',
     description: 'Deals, quotations, sales orders, tax invoices, shipments, and customer returns',
-    moduleIds: ['crm', 'sales-orders', 'invoices', 'shipments', 'rma'],
+    moduleIds: ['crm', 'sales-orders', 'invoices', 'shipments', 'fleet-tracking', 'rma'],
   },
   {
     id: 'PROCUREMENT_MFG',

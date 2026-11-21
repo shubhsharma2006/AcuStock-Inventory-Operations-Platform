@@ -26,7 +26,7 @@ const SYSTEM_SECTIONS = [
     id: 'CRM_SALES',
     label: 'CRM & Sales Pipeline',
     description: 'Deals, quotations, sales orders, tax invoices, shipments, and customer returns',
-    moduleIds: ['crm', 'sales-orders', 'invoices', 'shipments', 'rma'],
+    moduleIds: ['crm', 'sales-orders', 'invoices', 'shipments', 'fleet-tracking', 'rma'],
   },
   {
     id: 'PROCUREMENT_MFG',
@@ -82,6 +82,7 @@ const MODULE_REGISTRY = {
   'sales-orders': { id: 'sales-orders', label: 'Sales Orders', sectionId: 'CRM_SALES', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'READ_ONLY' } },
   invoices: { id: 'invoices', label: 'Invoices & AR', sectionId: 'CRM_SALES', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'HIDDEN' } },
   shipments: { id: 'shipments', label: 'Shipments & Logistics', sectionId: 'CRM_SALES', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'FULL_ACCESS' } },
+  'fleet-tracking': { id: 'fleet-tracking', label: 'Fleet & Porter Tower', sectionId: 'CRM_SALES', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'FULL_ACCESS' } },
   rma: { id: 'rma', label: 'Returns & RMA', sectionId: 'CRM_SALES', defaultAccess: { ADMIN: 'FULL_ACCESS', MANAGER: 'FULL_ACCESS', USER: 'READ_ONLY' } },
 
   // Procurement & Manufacturing

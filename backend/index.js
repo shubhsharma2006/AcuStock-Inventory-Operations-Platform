@@ -662,6 +662,7 @@ const UNGUARDED_PREFIXES = [
   '/api/ai/whatsapp',
   '/api/docs',
   '/api/v1/docs',
+  '/api/tracking/public',
   '/api/health',
   '/api/ready',
   '/api/metrics',

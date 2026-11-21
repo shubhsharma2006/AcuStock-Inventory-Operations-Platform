@@ -6,6 +6,7 @@ const PUBLIC_PATHS = [
   "/forgot-password",
   "/reset-password",
   "/onboarding",
+  "/tracking",     // Public customer tracking portal
   "/api",          // API proxy routes handle their own auth
   "/_next",        // Next.js internals
   "/favicon.ico",
