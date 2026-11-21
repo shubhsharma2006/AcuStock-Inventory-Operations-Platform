@@ -32,7 +32,7 @@ export interface SlottingRec {
 
 interface SlottingModalProps {
   warehouseId: string;
-  warehouseName: string;
+  warehouseName?: string;
   isOpen: boolean;
   onClose: () => void;
   onMovesApplied?: () => void;
@@ -40,7 +40,7 @@ interface SlottingModalProps {
 
 export function SlottingModal({
   warehouseId,
-  warehouseName,
+  warehouseName = 'Warehouse Facility',
   isOpen,
   onClose,
   onMovesApplied
