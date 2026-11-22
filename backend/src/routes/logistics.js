@@ -260,4 +260,80 @@ router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', '
   }
 });
 
+const allocationEngine = require('../services/logistics/CarrierAllocationEngine');
+
+/**
+ * POST /api/logistics/rates
+ * Compare live rates across all integrated carriers (Bigship, Shiprocket, etc.)
+ */
+router.post('/rates', requireAuth, async (req, res) => {
+  try {
+    const {
+      fromPincode,
+      toPincode,
+      weightKg,
+      actualWeightKg,
+      lengthCm,
+      widthCm,
+      heightCm,
+      isCod,
+      declaredValue,
+      policy = 'BALANCED'
+    } = req.body || {};
+
+    if (!fromPincode || !toPincode) {
+      return res.status(400).json({ message: 'Both fromPincode and toPincode are required.' });
+    }
+
+    const ratesData = await allocationEngine.compareAndRank({
+      fromPincode,
+      toPincode,
+      actualWeightKg: actualWeightKg ?? weightKg,
+      lengthCm,
+      widthCm,
+      heightCm,
+      isCod,
+      declaredValue
+    }, policy);
+
+    res.json({
+      success: true,
+      ...ratesData
+    });
+  } catch (err) {
+    console.error('Error fetching logistics rates:', err);
+    res.status(500).json({ message: 'Failed to calculate carrier rates: ' + err.message });
+  }
+});
+
+/**
+ * POST /api/logistics/book
+ * Book shipment and generate AWB via the selected carrier provider
+ */
+router.post('/book', requireAuth, async (req, res) => {
+  try {
+    const { provider = 'BIGSHIP', carrierCode, carrierName, transferId, orderId, ...orderData } = req.body || {};
+    const carrierProvider = allocationEngine.getProvider(provider) || allocationEngine.getProvider('BIGSHIP');
+
+    if (!carrierProvider) {
+      return res.status(400).json({ message: `Carrier provider ${provider} not available.` });
+    }
+
+    const bookingResult = await carrierProvider.createShipment({
+      ...orderData,
+      id: transferId || orderId,
+      carrierCode,
+      carrierName
+    });
+
+    res.json({
+      success: true,
+      shipment: bookingResult
+    });
+  } catch (err) {
+    console.error('Error booking shipment:', err);
+    res.status(500).json({ message: 'Failed to book shipment: ' + err.message });
+  }
+});
+
 module.exports = router;

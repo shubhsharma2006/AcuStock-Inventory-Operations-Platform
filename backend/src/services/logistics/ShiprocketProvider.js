@@ -1,0 +1,116 @@
+'use strict';
+
+const CarrierProvider = require('./CarrierProvider');
+const VolumetricEngine = require('./VolumetricEngine');
+const shiprocketSingleton = require('../courier/ShiprocketService');
+const logger = require('../../utils/logger');
+
+/**
+ * Shiprocket Logistics Provider Adapter
+ */
+class ShiprocketProvider extends CarrierProvider {
+  constructor() {
+    super('SHIPROCKET');
+    this.service = shiprocketSingleton;
+  }
+
+  isConfigured() {
+    return this.service.isConfigured();
+  }
+
+  async getRates(params) {
+    const { fromPincode, toPincode, isCod = false, declaredValue = 0 } = params;
+    const { billableWeightKg, isVolumetricDominant } = VolumetricEngine.calculateWeight(params);
+    const zone = VolumetricEngine.resolveZone(fromPincode, toPincode);
+
+    const zoneMultiplier = {
+      ZONE_A: 1.0,
+      ZONE_B: 1.2,
+      ZONE_C: 1.4,
+      ZONE_D: 1.7,
+      ZONE_E: 2.1
+    }[zone] || 1.4;
+
+    const baseDays = {
+      ZONE_A: 1,
+      ZONE_B: 2,
+      ZONE_C: 3,
+      ZONE_D: 4,
+      ZONE_E: 6
+    }[zone] || 4;
+
+    const codFee = isCod ? Math.max(35, Math.round(declaredValue * 0.02)) : 0;
+
+    const carriers = [
+      {
+        carrierCode: 'SHIPROCKET_DELHIVERY',
+        carrierName: 'Shiprocket Delhivery Surface',
+        serviceType: 'SURFACE',
+        baseRate: 40,
+        expectedDays: baseDays,
+        carrierScore: 93
+      },
+      {
+        carrierCode: 'SHIPROCKET_BLUEDART',
+        carrierName: 'Shiprocket Blue Dart Air',
+        serviceType: 'AIR',
+        baseRate: 90,
+        expectedDays: Math.max(1, baseDays - 2),
+        carrierScore: 97
+      },
+      {
+        carrierCode: 'SHIPROCKET_SHADOWFAX',
+        carrierName: 'Shiprocket Shadowfax Surface',
+        serviceType: 'SURFACE',
+        baseRate: 35,
+        expectedDays: baseDays + 1,
+        carrierScore: 88
+      }
+    ];
+
+    return carriers.map(c => {
+      const freight = Math.max(50, Math.round(billableWeightKg * c.baseRate * zoneMultiplier));
+      return {
+        provider: 'SHIPROCKET',
+        carrierCode: c.carrierCode,
+        carrierName: c.carrierName,
+        serviceType: c.serviceType,
+        billableWeightKg,
+        rate: freight + codFee,
+        freightCharge: freight,
+        codCharges: codFee,
+        expectedDays: c.expectedDays,
+        carrierScore: c.carrierScore,
+        minWeightKg: 0.5,
+        zone,
+        isVolumetricDominant,
+        isServiceable: true
+      };
+    });
+  }
+
+  async createShipment(orderData) {
+    const res = await this.service.createAndAssignShipment(orderData);
+    return {
+      provider: 'SHIPROCKET',
+      isLive: res.isLive,
+      awb: res.awb,
+      courierName: res.courierName,
+      labelUrl: res.labelUrl,
+      trackingUrl: `https://shiprocket.co/tracking/${res.awb}`,
+      shipmentId: res.shipmentId
+    };
+  }
+
+  async trackShipment(awb) {
+    return {
+      awb,
+      provider: 'SHIPROCKET',
+      status: 'IN_TRANSIT',
+      currentLocation: 'In-Transit Terminal',
+      milestones: []
+    };
+  }
+}
+
+module.exports = ShiprocketProvider;

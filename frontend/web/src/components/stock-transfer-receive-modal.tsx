@@ -25,6 +25,7 @@ export interface StockTransferData {
 
 interface Props {
   transfer: StockTransferData;
+  error?: string;
   isLoading?: boolean;
   onClose: () => void;
   onConfirm: (payload: {
@@ -39,7 +40,7 @@ interface Props {
   }) => void;
 }
 
-export function StockTransferReceiveModal({ transfer, isLoading = false, onClose, onConfirm }: Props) {
+export function StockTransferReceiveModal({ transfer, error, isLoading = false, onClose, onConfirm }: Props) {
   // Initialize line items with full shipped quantity by default
   const [lineQuantities, setLineQuantities] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {};
@@ -130,11 +131,13 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                From <b className="text-slate-200">{fromName}</b> $\rightarrow$ To <b className="text-slate-200">{toName}</b>
+                From <b className="text-slate-200">{fromName}</b> → To <b className="text-slate-200">{toName}</b>
               </p>
             </div>
           </div>
           <button
+            aria-label="Close receipt"
+            disabled={isLoading}
             onClick={onClose}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white transition"
           >
@@ -142,9 +145,9 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
           </button>
         </div>
 
-        {validationError && (
-          <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
-            {validationError}
+        {(validationError || error) && (
+          <div role="alert" className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300">
+            {validationError || error}
           </div>
         )}
 

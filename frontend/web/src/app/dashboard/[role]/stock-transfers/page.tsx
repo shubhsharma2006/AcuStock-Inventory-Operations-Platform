@@ -1,16 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Portal } from "@/components/ui/portal";
 import { StockTransferReceiveModal } from "@/components/stock-transfer-receive-modal";
+import { CarrierRateComparator } from "@/components/CarrierRateComparator";
 
 interface WarehouseRef {
   _id: string;
   name: string;
   code: string;
+  address?: {
+    zipCode?: string;
+    city?: string;
+  };
 }
 
 interface TransferItem {
@@ -57,8 +62,8 @@ interface ProductOption {
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   DRAFT: { label: "Draft Request", color: "text-slate-300", bg: "bg-slate-700/30 border-slate-600/40" },
   APPROVED: { label: "Approved", color: "text-sky-300", bg: "bg-sky-500/20 border-sky-500/30" },
-  IN_TRANSIT: { label: "In Transit 🚚", color: "text-amber-300", bg: "bg-amber-500/20 border-amber-500/30" },
-  RECEIVED: { label: "Received ✅", color: "text-emerald-300", bg: "bg-emerald-500/20 border-emerald-500/30" },
+  IN_TRANSIT: { label: "In transit", color: "text-amber-300", bg: "bg-amber-500/20 border-amber-500/30" },
+  RECEIVED: { label: "Received", color: "text-emerald-300", bg: "bg-emerald-500/20 border-emerald-500/30" },
   CANCELLED: { label: "Cancelled", color: "text-rose-300", bg: "bg-rose-500/20 border-rose-500/30" },
 };
 
@@ -125,35 +130,45 @@ export default function StockTransfersPage() {
 
   const transfers = data?.transfers || [];
 
+  const [cancelTarget, setCancelTarget] = useState<StockTransfer | null>(null);
+  const [notice, setNotice] = useState("");
+
+  function completed(message: string) {
+    setNotice(message);
+    return queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+  }
+
   const approveMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/stock-transfers/${id}/approve`, { method: "PUT" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stock-transfers"] }),
+    mutationFn: (id: string) => apiFetch<{ transfer: StockTransfer }>(`/stock-transfers/${id}/approve`, { method: "PUT" }),
+    onSuccess: ({ transfer }) => completed(`${transfer.transferNumber} approved.`),
   });
 
   const shipMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data?: any }) =>
-      apiFetch(`/stock-transfers/${id}/ship`, { method: "PUT", body: JSON.stringify(data || {}) }),
-    onSuccess: () => {
+    mutationFn: ({ id, data }: { id: string; data: object }) =>
+      apiFetch<{ transfer: StockTransfer }>(`/stock-transfers/${id}/ship`, { method: "PUT", body: JSON.stringify(data) }),
+    onSuccess: ({ transfer }) => {
       setSelectedTransferForShip(null);
-      queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+      return completed(`${transfer.transferNumber} dispatched.`);
     },
   });
 
   const receiveMutation = useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload?: any }) =>
-      apiFetch(`/stock-transfers/${id}/receive`, {
-        method: "PUT",
-        body: JSON.stringify(payload || {}),
-      }),
-    onSuccess: () => {
+    mutationFn: ({ id, payload }: { id: string; payload: object }) =>
+      apiFetch<{ transfer: StockTransfer }>(`/stock-transfers/${id}/receive`, { method: "PUT", body: JSON.stringify(payload) }),
+    onSuccess: ({ transfer }) => {
       setSelectedTransferForReceive(null);
-      queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+      const shortage = transfer.items.reduce((sum, line) => sum + (line.shortageQuantity ?? 0), 0);
+      return completed(`${transfer.transferNumber} received.${shortage ? ` Shortage recorded: ${shortage} units.` : ""}`);
     },
   });
 
   const cancelMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/stock-transfers/${id}/cancel`, { method: "PUT", body: JSON.stringify({ reason: "User cancelled" }) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stock-transfers"] }),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiFetch<{ transfer: StockTransfer }>(`/stock-transfers/${id}/cancel`, { method: "PUT", body: JSON.stringify({ reason }) }),
+    onSuccess: ({ transfer }) => {
+      setCancelTarget(null);
+      return completed(`${transfer.transferNumber} cancelled.`);
+    },
   });
 
   return (
@@ -161,15 +176,12 @@ export default function StockTransfersPage() {
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-widest text-amber-400">Inventory Mobility</div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white mt-1">Inter-Warehouse Transfers</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Dispatch, track, and confirm stock movements across locations with IN_TRANSIT ledger protection.
-          </p>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">Stock transfers</h1>
         </div>
 
         <div className="flex items-center gap-3">
           <select
+            aria-label="Filter transfers by status"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="rounded-2xl border border-white/10 bg-slate-900 px-3 py-2 text-xs text-white outline-none focus:border-amber-400"
@@ -193,6 +205,7 @@ export default function StockTransfersPage() {
         </div>
       </div>
 
+      <div role="status" className="text-sm text-emerald-300 empty:hidden">{notice}</div>
       {isLoading ? <div className="text-slate-400">Loading stock transfers…</div> : null}
       {error ? (
         <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">
@@ -277,39 +290,41 @@ export default function StockTransfersPage() {
                         {trf.status === "DRAFT" ? (
                           <button
                             type="button"
-                            onClick={() => approveMutation.mutate(trf._id)}
+                            onClick={() => { setNotice(""); approveMutation.mutate(trf._id); }}
                             disabled={approveMutation.isPending}
                             className="rounded-xl bg-sky-500/20 px-3 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/30 transition"
                           >
-                            Approve
+                            {approveMutation.isPending && approveMutation.variables === trf._id ? "Approving…" : "Approve"}
                           </button>
                         ) : null}
+
+                        {approveMutation.error && approveMutation.variables === trf._id && <p role="alert" className="text-xs text-rose-300">{approveMutation.error.message}</p>}
 
                         {trf.status === "APPROVED" ? (
                           <button
                             type="button"
-                            onClick={() => setSelectedTransferForShip(trf)}
+                            onClick={() => { setNotice(""); shipMutation.reset(); setSelectedTransferForShip(trf); }}
                             disabled={shipMutation.isPending}
                             className="rounded-xl bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-500/30 transition"
                           >
-                            Ship Dispatch
+                            Dispatch
                           </button>
                         ) : null}
 
                         {trf.status === "IN_TRANSIT" ? (
                           <button
                             type="button"
-                            onClick={() => setSelectedTransferForReceive(trf)}
+                            onClick={() => { setNotice(""); receiveMutation.reset(); setSelectedTransferForReceive(trf); }}
                             className="rounded-xl bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/30 transition flex items-center gap-1"
                           >
-                            <span>📥</span> Confirm Receipt
+                            Receive stock
                           </button>
                         ) : null}
 
                         {trf.status !== "RECEIVED" && trf.status !== "CANCELLED" ? (
                           <button
                             type="button"
-                            onClick={() => cancelMutation.mutate(trf._id)}
+                            onClick={() => { setNotice(""); cancelMutation.reset(); setCancelTarget(trf); }}
                             disabled={cancelMutation.isPending}
                             className="rounded-xl px-2.5 py-1 text-xs text-rose-400 hover:bg-rose-500/20 transition"
                           >
@@ -325,7 +340,7 @@ export default function StockTransfersPage() {
               {transfers.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-5 py-12 text-center text-slate-400">
-                    No stock transfers recorded yet. Create one with &quot;+ New Transfer&quot; above.
+                    {statusFilter ? "No transfers match this status." : "No stock transfers yet."}
                   </td>
                 </tr>
               ) : null}
@@ -333,6 +348,10 @@ export default function StockTransfersPage() {
           </table>
         </div>
       ) : null}
+
+      {cancelTarget && <CancelTransferDialog transfer={cancelTarget} pending={cancelMutation.isPending}
+        error={cancelMutation.error?.message} onClose={() => setCancelTarget(null)}
+        onConfirm={reason => cancelMutation.mutate({ id: cancelTarget._id, reason })} />}
 
       {/* New Transfer Modal */}
       {showCreateModal ? (
@@ -346,6 +365,7 @@ export default function StockTransfersPage() {
       {selectedTransferForShip ? (
         <ShipDispatchModal
           transfer={selectedTransferForShip}
+          error={shipMutation.error?.message}
           isPending={shipMutation.isPending}
           onClose={() => setSelectedTransferForShip(null)}
           onConfirm={(dispatchData) =>
@@ -358,6 +378,7 @@ export default function StockTransfersPage() {
       {selectedTransferForReceive ? (
         <StockTransferReceiveModal
           transfer={selectedTransferForReceive as any}
+          error={receiveMutation.error?.message}
           isLoading={receiveMutation.isPending}
           onClose={() => setSelectedTransferForReceive(null)}
           onConfirm={(payload) =>
@@ -599,13 +620,59 @@ function CreateTransferModal({ onClose, onCreated }: { onClose: () => void; onCr
   );
 }
 
+function CancelTransferDialog({ transfer, pending, error, onClose, onConfirm }: {
+  transfer: StockTransfer;
+  pending: boolean;
+  error?: string;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [reason, setReason] = useState("");
+  useEffect(() => {
+    const element = dialog.current;
+    element?.showModal();
+    return () => element?.close();
+  }, []);
+
+  return (
+    <dialog ref={dialog} aria-labelledby="cancel-transfer-title" onCancel={event => {
+      event.preventDefault();
+      if (!pending) onClose();
+    }} className="m-auto w-[min(28rem,92vw)] rounded-xl border border-white/15 bg-slate-900 p-5 text-white backdrop:bg-black/70">
+      <h2 id="cancel-transfer-title" className="text-lg font-semibold">Cancel {transfer.transferNumber}?</h2>
+      {transfer.status === "IN_TRANSIT" && <p className="mt-2 text-sm text-slate-300">
+        Cancelling credits the dispatched stock back to {transfer.fromWarehouse?.name || "the source warehouse"}.
+      </p>}
+      <form className="mt-4 space-y-4" onSubmit={event => {
+        event.preventDefault();
+        if (!pending && reason.trim()) onConfirm(reason.trim());
+      }}>
+        <label className="block text-sm">Cancellation reason
+          <textarea required autoFocus disabled={pending} value={reason} onChange={event => setReason(event.target.value)}
+            className="mt-1 block w-full rounded-lg border border-white/20 bg-slate-950 p-2" />
+        </label>
+        {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
+        <div className="flex justify-end gap-4">
+          <button type="button" disabled={pending} onClick={onClose}>Keep transfer</button>
+          <button disabled={pending || !reason.trim()} className="rounded-lg bg-rose-700 px-3 py-2 disabled:opacity-50">
+            {pending ? "Cancelling…" : "Cancel transfer"}
+          </button>
+        </div>
+      </form>
+    </dialog>
+  );
+}
+
 function ShipDispatchModal({
   transfer,
+  error,
   isPending,
   onClose,
   onConfirm,
 }: {
   transfer: StockTransfer;
+  error?: string;
   isPending: boolean;
   onClose: () => void;
   onConfirm: (data: { transporterId?: string; trackingNumber?: string; estimatedArrival?: string }) => void;
@@ -641,6 +708,7 @@ function ShipDispatchModal({
           </div>
           <button
             type="button"
+            disabled={isPending}
             onClick={onClose}
             className="rounded-full p-2 text-slate-400 hover:bg-white/10 hover:text-white"
           >
@@ -648,12 +716,26 @@ function ShipDispatchModal({
           </button>
         </div>
 
+        {error && <p role="alert" className="mt-4 text-sm text-rose-300">{error}</p>}
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           <div className="rounded-xl border border-white/5 bg-slate-950/50 p-3 text-xs text-slate-300">
             <span className="text-slate-400">Route:</span>{" "}
             <span className="font-semibold text-white">{transfer.fromWarehouse?.name}</span> →{" "}
             <span className="font-semibold text-white">{transfer.toWarehouse?.name}</span>
           </div>
+
+          {/* Live Multi-Carrier Rate Comparator (Bigship & Integrated Aggregators) */}
+          <CarrierRateComparator
+            fromPincode={transfer.fromWarehouse?.address?.zipCode || "400001"}
+            toPincode={transfer.toWarehouse?.address?.zipCode || "110001"}
+            weightKg={Math.max(1, transfer.items.reduce((sum, it) => sum + (it.quantity || 1), 0) * 0.5)}
+            onSelectCarrier={(carrier) => {
+              const autoAwb = `${carrier.provider.slice(0, 4)}-${Date.now().toString().slice(-8)}`;
+              setTrackingNumber(autoAwb);
+              const etaDate = new Date(Date.now() + carrier.expectedDays * 86400000).toISOString().slice(0, 10);
+              setEstimatedArrival(etaDate);
+            }}
+          />
 
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1">Shipping Partner / Transporter</label>
@@ -692,7 +774,8 @@ function ShipDispatchModal({
           <div className="mt-6 flex items-center justify-end gap-3 pt-4 border-t border-white/10">
             <button
               type="button"
-              onClick={onClose}
+              disabled={isPending}
+            onClick={onClose}
               className="rounded-xl px-4 py-2 text-sm text-slate-400 hover:text-white"
             >
               Cancel
@@ -702,7 +785,7 @@ function ShipDispatchModal({
               disabled={isPending}
               className="rounded-xl bg-amber-400 px-6 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-50"
             >
-              {isPending ? "Dispatching…" : "Confirm & Dispatch 🚚"}
+              {isPending ? "Dispatching…" : "Confirm dispatch"}
             </button>
           </div>
         </form>
