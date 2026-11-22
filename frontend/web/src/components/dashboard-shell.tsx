@@ -148,6 +148,7 @@ function buildNavGroups(
         { label: "Weight Disputes", href: `${basePath}/weight-discrepancies`, icon: "adjustments" },
         { label: "COD Remittance & Early Payout", href: `${basePath}/cod-remittance`, icon: "billing" },
         { label: "Logistics Wallet & Billing", href: `${basePath}/logistics-wallet`, icon: "billing" },
+        { label: "Cross-Border Exports", href: `${basePath}/cross-border`, icon: "po" },
         { label: "NDR Control Tower", href: `${basePath}/ndr-management`, icon: "po" },
         { label: "Fleet & Porter Tower", href: `${basePath}/fleet-tracking`, icon: "fleet" },
         { label: "Returns & RMA", href: `${basePath}/rma`, icon: "adjustments" },
