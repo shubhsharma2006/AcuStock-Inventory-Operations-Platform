@@ -64,7 +64,8 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
 
 function ShortageResolution({ transferId, line }: { transferId: string; line: TransferItem }) {
   const client = useQueryClient();
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const generateId = () => (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`);
+  const [requestId, setRequestId] = useState(generateId);
   const [selected, setSelected] = useState<string[]>([]);
   const history = line.resolutions ?? [];
   const remaining = (line.shortageQuantity ?? 0) - history.reduce((sum, event) => sum + event.quantity, 0);
@@ -77,7 +78,7 @@ function ShortageResolution({ transferId, line }: { transferId: string; line: Tr
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ['stock-transfers'] });
       setSelected([]);
-      setRequestId(crypto.randomUUID());
+      setRequestId(generateId());
     }
   });
   return <details className="rounded-lg border border-amber-500/40 p-2 text-xs">
@@ -86,8 +87,14 @@ function ShortageResolution({ transferId, line }: { transferId: string; line: Tr
     {remaining > 0 && <form className="mt-2 grid gap-2" onSubmit={event => {
       event.preventDefault();
       const fields = new FormData(event.currentTarget);
-      mutation.mutate({ lineId: line._id, requestId, outcome: fields.get('outcome'), reason: fields.get('reason'),
-        quantity: available.length ? selected.length : Number(fields.get('quantity')), serials: selected });
+      mutation.mutate({
+        lineId: line._id,
+        requestId,
+        outcome: String(fields.get('outcome') || 'ARRIVED'),
+        reason: String(fields.get('reason') || ''),
+        quantity: available.length ? selected.length : Number(fields.get('quantity')),
+        serials: selected
+      });
     }}>
       <select aria-label="Resolution outcome" name="outcome" className="bg-slate-900">
         <option value="ARRIVED">Arrived at destination</option><option value="AT_SOURCE">Found at source</option>
@@ -264,7 +271,7 @@ export default function StockTransfersPage() {
 
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
-                        {trf.status === "RECEIVED" && trf.items.filter(line => line._id && line.shortageQuantity).map(line =>
+                        {trf.status === "RECEIVED" && trf.items.filter(line => Boolean(line._id && (line.shortageQuantity ?? 0) > 0)).map(line =>
                           <ShortageResolution key={line._id} line={line} transferId={trf._id} />
                         )}
                         {trf.status === "DRAFT" ? (
