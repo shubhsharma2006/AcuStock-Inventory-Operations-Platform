@@ -146,6 +146,7 @@ function buildNavGroups(
         { label: "Shipments & Logistics", href: `${basePath}/shipments`, icon: "po" },
         { label: "B2B Heavy Freight & E-Way", href: `${basePath}/heavy-freight`, icon: "po" },
         { label: "Weight Disputes", href: `${basePath}/weight-discrepancies`, icon: "adjustments" },
+        { label: "COD Remittance & Early Payout", href: `${basePath}/cod-remittance`, icon: "billing" },
         { label: "NDR Control Tower", href: `${basePath}/ndr-management`, icon: "po" },
         { label: "Fleet & Porter Tower", href: `${basePath}/fleet-tracking`, icon: "fleet" },
         { label: "Returns & RMA", href: `${basePath}/rma`, icon: "adjustments" },
