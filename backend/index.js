@@ -543,11 +543,11 @@ const connectWithRetry = async (attempt = 1) => {
 
     // Warranty notifications: run on startup + every 24 h
     // Wrapped in try/catch so a crash never kills the interval
-    // Guard: only PM2 worker 0 (or non-cluster / dev) runs the cron.
-    // Without this guard, every PM2 cluster worker would fire the job
-    // simultaneously, creating duplicate notifications on each cycle.
-    const isLeaderWorker = process.env.NODE_APP_INSTANCE === undefined  // non-PM2 (dev)
-                        || process.env.NODE_APP_INSTANCE === '0';        // PM2 worker 0
+    // Distributed Leader Election: Prevents duplicate execution across multiple
+    // PM2 cluster workers or multi-container horizontal replicas.
+    const { acquireLeaderLock } = require('./src/services/distributedLock');
+    const isLeaderWorker = (process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === '0')
+      && await acquireLeaderLock('acustock:leader:crons', 30);
 
     if (isLeaderWorker) {
       const safeWarrantyNotify = async () => {
@@ -614,7 +614,7 @@ const connectWithRetry = async (attempt = 1) => {
       const { startTrackingPoller } = require('./src/services/tracking/trackingPoller');
       startTrackingPoller();
     } else {
-      logger.info(`⏰ Warranty notification cron skipped (worker ${process.env.NODE_APP_INSTANCE})`);
+      logger.info(`⏰ Background crons skipped (secondary worker or non-leader replica)`);
     }
 
     // Verify email configuration on startup (non-blocking)

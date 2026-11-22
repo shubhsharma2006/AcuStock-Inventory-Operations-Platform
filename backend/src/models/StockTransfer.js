@@ -21,6 +21,16 @@ const transferItemSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  shortageQuantity: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  discrepancyNotes: {
+    type: String,
+    trim: true,
+    maxlength: 500
+  },
   receivedSerials: [{
     type: String,
     trim: true,
@@ -112,6 +122,11 @@ const stockTransferSchema = new mongoose.Schema({
     type: Date
   },
   notes: {
+    type: String,
+    trim: true,
+    maxlength: 1000
+  },
+  receiptNotes: {
     type: String,
     trim: true,
     maxlength: 1000

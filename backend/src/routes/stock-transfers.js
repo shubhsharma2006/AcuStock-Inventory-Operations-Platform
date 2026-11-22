@@ -12,7 +12,7 @@ const router = express.Router();
 router.use(requireTenantId);
 
 // Helper: Calculate current stock of product at specific warehouse
-async function getWarehouseStock(warehouseId, productId, tenantId) {
+async function getWarehouseStock(warehouseId, productId, tenantId, session = null) {
   const matchFilter = {
     warehouseId: new mongoose.Types.ObjectId(warehouseId),
     productId: new mongoose.Types.ObjectId(productId),
@@ -20,7 +20,7 @@ async function getWarehouseStock(warehouseId, productId, tenantId) {
   };
   matchFilter.tenantId = new mongoose.Types.ObjectId(tenantId);
 
-  const result = await StockLedger.aggregate([
+  const agg = StockLedger.aggregate([
     { $match: matchFilter },
     {
       $group: {
@@ -33,7 +33,35 @@ async function getWarehouseStock(warehouseId, productId, tenantId) {
       }
     }
   ]);
+
+  if (session) agg.session(session);
+  const result = await agg;
   return result.length > 0 ? Math.max(0, result[0].total) : 0;
+}
+
+/**
+ * Helper to execute multi-document mutations atomically within a MongoDB session.
+ * Falls back to non-transactional execution only if running in standalone test mode without replica sets.
+ */
+async function executeWithTransaction(fn) {
+  const session = await mongoose.startSession();
+  try {
+    let result;
+    try {
+      await session.withTransaction(async () => {
+        result = await fn(session);
+      });
+    } catch (txErr) {
+      if (txErr.message && txErr.message.includes('replica set member')) {
+        result = await fn(null);
+      } else {
+        throw txErr;
+      }
+    }
+    return result;
+  } finally {
+    session.endSession();
+  }
 }
 
 // GET /api/stock-transfers - List transfers
@@ -226,60 +254,75 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
   try {
     const filter = { _id: req.params.id, tenantId: req.tenantId };
 
-    const transfer = await StockTransfer.findOne(filter);
-    if (!transfer) {
-      return res.status(404).json({ message: 'Stock transfer not found' });
-    }
-    if (transfer.status !== 'APPROVED') {
-      return res.status(400).json({ message: `Cannot ship transfer in status '${transfer.status}'. It must be APPROVED first.` });
-    }
-
-    // Branch Scoping: Non-admin users can only ship transfers originating from their assigned warehouse
-    if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
-      if (String(transfer.fromWarehouse) !== String(req.user.assignedWarehouseId)) {
-        return res.status(403).json({ message: 'Forbidden: Only the originating warehouse can dispatch this transfer.' });
-      }
-    }
-
-    // Optional logistics info
     const { transporterId, trackingNumber, estimatedArrival } = req.body;
-    if (transporterId) transfer.transporterId = transporterId;
-    if (trackingNumber) transfer.trackingNumber = String(trackingNumber).trim().toUpperCase();
-    if (estimatedArrival) transfer.estimatedArrival = new Date(estimatedArrival);
 
-    // Verify stock availability at source warehouse
-    for (const it of transfer.items) {
-      const availStock = await getWarehouseStock(transfer.fromWarehouse, it.product, transfer.tenantId);
-      if (availStock < it.quantity) {
-        const prod = await Item.findOne({ _id: it.product, tenantId: transfer.tenantId });
-        const name = prod ? prod.name : it.product;
-        return res.status(400).json({
-          message: `Insufficient stock at source warehouse for '${name}'. Available: ${availStock}, Required: ${it.quantity}`
-        });
+    const transfer = await executeWithTransaction(async (session) => {
+      const q = StockTransfer.findOne(filter);
+      if (session) q.session(session);
+      const trf = await q;
+
+      if (!trf) {
+        const err = new Error('Stock transfer not found');
+        err.statusCode = 404;
+        throw err;
       }
-    }
+      if (trf.status !== 'APPROVED') {
+        const err = new Error(`Cannot ship transfer in status '${trf.status}'. It must be APPROVED first.`);
+        err.statusCode = 400;
+        throw err;
+      }
 
-    // Create TRANSFER_OUT ledger records for each item
-    for (const it of transfer.items) {
-      const outLedger = new StockLedger({
-        productId: it.product,
-        warehouseId: transfer.fromWarehouse,
-        transferId: transfer._id,
-        type: 'TRANSFER_OUT',
-        quantity: it.quantity,
-        serialNumbers: it.serialNumbers || [],
-        createdBy: req.user._id,
-        role: req.user.role,
-        notes: `Transfer out: ${transfer.transferNumber}`,
-        tenantId: transfer.tenantId
-      });
-      await outLedger.save();
-    }
+      // Branch Scoping: Non-admin users can only ship transfers originating from their assigned warehouse
+      if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+        if (String(trf.fromWarehouse) !== String(req.user.assignedWarehouseId)) {
+          const err = new Error('Forbidden: Only the originating warehouse can dispatch this transfer.');
+          err.statusCode = 403;
+          throw err;
+        }
+      }
 
-    transfer.status = 'IN_TRANSIT';
-    transfer.shippedBy = req.user._id;
-    transfer.shippedAt = new Date();
-    await transfer.save();
+      // Optional logistics info
+      if (transporterId) trf.transporterId = transporterId;
+      if (trackingNumber) trf.trackingNumber = String(trackingNumber).trim().toUpperCase();
+      if (estimatedArrival) trf.estimatedArrival = new Date(estimatedArrival);
+
+      // Verify stock availability at source warehouse within transaction
+      for (const it of trf.items) {
+        const availStock = await getWarehouseStock(trf.fromWarehouse, it.product, trf.tenantId, session);
+        if (availStock < it.quantity) {
+          const itemQuery = Item.findOne({ _id: it.product, tenantId: trf.tenantId });
+          if (session) itemQuery.session(session);
+          const prod = await itemQuery;
+          const name = prod ? prod.name : it.product;
+          const err = new Error(`Insufficient stock at source warehouse for '${name}'. Available: ${availStock}, Required: ${it.quantity}`);
+          err.statusCode = 400;
+          throw err;
+        }
+      }
+
+      // Create TRANSFER_OUT ledger records for each item atomically
+      for (const it of trf.items) {
+        const outLedger = new StockLedger({
+          productId: it.product,
+          warehouseId: trf.fromWarehouse,
+          transferId: trf._id,
+          type: 'TRANSFER_OUT',
+          quantity: it.quantity,
+          serialNumbers: it.serialNumbers || [],
+          createdBy: req.user._id,
+          role: req.user.role,
+          notes: `Transfer out: ${trf.transferNumber}`,
+          tenantId: trf.tenantId
+        });
+        await outLedger.save(session ? { session } : {});
+      }
+
+      trf.status = 'IN_TRANSIT';
+      trf.shippedBy = req.user._id;
+      trf.shippedAt = new Date();
+      await trf.save(session ? { session } : {});
+      return trf;
+    });
 
     notifyRoles(['ADMIN', 'MANAGER'], {
       type: 'system',
@@ -295,8 +338,11 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
 
     res.json({ message: 'Stock dispatched and in transit', transfer });
   } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
     console.error('Error shipping transfer:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: error.message || 'Server error' });
   }
 });
 
@@ -304,63 +350,96 @@ router.put('/:id/ship', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAG
 router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER', 'USER']), validateObjectId, async (req, res) => {
   try {
     const filter = { _id: req.params.id, tenantId: req.tenantId };
+    const { receivedItems, receiptNotes } = req.body;
 
-    const transfer = await StockTransfer.findOne(filter);
-    if (!transfer) {
-      return res.status(404).json({ message: 'Stock transfer not found' });
-    }
-    if (transfer.status !== 'IN_TRANSIT') {
-      return res.status(400).json({ message: `Cannot receive transfer in status '${transfer.status}'. It must be IN_TRANSIT.` });
-    }
+    const transfer = await executeWithTransaction(async (session) => {
+      const q = StockTransfer.findOne(filter);
+      if (session) q.session(session);
+      const trf = await q;
 
-    // Branch Scoping: Non-admin users can only confirm receipt for transfers destined to their assigned warehouse
-    if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
-      if (String(transfer.toWarehouse) !== String(req.user.assignedWarehouseId)) {
-        return res.status(403).json({ message: 'Forbidden: Only the destination warehouse can confirm receipt for this transfer.' });
+      if (!trf) {
+        const err = new Error('Stock transfer not found');
+        err.statusCode = 404;
+        throw err;
       }
-    }
+      if (trf.status !== 'IN_TRANSIT') {
+        const err = new Error(`Cannot receive transfer in status '${trf.status}'. It must be IN_TRANSIT.`);
+        err.statusCode = 400;
+        throw err;
+      }
 
-    const { receivedItems } = req.body;
-
-    // Apply received quantities
-    for (let i = 0; i < transfer.items.length; i++) {
-      const it = transfer.items[i];
-      let recQty = it.quantity; // default full
-      let recSerials = it.serialNumbers;
-
-      if (Array.isArray(receivedItems)) {
-        const userRec = receivedItems.find(r => String(r.product) === String(it.product) || String(r._id) === String(it._id));
-        if (userRec && userRec.receivedQuantity !== undefined) {
-          recQty = Math.max(0, Number(userRec.receivedQuantity));
-          recSerials = Array.isArray(userRec.receivedSerials) ? userRec.receivedSerials : it.serialNumbers;
+      // Branch Scoping: Non-admin users can only confirm receipt for transfers destined to their assigned warehouse
+      if (req.user.assignedWarehouseId && !['ADMIN', 'SUPER_ADMIN'].includes(req.user.role)) {
+        if (String(trf.toWarehouse) !== String(req.user.assignedWarehouseId)) {
+          const err = new Error('Forbidden: Only the destination warehouse can confirm receipt for this transfer.');
+          err.statusCode = 403;
+          throw err;
         }
       }
 
-      it.receivedQuantity = recQty;
-      it.receivedSerials = recSerials;
+      let totalShortage = 0;
 
-      // Create TRANSFER_IN ledger record for received items
-      if (recQty > 0) {
-        const inLedger = new StockLedger({
-          productId: it.product,
-          warehouseId: transfer.toWarehouse,
-          transferId: transfer._id,
-          type: 'TRANSFER_IN',
-          quantity: recQty,
-          serialNumbers: recSerials || [],
-          createdBy: req.user._id,
-          role: req.user.role,
-          notes: `Transfer in: ${transfer.transferNumber}`,
-          tenantId: transfer.tenantId
-        });
-        await inLedger.save();
+      // Apply received quantities with strict upper-bound validation
+      for (let i = 0; i < trf.items.length; i++) {
+        const it = trf.items[i];
+        let recQty = it.quantity; // default full if not specified
+        let recSerials = it.serialNumbers;
+        let lineDiscrepancy = null;
+
+        if (Array.isArray(receivedItems)) {
+          const userRec = receivedItems.find(r => String(r.product) === String(it.product) || String(r._id) === String(it._id));
+          if (userRec && userRec.receivedQuantity !== undefined) {
+            const entered = Number(userRec.receivedQuantity);
+            if (isNaN(entered) || entered < 0) {
+              const err = new Error('Received quantity must be a non-negative number.');
+              err.statusCode = 400;
+              throw err;
+            }
+            // Strict upper-bound guard: Cannot receive more than shipped
+            if (entered > it.quantity) {
+              const err = new Error(`Received quantity (${entered}) cannot exceed shipped quantity (${it.quantity}) for product line.`);
+              err.statusCode = 400;
+              throw err;
+            }
+            recQty = entered;
+            lineDiscrepancy = userRec.discrepancyNotes || userRec.shortageReason || null;
+            recSerials = Array.isArray(userRec.receivedSerials) ? userRec.receivedSerials : it.serialNumbers;
+          }
+        }
+
+        const shortage = Math.max(0, it.quantity - recQty);
+        totalShortage += shortage;
+
+        it.receivedQuantity = recQty;
+        it.shortageQuantity = shortage;
+        it.discrepancyNotes = lineDiscrepancy;
+        it.receivedSerials = recSerials;
+
+        // Create TRANSFER_IN ledger record atomically for received units
+        if (recQty > 0) {
+          const inLedger = new StockLedger({
+            productId: it.product,
+            warehouseId: trf.toWarehouse,
+            transferId: trf._id,
+            type: 'TRANSFER_IN',
+            quantity: recQty,
+            serialNumbers: recSerials || [],
+            createdBy: req.user._id,
+            role: req.user.role,
+            notes: `Transfer in: ${trf.transferNumber}${shortage > 0 ? ` (Shortage: ${shortage})` : ''}`,
+            tenantId: trf.tenantId
+          });
+          await inLedger.save(session ? { session } : {});
+        }
       }
-    }
 
-    transfer.status = 'RECEIVED';
-    transfer.receivedBy = req.user._id;
-    transfer.receivedAt = new Date();
-    await transfer.save();
+      trf.status = 'RECEIVED';
+      trf.receivedBy = req.user._id;
+      trf.receivedAt = new Date();
+      if (receiptNotes) trf.receiptNotes = String(receiptNotes).trim();
+      await trf.save(session ? { session } : {});
+      return trf;
+    });
 
     notifyRoles(['ADMIN', 'MANAGER'], {
       type: 'order_completed',
@@ -376,8 +455,11 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
 
     res.json({ message: 'Stock successfully received at destination warehouse', transfer });
   } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
     console.error('Error receiving transfer:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: error.message || 'Server error' });
   }
 });
 

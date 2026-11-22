@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Portal } from "@/components/ui/portal";
+import { StockTransferReceiveModal } from "@/components/stock-transfer-receive-modal";
 
 interface WarehouseRef {
   _id: string;
@@ -23,6 +24,8 @@ interface TransferItem {
   quantity: number;
   serialNumbers?: string[];
   receivedQuantity?: number;
+  shortageQuantity?: number;
+  discrepancyNotes?: string;
 }
 
 interface StockTransfer {
@@ -36,6 +39,7 @@ interface StockTransfer {
   transporterId?: { _id: string; name: string; code: string; trackingUrlPattern?: string };
   trackingNumber?: string;
   estimatedArrival?: string;
+  receiptNotes?: string;
   notes?: string;
   createdAt: string;
 }
@@ -60,6 +64,7 @@ export default function StockTransfersPage() {
   const queryClient = useQueryClient();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedTransferForShip, setSelectedTransferForShip] = useState<StockTransfer | null>(null);
+  const [selectedTransferForReceive, setSelectedTransferForReceive] = useState<StockTransfer | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("");
 
   const { data, isLoading, error } = useQuery<{ transfers: StockTransfer[]; total: number }>({
@@ -84,8 +89,15 @@ export default function StockTransfersPage() {
   });
 
   const receiveMutation = useMutation({
-    mutationFn: (id: string) => apiFetch(`/stock-transfers/${id}/receive`, { method: "PUT", body: JSON.stringify({}) }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["stock-transfers"] }),
+    mutationFn: ({ id, payload }: { id: string; payload?: any }) =>
+      apiFetch(`/stock-transfers/${id}/receive`, {
+        method: "PUT",
+        body: JSON.stringify(payload || {}),
+      }),
+    onSuccess: () => {
+      setSelectedTransferForReceive(null);
+      queryClient.invalidateQueries({ queryKey: ["stock-transfers"] });
+    },
   });
 
   const cancelMutation = useMutation({
@@ -233,11 +245,10 @@ export default function StockTransfersPage() {
                         {trf.status === "IN_TRANSIT" ? (
                           <button
                             type="button"
-                            onClick={() => receiveMutation.mutate(trf._id)}
-                            disabled={receiveMutation.isPending}
-                            className="rounded-xl bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/30 transition"
+                            onClick={() => setSelectedTransferForReceive(trf)}
+                            className="rounded-xl bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/30 transition flex items-center gap-1"
                           >
-                            Confirm Receipt
+                            <span>📥</span> Confirm Receipt
                           </button>
                         ) : null}
 
@@ -285,6 +296,21 @@ export default function StockTransfersPage() {
           onClose={() => setSelectedTransferForShip(null)}
           onConfirm={(dispatchData) =>
             shipMutation.mutate({ id: selectedTransferForShip._id, data: dispatchData })
+          }
+        />
+      ) : null}
+
+      {/* Verified Receive & Shortage Modal */}
+      {selectedTransferForReceive ? (
+        <StockTransferReceiveModal
+          transfer={selectedTransferForReceive as any}
+          isLoading={receiveMutation.isPending}
+          onClose={() => setSelectedTransferForReceive(null)}
+          onConfirm={(payload) =>
+            receiveMutation.mutate({
+              id: selectedTransferForReceive._id,
+              payload,
+            })
           }
         />
       ) : null}
