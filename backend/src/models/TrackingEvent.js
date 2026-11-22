@@ -21,7 +21,7 @@ const schema = new mongoose.Schema({
   carrierType: {
     type: String,
     required: true,
-    enum: ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART', 'DMRC', 'IN_HOUSE', 'OTHER']
+    enum: ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART', 'BIGSHIP', 'SHIPROCKET', 'DMRC', 'IN_HOUSE', 'OTHER']
   },
   awb: {
     type: String,
@@ -29,7 +29,7 @@ const schema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'],
+    enum: ['DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'NDR', 'RTO_INITIATED', 'RTO_DELIVERED', 'RETURNED', 'CANCELLED'],
     required: true
   },
   location: {

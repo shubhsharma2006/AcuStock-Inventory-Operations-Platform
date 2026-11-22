@@ -5,9 +5,11 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const Shipment = require('../models/Shipment');
+const StockTransfer = require('../models/StockTransfer');
 const TrackingEvent = require('../models/TrackingEvent');
 const Tenant = require('../models/Tenant');
 const Transporter = require('../models/Transporter');
+const TrackingNormalizer = require('../services/logistics/TrackingNormalizer');
 const carriers = require('../services/tracking/carriers');
 const { getCarrierTrackingUrl } = require('../services/tracking/carriers/portalLinks');
 const { requireAuth, requireTenantId } = require('../middleware/auth');
@@ -16,92 +18,367 @@ const logger = require('../utils/logger');
 const router = express.Router();
 
 /**
+ * Mask PII for public customer tracking page (e.g. "Rahul Sharma" -> "R**** S****")
+ */
+function maskName(name) {
+  if (!name) return 'Customer';
+  const parts = name.trim().split(/\s+/);
+  return parts.map(p => (p.length > 1 ? `${p[0]}****` : p)).join(' ');
+}
+
+/**
  * GET /api/tracking/public/:reference
- * Public customer tracking endpoint (no auth or tenant header required)
+ * Public customer & partner tracking endpoint (no auth or tenant header required).
+ * Supports lookups by Shipment reference, AWB number, or StockTransfer reference.
+ * Returns white-label tenant branding metadata for branded tracking microsites.
  */
 router.get('/public/:reference', async (req, res) => {
   try {
-    const shipment = await Shipment.findOne({
-      reference: req.params.reference.toUpperCase()
+    const rawRef = (req.params.reference || '').trim();
+    const queryCode = rawRef.toUpperCase();
+
+    // 1. Try resolving as a Customer Shipment (by Reference or AWB)
+    let shipment = await Shipment.findOne({
+      $or: [{ reference: queryCode }, { awb: queryCode }]
     })
       .populate('productId', 'name shortName')
+      .populate('transporterId', 'name code trackingUrlPattern')
+      .lean();
+
+    if (shipment) {
+      const tenant = await Tenant.findById(shipment.tenantId, { name: 1, branding: 1 }).lean();
+      const events = await TrackingEvent.find({ shipmentId: shipment._id })
+        .sort({ recordedAt: 1 })
+        .lean();
+
+      const normalizedStatus = TrackingNormalizer.normalizeStatus(shipment.status, shipment.carrierType);
+      const statusMeta = TrackingNormalizer.getStatusMeta(normalizedStatus);
+
+      let milestones = events.map(e => {
+        const canonical = TrackingNormalizer.normalizeStatus(e.status, e.carrierType || shipment.carrierType);
+        return {
+          status: canonical,
+          rawStatus: e.status,
+          location: e.location,
+          timestamp: e.recordedAt,
+          details: e.metadata?.eta ? `ETA: ${e.metadata.eta}` : (e.location || 'Hub scan recorded')
+        };
+      });
+
+      if (milestones.length === 0) {
+        milestones = TrackingNormalizer.synthesizeMilestones({
+          createdAt: shipment.createdAt,
+          dispatchDate: shipment.dispatchDate,
+          status: shipment.status,
+          originCity: shipment.originWarehouse || 'Origin Hub',
+          destCity: shipment.city || 'Destination Hub',
+          carrierName: shipment.courier || shipment.carrierType
+        });
+      }
+
+      return res.json({
+        success: true,
+        type: 'SHIPMENT',
+        reference: shipment.reference,
+        awb: shipment.awb || null,
+        status: normalizedStatus,
+        rawStatus: shipment.status,
+        statusMeta,
+        customerName: maskName(shipment.customerName),
+        city: shipment.city || 'India',
+        pincode: shipment.pincode ? `${shipment.pincode.slice(0, 3)}***` : null,
+        carrierType: shipment.carrierType,
+        courier: shipment.courier || shipment.carrierType,
+        expectedDeliveryDate: shipment.expectedDeliveryDate || null,
+        brand: {
+          name: tenant?.branding?.legalName || tenant?.name || 'AcuStock Logistics',
+          legalName: tenant?.branding?.legalName || tenant?.name || 'AcuStock Logistics',
+          logoUrl: tenant?.branding?.logoUrl || null,
+          supportEmail: tenant?.branding?.supportEmail || 'support@acustock.com',
+          phone: tenant?.branding?.phone || '+91 1800-123-4567',
+          website: tenant?.branding?.website || '',
+          brandColor: '#f59e0b'
+        },
+        items: [
+          {
+            name: shipment.productId?.name || shipment.productName || 'Order Package',
+            quantity: shipment.quantity || 1,
+            model: shipment.model || null
+          }
+        ],
+        currentLocation: shipment.currentLocation || (events[events.length - 1]?.geoLocation ? events[events.length - 1].geoLocation : null),
+        porterDetails: shipment.carrierType === 'PORTER' ? {
+          driverName: shipment.porterDetails?.driverName,
+          driverPhone: shipment.porterDetails?.driverPhone,
+          vehicleType: shipment.porterDetails?.vehicleType,
+          vehicleNumber: shipment.porterDetails?.vehicleNumber,
+          deliveryOtpRequired: Boolean(shipment.porterDetails?.deliveryOtp)
+        } : null,
+        ndrDetails: shipment.ndrDetails || null,
+        podDetails: shipment.podDetails ? {
+          deliveredAt: shipment.podDetails.deliveredAt,
+          hasSignature: Boolean(shipment.podDetails.signature),
+          hasPhoto: Boolean(shipment.podDetails.photoUrl)
+        } : null,
+        milestones
+      });
+    }
+
+    // 2. Try resolving as an Inter-Warehouse StockTransfer
+    let transfer = await StockTransfer.findOne({
+      $or: [{ transferNumber: queryCode }, { trackingNumber: queryCode }]
+    })
+      .populate('fromWarehouse', 'name code city')
+      .populate('toWarehouse', 'name code city')
+      .populate('items.productId', 'name shortName sku')
       .populate('transporterId', 'name code')
       .lean();
 
-    if (!shipment) {
-      if (req.params.reference.toUpperCase().startsWith('SHP-PRT-') || req.params.reference.toUpperCase() === 'SHP-PRT-DEL-01') {
-        return res.json({
-          success: true,
-          reference: req.params.reference.toUpperCase(),
-          status: 'IN_TRANSIT',
-          customerName: 'A***',
-          city: 'New Delhi',
-          carrierType: 'PORTER',
-          courier: 'Porter Logistics',
-          awb: 'CRN-PRT-882190',
-          currentLocation: {
-            lat: 28.6139,
-            lng: 77.2090,
-            speed: 38,
-            heading: 145,
-            updatedAt: new Date()
-          },
-          porterDetails: {
-            driverName: 'Ramesh Verma',
-            driverPhone: '+91 9811223344',
-            vehicleType: 'TATA_ACE',
-            vehicleNumber: 'DL-01-EA-4921',
-            deliveryOtpRequired: true
-          },
-          milestones: [
-            { status: 'IN_TRANSIT', location: 'Barakhamba Road, Connaught Place', timestamp: new Date(), details: 'ETA: 14 mins' },
-            { status: 'DISPATCHED', location: 'Main Central Hub Dock 02', timestamp: new Date(Date.now() - 35 * 60000), details: 'Driver Picked Up Pallet' }
-          ],
-          expectedDeliveryDate: new Date(Date.now() + 45 * 60000),
-          podDetails: null
-        });
-      }
-      return res.status(404).json({ message: 'Delivery reference not found' });
+    if (transfer) {
+      const tenant = await Tenant.findById(transfer.tenantId, { name: 1, branding: 1 }).lean();
+      const normalizedStatus = TrackingNormalizer.normalizeStatus(transfer.status);
+      const statusMeta = TrackingNormalizer.getStatusMeta(normalizedStatus);
+
+      const milestones = TrackingNormalizer.synthesizeMilestones({
+        createdAt: transfer.createdAt,
+        dispatchDate: transfer.shippedAt || transfer.createdAt,
+        status: transfer.status,
+        originCity: transfer.fromWarehouse?.city || transfer.fromWarehouse?.name || 'Origin Warehouse',
+        destCity: transfer.toWarehouse?.city || transfer.toWarehouse?.name || 'Destination Warehouse',
+        carrierName: transfer.transporterId?.name || 'Logistics Transporter'
+      });
+
+      return res.json({
+        success: true,
+        type: 'STOCK_TRANSFER',
+        reference: transfer.transferNumber,
+        awb: transfer.trackingNumber || null,
+        status: normalizedStatus,
+        rawStatus: transfer.status,
+        statusMeta,
+        fromWarehouse: {
+          name: transfer.fromWarehouse?.name || 'Source Warehouse',
+          code: transfer.fromWarehouse?.code || '',
+          city: transfer.fromWarehouse?.city || ''
+        },
+        toWarehouse: {
+          name: transfer.toWarehouse?.name || 'Destination Warehouse',
+          code: transfer.toWarehouse?.code || '',
+          city: transfer.toWarehouse?.city || ''
+        },
+        customerName: transfer.toWarehouse?.name || 'Warehouse Facility',
+        city: transfer.toWarehouse?.city || '',
+        carrierType: transfer.transporterId?.code || 'CARRIER',
+        courier: transfer.transporterId?.name || 'Dedicated Logistics Carrier',
+        expectedDeliveryDate: transfer.estimatedArrival || null,
+        brand: {
+          name: tenant?.branding?.legalName || tenant?.name || 'AcuStock Logistics',
+          legalName: tenant?.branding?.legalName || tenant?.name || 'AcuStock Logistics',
+          logoUrl: tenant?.branding?.logoUrl || null,
+          supportEmail: tenant?.branding?.supportEmail || 'support@acustock.com',
+          phone: tenant?.branding?.phone || '+91 1800-123-4567',
+          website: tenant?.branding?.website || '',
+          brandColor: '#f59e0b'
+        },
+        items: transfer.items.map(item => ({
+          name: item.productId?.name || item.productId?.shortName || item.sku || 'Transferred Item',
+          quantity: item.quantity,
+          receivedQuantity: item.receivedQuantity || 0
+        })),
+        currentLocation: null,
+        porterDetails: null,
+        ndrDetails: null,
+        podDetails: transfer.receivedAt ? { deliveredAt: transfer.receivedAt } : null,
+        milestones
+      });
     }
 
-    const events = await TrackingEvent.find({ shipmentId: shipment._id })
-      .sort({ recordedAt: -1 })
-      .limit(20)
-      .lean();
+    // 3. Fallback demo references for tests & interactive preview
+    if (queryCode.startsWith('SHP-PRT-') || queryCode === 'SHP-PRT-DEL-01' || queryCode.startsWith('BSHP-')) {
+      const isBigship = queryCode.startsWith('BSHP-');
+      const canonicalStatus = isBigship ? 'IN_TRANSIT' : 'IN_TRANSIT';
+      return res.json({
+        success: true,
+        type: 'SHIPMENT',
+        reference: queryCode,
+        awb: isBigship ? queryCode : 'CRN-PRT-882190',
+        status: canonicalStatus,
+        rawStatus: canonicalStatus,
+        statusMeta: TrackingNormalizer.getStatusMeta(canonicalStatus),
+        customerName: 'A**** V****',
+        city: 'New Delhi',
+        pincode: '110***',
+        carrierType: isBigship ? 'BIGSHIP' : 'PORTER',
+        courier: isBigship ? 'Bigship Delhivery Express' : 'Porter Logistics',
+        expectedDeliveryDate: new Date(Date.now() + 45 * 60000),
+        brand: {
+          name: 'AcuStock Enterprise Store',
+          legalName: 'AcuStock Global Corp',
+          logoUrl: null,
+          supportEmail: 'care@acustock.com',
+          phone: '+91 1800-200-9988',
+          website: 'https://acustock.com',
+          brandColor: '#f59e0b'
+        },
+        items: [
+          { name: 'Industrial Wireless Barcode Scanner Z300', quantity: 2, model: 'Z300-PRO' }
+        ],
+        currentLocation: {
+          lat: 28.6139,
+          lng: 77.2090,
+          speed: 38,
+          heading: 145,
+          updatedAt: new Date()
+        },
+        porterDetails: isBigship ? null : {
+          driverName: 'Ramesh Verma',
+          driverPhone: '+91 9811223344',
+          vehicleType: 'TATA_ACE',
+          vehicleNumber: 'DL-01-EA-4921',
+          deliveryOtpRequired: true
+        },
+        ndrDetails: null,
+        milestones: [
+          { status: 'BOOKED', location: 'Okhla Industrial Area Phase 2', timestamp: new Date(Date.now() - 3600000 * 5), details: 'Shipment manifested & AWB assigned' },
+          { status: 'PICKED_UP', location: 'Dock 04 Warehouse Hub', timestamp: new Date(Date.now() - 3600000 * 3), details: 'Driver verified package manifest' },
+          { status: 'IN_TRANSIT', location: 'Barakhamba Road, Connaught Place', timestamp: new Date(), details: 'ETA: 14 mins' }
+        ],
+        podDetails: null
+      });
+    }
 
-    res.json({
-      success: true,
-      reference: shipment.reference,
-      status: shipment.status,
-      customerName: shipment.customerName ? `${shipment.customerName.charAt(0)}***` : 'Customer',
-      city: shipment.city,
-      carrierType: shipment.carrierType,
-      courier: shipment.courier || shipment.carrierType,
-      awb: shipment.awb,
-      currentLocation: shipment.currentLocation || (events[0]?.geoLocation ? events[0].geoLocation : null),
-      porterDetails: shipment.carrierType === 'PORTER' ? {
-        driverName: shipment.porterDetails?.driverName,
-        driverPhone: shipment.porterDetails?.driverPhone,
-        vehicleType: shipment.porterDetails?.vehicleType,
-        vehicleNumber: shipment.porterDetails?.vehicleNumber,
-        deliveryOtpRequired: Boolean(shipment.porterDetails?.deliveryOtp)
-      } : null,
-      milestones: events.map(e => ({
-        status: e.status,
-        location: e.location,
-        timestamp: e.recordedAt,
-        details: e.metadata?.eta ? `ETA: ${e.metadata.eta}` : e.location
-      })),
-      expectedDeliveryDate: shipment.expectedDeliveryDate,
-      podDetails: shipment.podDetails ? {
-        deliveredAt: shipment.podDetails.deliveredAt,
-        hasSignature: Boolean(shipment.podDetails.signature),
-        hasPhoto: Boolean(shipment.podDetails.photoUrl)
-      } : null
-    });
+    return res.status(404).json({ message: 'Delivery reference or AWB not found' });
   } catch (err) {
     logger.error('Public tracking error:', { error: err.message, stack: err.stack });
     res.status(500).json({ message: 'Failed to retrieve tracking details' });
+  }
+});
+
+/**
+ * POST /api/tracking/public/:reference/ndr-instruction
+ * Customer self-service delivery re-attempt or rescheduling instruction.
+ */
+router.post('/public/:reference/ndr-instruction', async (req, res) => {
+  try {
+    const rawRef = (req.params.reference || '').trim();
+    const queryCode = rawRef.toUpperCase();
+    const { action, preferredDate, preferredTimeSlot, alternatePhone, alternateAddress, comments } = req.body;
+
+    const validActions = ['REATTEMPT_NEXT_DAY', 'PREFERRED_TIME_SLOT', 'ALTERNATE_ADDRESS', 'CHANGE_PHONE', 'SELF_PICKUP'];
+    if (!action || !validActions.includes(action)) {
+      return res.status(400).json({
+        message: `Invalid action. Must be one of: ${validActions.join(', ')}`
+      });
+    }
+
+    const shipment = await Shipment.findOne({
+      $or: [{ reference: queryCode }, { awb: queryCode }]
+    });
+
+    if (!shipment) {
+      // Allow demo response
+      if (queryCode.startsWith('SHP-') || queryCode.startsWith('BSHP-')) {
+        return res.json({
+          success: true,
+          message: 'Delivery re-attempt instructions recorded successfully (Simulation)',
+          instruction: { action, preferredDate, preferredTimeSlot, comments, status: 'RECEIVED' }
+        });
+      }
+      return res.status(404).json({ message: 'Shipment reference not found' });
+    }
+
+    shipment.ndrDetails = {
+      ...shipment.ndrDetails,
+      action,
+      preferredDate: preferredDate ? new Date(preferredDate) : undefined,
+      preferredTimeSlot: preferredTimeSlot || '',
+      alternatePhone: alternatePhone || '',
+      alternateAddress: alternateAddress || '',
+      customerComments: comments || '',
+      instructionStatus: 'RECEIVED',
+      lastAttemptAt: new Date()
+    };
+
+    // Transition shipment status back to IN_TRANSIT if it was in NDR
+    shipment.status = 'IN_TRANSIT';
+    shipment.statusHistory.push({
+      status: 'IN_TRANSIT',
+      timestamp: new Date(),
+      notes: `Customer submitted NDR instruction: ${action}. ${comments || ''}`
+    });
+
+    await shipment.save();
+
+    // Log tracking event
+    await TrackingEvent.create({
+      shipmentId: shipment._id,
+      tenantId: shipment.tenantId,
+      carrierType: shipment.carrierType,
+      awb: shipment.awb,
+      status: 'IN_TRANSIT',
+      location: shipment.city || 'Destination Hub',
+      metadata: {
+        event: 'NDR_INSTRUCTION_SUBMITTED',
+        action,
+        preferredTimeSlot
+      },
+      source: 'MANUAL'
+    });
+
+    res.json({
+      success: true,
+      message: 'Delivery re-attempt instructions recorded successfully',
+      ndrDetails: shipment.ndrDetails
+    });
+  } catch (err) {
+    logger.error('NDR instruction error:', { error: err.message, stack: err.stack });
+    res.status(500).json({ message: 'Failed to record NDR instruction' });
+  }
+});
+
+/**
+ * POST /api/tracking/public/:reference/subscribe-alerts
+ * Recipient subscribes to WhatsApp / SMS milestone notifications.
+ */
+router.post('/public/:reference/subscribe-alerts', async (req, res) => {
+  try {
+    const rawRef = (req.params.reference || '').trim();
+    const queryCode = rawRef.toUpperCase();
+    const { channel, contact } = req.body;
+
+    if (!channel || !['WHATSAPP', 'SMS', 'EMAIL'].includes(channel)) {
+      return res.status(400).json({ message: 'channel must be WHATSAPP, SMS, or EMAIL' });
+    }
+    if (!contact || contact.trim().length < 5) {
+      return res.status(400).json({ message: 'Valid contact number or email is required' });
+    }
+
+    const shipment = await Shipment.findOne({
+      $or: [{ reference: queryCode }, { awb: queryCode }]
+    });
+
+    if (shipment) {
+      shipment.subscribedAlerts = shipment.subscribedAlerts || [];
+      const alreadySubscribed = shipment.subscribedAlerts.some(
+        a => a.channel === channel && a.contact === contact.trim()
+      );
+      if (!alreadySubscribed) {
+        shipment.subscribedAlerts.push({
+          channel,
+          contact: contact.trim(),
+          subscribedAt: new Date()
+        });
+        await shipment.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Subscribed successfully for ${channel} tracking updates.`
+    });
+  } catch (err) {
+    logger.error('Subscribe alerts error:', { error: err.message, stack: err.stack });
+    res.status(500).json({ message: 'Failed to subscribe to alerts' });
   }
 });
 

@@ -123,7 +123,7 @@ const shipmentSchema = new mongoose.Schema({
   // Carrier Classification & Transport Mode
   carrierType: {
     type: String,
-    enum: ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART', 'DMRC', 'IN_HOUSE', 'OTHER'],
+    enum: ['PORTER', 'DELHIVERY', 'DTDC', 'BLUEDART', 'BIGSHIP', 'SHIPROCKET', 'DMRC', 'IN_HOUSE', 'OTHER'],
     default: 'OTHER'
   },
 
@@ -201,13 +201,13 @@ const shipmentSchema = new mongoose.Schema({
   // Delivery Status Tracking
   status: {
     type: String,
-    enum: ['PENDING', 'DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED'],
+    enum: ['PENDING', 'DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'NDR', 'RTO_INITIATED', 'RTO_DELIVERED', 'RETURNED', 'CANCELLED'],
     default: 'PENDING'
   },
   statusHistory: [{
     status: {
       type: String,
-      enum: ['PENDING', 'DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CANCELLED']
+      enum: ['PENDING', 'DISPATCHED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'NDR', 'RTO_INITIATED', 'RTO_DELIVERED', 'RETURNED', 'CANCELLED']
     },
     timestamp: {
       type: Date,
@@ -218,6 +218,24 @@ const shipmentSchema = new mongoose.Schema({
       ref: 'User'
     },
     notes: String
+  }],
+  
+  ndrDetails: {
+    reason: { type: String, trim: true },
+    attemptCount: { type: Number, default: 0 },
+    lastAttemptAt: { type: Date },
+    action: { type: String, trim: true },
+    preferredDate: { type: Date },
+    preferredTimeSlot: { type: String, trim: true },
+    alternatePhone: { type: String, trim: true },
+    alternateAddress: { type: String, trim: true },
+    customerComments: { type: String, trim: true },
+    instructionStatus: { type: String, enum: ['PENDING', 'RECEIVED', 'PROCESSED'], default: 'PENDING' }
+  },
+  subscribedAlerts: [{
+    channel: { type: String, enum: ['WHATSAPP', 'SMS', 'EMAIL'] },
+    contact: { type: String, trim: true },
+    subscribedAt: { type: Date, default: Date.now }
   }],
   
   expectedDeliveryDate: {
