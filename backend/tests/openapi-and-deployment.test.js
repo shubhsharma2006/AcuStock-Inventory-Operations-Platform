@@ -32,6 +32,32 @@ describe('OpenAPI 3.0 & Production Deployment Suite', () => {
     assert.ok(spec.paths['/crm/companies/{id}/customer-360'], 'Must document Customer 360 credit profile');
     assert.ok(spec.paths['/reports/tally-xml'], 'Must document Tally Prime XML export bridge');
     assert.ok(spec.components.securitySchemes.BearerAuth, 'Must include JWT Bearer security');
+
+    // Verify comprehensive enterprise route coverage
+    let opCount = 0;
+    for (const p in spec.paths) {
+      for (const m in spec.paths[p]) {
+        if (['get', 'post', 'put', 'patch', 'delete'].includes(m.toLowerCase())) {
+          opCount++;
+          const op = spec.paths[p][m];
+          // Check that every URL path parameter has a parameter declaration
+          const pathParams = p.match(/\{([a-zA-Z0-9_]+)\}/g) || [];
+          if (pathParams.length > 0) {
+            const declaredParamNames = (op.parameters || []).map(param => param.name);
+            pathParams.forEach(paramStr => {
+              const name = paramStr.replace(/[{}]/g, '');
+              assert.ok(
+                declaredParamNames.includes(name),
+                `Operation ${m.toUpperCase()} ${p} missing declaration for path parameter "${name}"`
+              );
+            });
+          }
+        }
+      }
+    }
+
+    assert.ok(opCount >= 450, `Spec must document all route operations (found ${opCount}, expected >= 450)`);
+    assert.ok(Object.keys(spec.paths).length >= 350, `Spec must document >= 350 paths (found ${Object.keys(spec.paths).length})`);
   });
 
   test('2. should contain valid OpenAPI 3.0 YAML spec that parses cleanly', () => {

@@ -668,6 +668,224 @@ const spec = {
   }
 };
 
+// ============================================================
+// AUTOMATED 463-ROUTE COVERAGE EXPANSION ENGINE
+// ============================================================
+const TAG_MODULE_MAP = {
+  'auth.js': 'Authentication & Identity',
+  'google-auth.js': 'Authentication & Identity',
+  'two-factor.js': 'Authentication & Identity',
+  'register-tenant.js': 'Authentication & Identity',
+  'invites.js': 'Authentication & Identity',
+  'users.js': 'Identity & User Governance',
+  'managers.js': 'Identity & User Governance',
+  'superadmin.js': 'Identity & User Governance',
+  'governance.js': 'Identity & User Governance',
+  'audit.js': 'Audit & Compliance',
+  'audit-logs.js': 'Audit & Compliance',
+  'business-audit.js': 'Audit & Compliance',
+  'companies.js': 'Companies & Tenants',
+  'branches.js': 'Companies & Tenants',
+  'setup.js': 'Companies & Tenants',
+  'items.js': 'Catalog & Master Data',
+  'categories.js': 'Catalog & Master Data',
+  'units.js': 'Catalog & Master Data',
+  'warehouses.js': 'Catalog & Master Data',
+  'warehouse-locations.js': 'Catalog & Master Data',
+  'stock.js': 'Stock Movements & WMS',
+  'stock-transfers.js': 'Stock Movements & Transfers',
+  'stock-ledger.js': 'Stock Movements & WMS',
+  'stock-adjustments.js': 'Stock Movements & WMS',
+  'inventory-adjustments.js': 'Stock Movements & WMS',
+  'warehouse-twin.js': 'Warehouse Digital Twin & CAD',
+  'batches.js': 'Batches, Lots & Traceability',
+  'serials.js': 'Batches, Lots & Traceability',
+  'kits.js': 'Manufacturing & Assemblies',
+  'mrp.js': 'Manufacturing & Assemblies',
+  'crm.js': 'CRM & Quotation Engine',
+  'deals.js': 'CRM & Quotation Engine',
+  'quotations.js': 'CRM & Quotation Engine',
+  'customer-portal.js': 'B2B Customer Portals',
+  'vendor-bills.js': 'Procurement & Accounts Payable',
+  'purchase-orders.js': 'Procurement & Suppliers',
+  'suppliers.js': 'Procurement & Suppliers',
+  'sales-orders.js': 'Sales Orders & Fulfillment',
+  'shipments.js': 'Logistics & Shipping',
+  'logistics.js': 'Logistics & Shipping',
+  'tracking.js': 'Logistics & Fleet Dispatch',
+  'fleet-tracking.js': 'Logistics & Fleet Dispatch',
+  'billing.js': 'SaaS Billing & Subscriptions',
+  'developer.js': 'Developer API & Webhooks',
+  'webhooks.js': 'Developer API & Webhooks',
+  'api-keys.js': 'Developer API & Webhooks',
+  'tally.js': 'Tally Prime & Reports',
+  'reports.js': 'Reports & Analytics',
+  'reports-scheduled.js': 'Reports & Analytics',
+  'notifications.js': 'Notifications & Alerts',
+  'settings.js': 'Platform Configuration',
+  'backup.js': 'System Operations & Maintenance',
+  'export.js': 'Compliance & GDPR/DPDP',
+  'rma.js': 'Returns & Credit Notes',
+  'warranty.js': 'Warranty & RMA'
+};
+
+function humanizeSummary(method, subPath, file) {
+  const cleanPath = subPath.replace(/^\/+/, '').replace(/\/+$/, '');
+  const segments = cleanPath.split('/').filter(Boolean);
+  
+  if (segments.length === 0) {
+    const base = file.replace('.js', '').replace(/-/g, ' ');
+    return method.toUpperCase() === 'GET' ? `List all ${base}` : `Create ${base}`;
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  const action = lastSegment.replace(/\{[^}]+\}/g, 'by ID').replace(/-/g, ' ');
+  const m = method.toUpperCase();
+
+  if (m === 'GET') return `Retrieve ${action}`;
+  if (m === 'POST') return `Process ${action}`;
+  if (m === 'PUT') return `Update ${action}`;
+  if (m === 'PATCH') return `Modify ${action}`;
+  if (m === 'DELETE') return `Remove ${action}`;
+  return `${m} ${action}`;
+}
+
+// 1. Scan backend/index.js for mounted route files
+const indexContent = fs.readFileSync(path.join(__dirname, '../backend/index.js'), 'utf8');
+const importRegex = /const\s+([a-zA-Z0-9_]+)\s*=\s*require\(\s*['\"]\.\/src\/routes\/([^'\"]+)['\"]\s*\)/g;
+const fileVarMap = {};
+let matchImport;
+while ((matchImport = importRegex.exec(indexContent)) !== null) {
+  fileVarMap[matchImport[1]] = matchImport[2].endsWith('.js') ? matchImport[2] : matchImport[2] + '.js';
+}
+
+const mountRegex = /app\.use\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*([a-zA-Z0-9_]+)\s*\)/g;
+const varMountMap = {};
+let matchMount;
+while ((matchMount = mountRegex.exec(indexContent)) !== null) {
+  const mount = matchMount[1];
+  const varName = matchMount[2];
+  if (fileVarMap[varName]) {
+    if (!varMountMap[fileVarMap[varName]]) varMountMap[fileVarMap[varName]] = [];
+    varMountMap[fileVarMap[varName]].push(mount);
+  }
+}
+
+// 2. Discover all routes in each file
+const routesDir = path.join(__dirname, '../backend/src/routes');
+const methodRegex = /router\.(get|post|put|patch|delete)\s*\(\s*['\"]([^'\"]+)['\"]/gi;
+
+let totalOperationsCount = 0;
+const registeredTags = new Set(spec.tags.map(t => t.name));
+
+for (const [file, mounts] of Object.entries(varMountMap)) {
+  const filePath = path.join(routesDir, file);
+  if (!fs.existsSync(filePath)) continue;
+  const content = fs.readFileSync(filePath, 'utf8');
+  let m;
+
+  while ((m = methodRegex.exec(content)) !== null) {
+    const method = m[1].toLowerCase();
+    const subPath = m[2];
+
+    for (const mount of mounts) {
+      let fullPath = (mount.replace(/\/+$/, '') + '/' + subPath.replace(/^\/+/, '')).replace(/\/+$/, '');
+      if (!fullPath) fullPath = '/';
+      let apiRelativePath = fullPath.startsWith('/api') ? fullPath.slice(4) : fullPath;
+      if (!apiRelativePath.startsWith('/')) apiRelativePath = '/' + apiRelativePath;
+
+      const openApiPath = apiRelativePath.replace(/:([a-zA-Z0-9_]+)/g, '{$1}');
+
+      // Extract path parameter names
+      const pathParams = [];
+      const paramMatches = openApiPath.match(/\{([a-zA-Z0-9_]+)\}/g);
+      if (paramMatches) {
+        paramMatches.forEach(p => {
+          const name = p.replace(/[{}]/g, '');
+          pathParams.push({
+            name,
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+            description: `Unique ${name} identifier`
+          });
+        });
+      }
+
+      if (!spec.paths[openApiPath]) {
+        spec.paths[openApiPath] = {};
+      }
+
+      // If already curated with rich schemas, keep existing; otherwise generate complete definition
+      if (!spec.paths[openApiPath][method]) {
+        const tag = TAG_MODULE_MAP[file] || `${file.replace('.js', '').split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ')} Operations`;
+        if (!registeredTags.has(tag)) {
+          spec.tags.push({ name: tag, description: `Endpoints managed by ${file}` });
+          registeredTags.add(tag);
+        }
+
+        const operationObj = {
+          tags: [tag],
+          summary: humanizeSummary(method, subPath, file),
+          description: `Handles ${method.toUpperCase()} request on ${openApiPath} (${file}).`,
+          responses: {
+            "200": {
+              description: "Successful operation",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/StandardResponse" }
+                }
+              }
+            },
+            "400": {
+              description: "Validation error or invalid request payload",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/ErrorResponse" }
+                }
+              }
+            },
+            "401": { description: "Unauthorized - Bearer token required or invalid" },
+            "403": { description: "Forbidden - Insufficient role permissions" },
+            "404": { description: "Resource not found" },
+            "500": { description: "Internal server error" }
+          }
+        };
+
+        if (pathParams.length > 0) {
+          operationObj.parameters = pathParams;
+        }
+
+        // Add security for protected endpoints
+        if (!openApiPath.includes('/public/') && !openApiPath.startsWith('/auth/login') && !openApiPath.startsWith('/auth/register') && !openApiPath.includes('/webhooks/')) {
+          operationObj.security = [{ BearerAuth: [] }, { TenantHeader: [] }];
+        }
+
+        if (['post', 'put', 'patch'].includes(method)) {
+          operationObj.requestBody = {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  additionalProperties: true
+                }
+              }
+            }
+          };
+        }
+
+        spec.paths[openApiPath][method] = operationObj;
+      }
+
+      totalOperationsCount++;
+    }
+  }
+}
+
+console.log(`📊 Total Discovered Route Endpoints: ${totalOperationsCount}`);
+console.log(`📘 Total Unique Path URIs: ${Object.keys(spec.paths).length}`);
+
 // 1. Write docs/openapi.json
 const rootDocsDir = path.join(__dirname, '../docs');
 if (!fs.existsSync(rootDocsDir)) fs.mkdirSync(rootDocsDir, { recursive: true });
