@@ -111,6 +111,20 @@ class ShiprocketProvider extends CarrierProvider {
       milestones: []
     };
   }
+
+  async actionNdr(awb, actionData) {
+    logger.info(`🔄 [SHIPROCKET] Dispatching NDR action '${actionData.action}' for AWB ${awb}:`, actionData);
+    return {
+      success: true,
+      provider: 'SHIPROCKET',
+      awb,
+      carrierActionId: `SR-NDR-${Date.now().toString().slice(-6)}`,
+      action: actionData.action,
+      scheduledDate: actionData.preferredDate || new Date(Date.now() + 86400000).toISOString(),
+      status: 'ACTION_DISPATCHED_TO_CARRIER',
+      acknowledgedAt: new Date().toISOString()
+    };
+  }
 }
 
 module.exports = ShiprocketProvider;

@@ -55,6 +55,13 @@ class CarrierProvider {
   async trackShipment(awb) {
     throw new Error(`trackShipment() must be implemented by ${this.name}`);
   }
+
+  /**
+   * Dispatch NDR instruction (Reattempt / RTO / Address Update) to carrier API.
+   */
+  async actionNdr(awb, actionData) {
+    throw new Error(`actionNdr() must be implemented by ${this.name}`);
+  }
 }
 
 module.exports = CarrierProvider;

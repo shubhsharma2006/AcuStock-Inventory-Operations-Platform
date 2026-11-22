@@ -144,6 +144,7 @@ function buildNavGroups(
         { label: "Sales Orders", href: `${basePath}/sales-orders`, icon: "so" },
         { label: "Invoices & AR", href: `${basePath}/invoices`, icon: "billing" },
         { label: "Shipments & Logistics", href: `${basePath}/shipments`, icon: "po" },
+        { label: "NDR Control Tower", href: `${basePath}/ndr-management`, icon: "po" },
         { label: "Fleet & Porter Tower", href: `${basePath}/fleet-tracking`, icon: "fleet" },
         { label: "Returns & RMA", href: `${basePath}/rma`, icon: "adjustments" },
       ],
