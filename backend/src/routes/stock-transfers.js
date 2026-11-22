@@ -416,6 +416,59 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
   }
 });
 
+// Resolve one shortage without changing the original receipt.
+router.post('/:id/shortages', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
+  const { lineId, requestId, outcome, quantity, serials = [], reason } = req.body || {};
+  if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(requestId) ||
+      !mongoose.isObjectIdOrHexString(lineId) || !['ARRIVED', 'AT_SOURCE', 'LOST'].includes(outcome) ||
+      !Number.isFinite(quantity) || quantity <= 0 || typeof reason !== 'string' ||
+      !reason.trim() || reason.length > 500 || !Array.isArray(serials) ||
+      serials.some(value => typeof value !== 'string') || new Set(serials).size !== serials.length) {
+    return res.status(400).json({ message: 'Invalid shortage resolution.' });
+  }
+  const reject = (statusCode, message) => { throw Object.assign(new Error(message), { statusCode }); };
+  try {
+    const result = await executeWithTransaction(async session => {
+      const transfer = await StockTransfer.findOne({ _id: req.params.id, tenantId: req.tenantId }).session(session);
+      if (!transfer) reject(404, 'Transfer not found.');
+      if (transfer.status !== 'RECEIVED') reject(409, 'Receive the transfer before resolving shortages.');
+      const warehouseId = outcome === 'AT_SOURCE' ? transfer.fromWarehouse : transfer.toWarehouse;
+      if (req.user.role === 'MANAGER' && req.user.assignedWarehouseId &&
+          String(req.user.assignedWarehouseId) !== String(warehouseId)) reject(403, 'Outside assigned warehouse.');
+      const line = transfer.items.id(lineId);
+      if (!line) reject(404, 'Transfer line not found.');
+      const previous = line.resolutions.find(event => event.requestId === requestId);
+      const selected = [...serials].sort();
+      if (previous) {
+        if (previous.quantity !== quantity || previous.outcome !== outcome || previous.reason !== reason.trim() ||
+            JSON.stringify(previous.serials) !== JSON.stringify(selected)) reject(409, 'Request ID already used for another resolution.');
+        return previous;
+      }
+      const resolved = line.resolutions.reduce((sum, event) => sum + event.quantity, 0);
+      if (quantity > line.shortageQuantity - resolved) reject(409, 'Quantity exceeds outstanding shortage.');
+      const accounted = new Set([...line.receivedSerials, ...line.resolutions.flatMap(event => event.serials)]);
+      if (selected.length !== (line.serialNumbers.length ? quantity : 0) ||
+          selected.some(serial => accounted.has(serial) || !line.serialNumbers.includes(serial))) {
+        reject(400, 'Select the outstanding serials for this resolution.');
+      }
+      let ledgerId;
+      if (outcome !== 'LOST') {
+        const ledger = new StockLedger({ tenantId: req.tenantId, transferId: transfer._id,
+          warehouseId, productId: line.product, type: 'TRANSFER_IN', quantity, serialNumbers: selected,
+          createdBy: req.user._id, role: req.user.role, notes: 'Transfer shortage: ' + outcome });
+        await ledger.save({ session });
+        ledgerId = ledger._id;
+      }
+      line.resolutions.push({ requestId, outcome, quantity, serials: selected, reason: reason.trim(), recordedBy: req.user._id, ledgerId });
+      await transfer.save({ session });
+      return line.resolutions.at(-1);
+    });
+    res.json({ resolution: result });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Could not record shortage resolution.' });
+  }
+});
+
 // PUT /api/stock-transfers/:id/cancel - Cancel transfer (Atomic Transaction)
 router.put('/:id/cancel', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {

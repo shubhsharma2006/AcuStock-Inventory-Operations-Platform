@@ -25,6 +25,8 @@ interface TransferItem {
   serialNumbers?: string[];
   receivedQuantity?: number;
   shortageQuantity?: number;
+  receivedSerials?: string[];
+  resolutions?: { requestId: string; outcome: string; quantity: number; serials: string[]; reason: string }[];
   discrepancyNotes?: string;
 }
 
@@ -59,6 +61,48 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
   RECEIVED: { label: "Received ✅", color: "text-emerald-300", bg: "bg-emerald-500/20 border-emerald-500/30" },
   CANCELLED: { label: "Cancelled", color: "text-rose-300", bg: "bg-rose-500/20 border-rose-500/30" },
 };
+
+function ShortageResolution({ transferId, line }: { transferId: string; line: TransferItem }) {
+  const client = useQueryClient();
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [selected, setSelected] = useState<string[]>([]);
+  const history = line.resolutions ?? [];
+  const remaining = (line.shortageQuantity ?? 0) - history.reduce((sum, event) => sum + event.quantity, 0);
+  const accounted = new Set([...(line.receivedSerials ?? []), ...history.flatMap(event => event.serials)]);
+  const available = (line.serialNumbers ?? []).filter(serial => !accounted.has(serial));
+  const mutation = useMutation({
+    mutationFn: (body: object) => apiFetch('/stock-transfers/' + transferId + '/shortages', {
+      method: 'POST', body: JSON.stringify(body)
+    }),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['stock-transfers'] });
+      setSelected([]);
+      setRequestId(crypto.randomUUID());
+    }
+  });
+  return <details className="rounded-lg border border-amber-500/40 p-2 text-xs">
+    <summary className="cursor-pointer">{line.product?.name} · {remaining} outstanding</summary>
+    {history.map(event => <p key={event.requestId}>{event.outcome} · {event.quantity} · {event.reason}</p>)}
+    {remaining > 0 && <form className="mt-2 grid gap-2" onSubmit={event => {
+      event.preventDefault();
+      const fields = new FormData(event.currentTarget);
+      mutation.mutate({ lineId: line._id, requestId, outcome: fields.get('outcome'), reason: fields.get('reason'),
+        quantity: available.length ? selected.length : Number(fields.get('quantity')), serials: selected });
+    }}>
+      <select aria-label="Resolution outcome" name="outcome" className="bg-slate-900">
+        <option value="ARRIVED">Arrived at destination</option><option value="AT_SOURCE">Found at source</option>
+        <option value="LOST">Lost in transit</option>
+      </select>
+      {available.length ? available.map(serial => <label key={serial}>
+        <input type="checkbox" checked={selected.includes(serial)} onChange={event =>
+          setSelected(event.target.checked ? [...selected, serial] : selected.filter(value => value !== serial))} /> {serial}
+      </label>) : <input aria-label="Quantity to resolve" name="quantity" type="number" min="0" step="any" max={remaining} defaultValue={remaining} required />}
+      <input name="reason" aria-label="Resolution reason" placeholder="Reason" maxLength={500} required />
+      <button disabled={mutation.isPending || (available.length > 0 && !selected.length)}>Record resolution</button>
+      {mutation.error && <p role="alert">{mutation.error.message}</p>}
+    </form>}
+  </details>;
+}
 
 export default function StockTransfersPage() {
   const queryClient = useQueryClient();
@@ -220,6 +264,9 @@ export default function StockTransfersPage() {
 
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-2">
+                        {trf.status === "RECEIVED" && trf.items.filter(line => line._id && line.shortageQuantity).map(line =>
+                          <ShortageResolution key={line._id} line={line} transferId={trf._id} />
+                        )}
                         {trf.status === "DRAFT" ? (
                           <button
                             type="button"

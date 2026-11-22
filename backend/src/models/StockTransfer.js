@@ -26,6 +26,16 @@ const transferItemSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  resolutions: [{
+    requestId: { type: String, required: true },
+    outcome: { type: String, enum: ['ARRIVED', 'AT_SOURCE', 'LOST'], required: true },
+    quantity: { type: Number, required: true },
+    serials: [String],
+    reason: { type: String, required: true },
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    recordedAt: { type: Date, default: Date.now },
+    ledgerId: { type: mongoose.Schema.Types.ObjectId, ref: 'StockLedger' }
+  }],
   discrepancyNotes: {
     type: String,
     trim: true,

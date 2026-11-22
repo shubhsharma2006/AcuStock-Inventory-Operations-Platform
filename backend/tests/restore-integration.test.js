@@ -33,11 +33,13 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
   const tenantA = objectId();
   const tenantB = objectId();
   const userAdminA = { _id: objectId(), name: 'Admin A', role: 'ADMIN' };
+  const userAdminB = { _id: objectId(), name: 'Admin B', role: 'ADMIN' };
 
   // 1. Seed initial data for Tenant A
   const whA = await Warehouse.create({
     name: 'Tenant A Primary Warehouse',
     code: 'WH-A1',
+    createdBy: userAdminA._id,
     tenantId: tenantA
   });
 
@@ -45,6 +47,9 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     name: 'Industrial Valve A1',
     sku: 'VALVE-A1',
     category: 'Hardware',
+    purchasePrice: 150,
+    salesPrice: 250,
+    createdBy: userAdminA._id,
     tenantId: tenantA
   });
 
@@ -52,6 +57,9 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     name: 'Steel Coupling A2',
     sku: 'STEEL-A2',
     category: 'Hardware',
+    purchasePrice: 80,
+    salesPrice: 140,
+    createdBy: userAdminA._id,
     tenantId: tenantA
   });
 
@@ -60,6 +68,8 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     warehouseId: whA._id,
     type: 'IN',
     quantity: 100,
+    createdBy: userAdminA._id,
+    role: 'ADMIN',
     tenantId: tenantA
   });
 
@@ -67,6 +77,7 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
   const whB = await Warehouse.create({
     name: 'Tenant B Logistics Hub',
     code: 'WH-B1',
+    createdBy: userAdminB._id,
     tenantId: tenantB
   });
 
@@ -74,6 +85,9 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     name: 'Electronics Board B1',
     sku: 'BOARD-B1',
     category: 'Electronics',
+    purchasePrice: 300,
+    salesPrice: 500,
+    createdBy: userAdminB._id,
     tenantId: tenantB
   });
 
@@ -82,6 +96,8 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     warehouseId: whB._id,
     type: 'IN',
     quantity: 50,
+    createdBy: userAdminB._id,
+    role: 'ADMIN',
     tenantId: tenantB
   });
 
@@ -107,6 +123,9 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     name: 'Post-Backup Flange A3',
     sku: 'FLANGE-A3',
     category: 'Hardware',
+    purchasePrice: 95,
+    salesPrice: 160,
+    createdBy: userAdminA._id,
     tenantId: tenantA
   });
 
@@ -115,6 +134,8 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
     warehouseId: whA._id,
     type: 'IN',
     quantity: 25,
+    createdBy: userAdminA._id,
+    role: 'ADMIN',
     tenantId: tenantA
   });
 
@@ -202,5 +223,6 @@ test('Disaster Recovery Drill: Interrupted replacement restore rolls back atomic
   assert.equal(finalTenantBLedgers[0].quantity, 50);
 
   // Measure and assert recovery performance
+  t.diagnostic(`[Disaster Recovery Benchmark] Tenant recovery completed in ${recoveryDurationMs}ms (RTO threshold < 10000ms)`);
   assert.ok(recoveryDurationMs < 10000, `Recovery time must be < 10s (was ${recoveryDurationMs}ms)`);
 });
