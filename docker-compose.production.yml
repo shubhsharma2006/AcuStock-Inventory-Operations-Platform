@@ -79,8 +79,8 @@ services:
       NODE_ENV: production
       PORT: 5001
       MONGODB_URI: mongodb://mongo:27017/acustock?replicaSet=rs0
-      REDIS_URL: redis://:${REDIS_PASSWORD:?FATAL: REDIS_PASSWORD must be explicitly provided in production}@redis:6379
-      JWT_SECRET: ${JWT_SECRET:?FATAL: JWT_SECRET must be explicitly set to a cryptographically secure random secret (min 32 chars) in production}
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?FATAL: REDIS_PASSWORD must be explicitly provided in production}@redis:6379"
+      JWT_SECRET: "${JWT_SECRET:?FATAL: JWT_SECRET must be explicitly set to a cryptographically secure random secret (min 32 chars) in production}"
       FRONTEND_URL: ${FRONTEND_URL:-https://app.acustock.com}
       PAYMENT_MODE: ${PAYMENT_MODE:-live}
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}

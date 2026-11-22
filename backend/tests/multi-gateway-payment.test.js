@@ -152,3 +152,54 @@ test('SubscriptionService: Fair renewal arithmetic never penalizes early renewal
     TenantModel.findById = originalFindById;
   }
 });
+
+test('PaymentService: Webhook idempotency prevents duplicate subscription activation on replayed events', async () => {
+  const PaymentTransaction = require('../src/models/PaymentTransaction');
+  const paymentService = require('../src/services/payment/PaymentService');
+
+  const origFindOne = PaymentTransaction.findOne;
+  let activationCalls = 0;
+
+  // Track subscription activations
+  const origActivate = subscriptionService.activateSubscription;
+  subscriptionService.activateSubscription = async () => {
+    activationCalls++;
+    return { success: true };
+  };
+
+  try {
+    // 1. Simulate duplicate webhook event where the transaction is already marked SUCCESS
+    PaymentTransaction.findOne = async (query) => {
+      if (query.webhookEventId === 'evt_duplicate_test') {
+        return {
+          transactionId: 'tx_already_paid',
+          gateway: 'RAZORPAY',
+          webhookEventId: 'evt_duplicate_test',
+          status: 'SUCCESS'
+        };
+      }
+      return null;
+    };
+
+    // Mock gateway to return normalized success event
+    paymentService.resolver.getGateway = () => ({
+      name: 'RAZORPAY',
+      verifyWebhookSignature: () => ({ id: 'evt_duplicate_test' }),
+      normalizeWebhookEvent: () => ({
+        eventId: 'evt_duplicate_test',
+        type: 'PAYMENT_SUCCESS',
+        orderId: 'order_123',
+        paymentId: 'pay_123'
+      })
+    });
+
+    const result = await paymentService.handleWebhook('razorpay', '{}', 'sig_123');
+    assert.equal(result.status, 'already_processed');
+    assert.equal(result.transactionId, 'tx_already_paid');
+    // Ensure subscription was NOT activated a second time
+    assert.equal(activationCalls, 0, 'Replayed webhook must not trigger duplicate activation');
+  } finally {
+    PaymentTransaction.findOne = origFindOne;
+    subscriptionService.activateSubscription = origActivate;
+  }
+});

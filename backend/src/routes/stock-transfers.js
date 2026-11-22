@@ -379,15 +379,29 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
 
       let totalShortage = 0;
 
-      // Apply received quantities with strict upper-bound validation
+      // Apply received quantities with strict line ID matching and exact serial tracking
       for (let i = 0; i < trf.items.length; i++) {
         const it = trf.items[i];
         let recQty = it.quantity; // default full if not specified
-        let recSerials = it.serialNumbers;
+        let recSerials = it.serialNumbers || [];
         let lineDiscrepancy = null;
 
+        let userRec = null;
         if (Array.isArray(receivedItems)) {
-          const userRec = receivedItems.find(r => String(r.product) === String(it.product) || String(r._id) === String(it._id));
+          // Priority 1: Match strictly by transfer line ID (_id or lineId) to prevent same-SKU line collision
+          userRec = receivedItems.find(r => 
+            (r.lineId && String(r.lineId) === String(it._id)) ||
+            (r._id && String(r._id) === String(it._id))
+          );
+
+          // Priority 2: Fallback to product only if no other line in this transfer shares the same SKU
+          if (!userRec) {
+            const linesWithSameProduct = trf.items.filter(item => String(item.product) === String(it.product));
+            if (linesWithSameProduct.length === 1) {
+              userRec = receivedItems.find(r => String(r.product) === String(it.product));
+            }
+          }
+
           if (userRec && userRec.receivedQuantity !== undefined) {
             const entered = Number(userRec.receivedQuantity);
             if (isNaN(entered) || entered < 0) {
@@ -403,7 +417,34 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
             }
             recQty = entered;
             lineDiscrepancy = userRec.discrepancyNotes || userRec.shortageReason || null;
-            recSerials = Array.isArray(userRec.receivedSerials) ? userRec.receivedSerials : it.serialNumbers;
+
+            // Exact serialized verification: If line is serialized, enforce exact count and membership
+            if (Array.isArray(it.serialNumbers) && it.serialNumbers.length > 0) {
+              if (Array.isArray(userRec.receivedSerials)) {
+                if (userRec.receivedSerials.length !== recQty) {
+                  const err = new Error(`Received serial count (${userRec.receivedSerials.length}) must match received quantity (${recQty}).`);
+                  err.statusCode = 400;
+                  throw err;
+                }
+                const shippedSet = new Set(it.serialNumbers);
+                for (const s of userRec.receivedSerials) {
+                  if (!shippedSet.has(s)) {
+                    const err = new Error(`Serial number "${s}" was not in the shipped serial manifest.`);
+                    err.statusCode = 400;
+                    throw err;
+                  }
+                }
+                recSerials = [...userRec.receivedSerials];
+              } else {
+                // If serial list not explicitly supplied, deterministically take exactly recQty serials
+                recSerials = it.serialNumbers.slice(0, recQty);
+              }
+            } else {
+              recSerials = [];
+            }
+          } else {
+            // Default full receipt for this line
+            recSerials = Array.isArray(it.serialNumbers) ? [...it.serialNumbers] : [];
           }
         }
 
@@ -463,51 +504,66 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
   }
 });
 
-// PUT /api/stock-transfers/:id/cancel - Cancel transfer
+// PUT /api/stock-transfers/:id/cancel - Cancel transfer (Atomic Transaction)
 router.put('/:id/cancel', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MANAGER']), validateObjectId, async (req, res) => {
   try {
     const filter = { _id: req.params.id, tenantId: req.tenantId };
 
-    const transfer = await StockTransfer.findOne(filter);
-    if (!transfer) {
-      return res.status(404).json({ message: 'Stock transfer not found' });
-    }
-    if (transfer.status === 'RECEIVED') {
-      return res.status(400).json({ message: 'Cannot cancel an already RECEIVED transfer' });
-    }
-    if (transfer.status === 'CANCELLED') {
-      return res.status(400).json({ message: 'Transfer is already cancelled' });
-    }
+    const transfer = await executeWithTransaction(async (session) => {
+      const q = StockTransfer.findOne(filter);
+      if (session) q.session(session);
+      const trf = await q;
 
-    // If transfer was IN_TRANSIT, reverse the stock back into fromWarehouse!
-    if (transfer.status === 'IN_TRANSIT') {
-      for (const it of transfer.items) {
-        const revertLedger = new StockLedger({
-          productId: it.product,
-          warehouseId: transfer.fromWarehouse,
-          transferId: transfer._id,
-          type: 'TRANSFER_IN',
-          quantity: it.quantity,
-          serialNumbers: it.serialNumbers || [],
-          createdBy: req.user._id,
-          role: req.user.role,
-          notes: `Reversal on transfer cancellation: ${transfer.transferNumber}`,
-          tenantId: transfer.tenantId
-        });
-        await revertLedger.save();
+      if (!trf) {
+        const err = new Error('Stock transfer not found');
+        err.statusCode = 404;
+        throw err;
       }
-    }
+      if (trf.status === 'RECEIVED') {
+        const err = new Error('Cannot cancel an already RECEIVED transfer');
+        err.statusCode = 400;
+        throw err;
+      }
+      if (trf.status === 'CANCELLED') {
+        const err = new Error('Transfer is already cancelled');
+        err.statusCode = 400;
+        throw err;
+      }
 
-    transfer.status = 'CANCELLED';
-    transfer.cancelledBy = req.user._id;
-    transfer.cancelledAt = new Date();
-    transfer.cancelReason = req.body.reason ? String(req.body.reason).trim() : 'Cancelled by user';
-    await transfer.save();
+      // If transfer was IN_TRANSIT, reverse the stock back into fromWarehouse atomically!
+      if (trf.status === 'IN_TRANSIT') {
+        for (const it of trf.items) {
+          const revertLedger = new StockLedger({
+            productId: it.product,
+            warehouseId: trf.fromWarehouse,
+            transferId: trf._id,
+            type: 'TRANSFER_IN',
+            quantity: it.quantity,
+            serialNumbers: it.serialNumbers || [],
+            createdBy: req.user._id,
+            role: req.user.role,
+            notes: `Reversal on transfer cancellation: ${trf.transferNumber}`,
+            tenantId: trf.tenantId
+          });
+          await revertLedger.save(session ? { session } : {});
+        }
+      }
+
+      trf.status = 'CANCELLED';
+      trf.cancelledBy = req.user._id;
+      trf.cancelledAt = new Date();
+      trf.cancelReason = req.body.reason ? String(req.body.reason).trim() : 'Cancelled by user';
+      await trf.save(session ? { session } : {});
+      return trf;
+    });
 
     res.json({ message: 'Transfer cancelled successfully', transfer });
   } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
     console.error('Error cancelling transfer:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: error.message || 'Server error' });
   }
 });
 

@@ -234,14 +234,14 @@ test('Codex Fix 3.1: docker-compose.production.yml requires mandatory JWT_SECRET
     'Predictable fallback secret "acustock_production_jwt_secret_key_9999" must not exist in production compose'
   );
 
-  // Must enforce variable presence with :?
+  // Must enforce variable presence with :? (properly quoted for valid YAML parsing)
   assert.ok(
-    composeContent.includes('JWT_SECRET: ${JWT_SECRET:?'),
+    composeContent.includes('${JWT_SECRET:?'),
     'Production compose must use ${JWT_SECRET:? mandatory check'
   );
 
   assert.ok(
-    composeContent.includes('REDIS_URL: redis://:${REDIS_PASSWORD:?'),
+    composeContent.includes('${REDIS_PASSWORD:?'),
     'Production compose must use ${REDIS_PASSWORD:? mandatory check'
   );
 });

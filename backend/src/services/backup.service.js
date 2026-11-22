@@ -282,32 +282,66 @@ async function restoreBackup(id, { targetTenantId, dropExisting = false, user })
   const restoredStats = {};
   let totalRestored = 0;
 
-  // 3. Restore each collection safely
-  for (const [collectionName, records] of Object.entries(payload.data)) {
-    if (!Array.isArray(records) || records.length === 0) continue;
+  // 3. Restore collections atomically inside a transaction (Audit Fix: Atomic Replacement Restore)
+  const session = await mongoose.startSession().catch(() => null);
+  let inTx = false;
+  if (session) {
+    try {
+      session.startTransaction();
+      inTx = true;
+    } catch {
+      inTx = false;
+    }
+  }
 
-    const Model = getMongooseModel(collectionName);
-    if (!Model) continue;
+  try {
+    for (const [collectionName, records] of Object.entries(payload.data)) {
+      if (!Array.isArray(records) || records.length === 0) continue;
 
-    // If tenant-scoped, never overwrite cross-tenant records
-    if (collectionName !== 'Tenant') {
-      if (dropExisting) {
-        await Model.deleteMany({ tenantId: new mongoose.Types.ObjectId(targetTenantId) });
+      const Model = getMongooseModel(collectionName);
+      if (!Model) continue;
+
+      // If tenant-scoped, never overwrite cross-tenant records
+      if (collectionName !== 'Tenant') {
+        const tenantOid = new mongoose.Types.ObjectId(targetTenantId);
+        if (dropExisting) {
+          const delQ = Model.deleteMany({ tenantId: tenantOid });
+          if (inTx) delQ.session(session);
+          await delQ;
+        }
+
+        // Remap tenantId on records to target tenant to prevent accidental cross-tenant data leak
+        const preparedRecords = records.map(doc => {
+          const copy = { ...doc };
+          copy.tenantId = tenantOid;
+          return copy;
+        });
+
+        // Insert prepared documents
+        if (preparedRecords.length > 0) {
+          if (inTx) {
+            await Model.insertMany(preparedRecords, { session, ordered: false });
+          } else {
+            await Model.insertMany(preparedRecords, { ordered: false });
+          }
+        }
+        restoredStats[collectionName] = preparedRecords.length;
+        totalRestored += preparedRecords.length;
       }
+    }
 
-      // Remap tenantId on records to target tenant to prevent accidental cross-tenant data leak
-      const preparedRecords = records.map(doc => {
-        const copy = { ...doc };
-        copy.tenantId = new mongoose.Types.ObjectId(targetTenantId);
-        return copy;
-      });
-
-      // Insert prepared documents
-      if (preparedRecords.length > 0) {
-        await Model.insertMany(preparedRecords, { ordered: false });
-      }
-      restoredStats[collectionName] = preparedRecords.length;
-      totalRestored += preparedRecords.length;
+    if (inTx) {
+      await session.commitTransaction();
+    }
+  } catch (err) {
+    if (inTx) {
+      await session.abortTransaction().catch(() => {});
+    }
+    logger.error(`Backup ${id} restore aborted and rolled back: ${err.message}`);
+    throw err;
+  } finally {
+    if (session) {
+      await session.endSession().catch(() => {});
     }
   }
 
