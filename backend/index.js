@@ -46,12 +46,25 @@ if (missingEnvVars.length > 0) {
   process.exit(1);
 }
 
-// Warn about insecure JWT secret in production
-if (process.env.NODE_ENV === 'production' && 
-    process.env.JWT_SECRET === 'your-super-secret-jwt-key-change-this-in-production') {
-  console.error('❌ SECURITY WARNING: Default JWT_SECRET detected in production!');
-  console.error('Generate a new secret: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
-  process.exit(1);
+// Enforce cryptographically robust JWT secret in production (Codex Security Requirement)
+const INSECURE_JWT_SECRETS = [
+  'your-super-secret-jwt-key-change-this-in-production',
+  'acustock_production_jwt_secret_key_9999',
+  'test_secret',
+  'secret',
+  'jwtsecret',
+  'changeme',
+  'password'
+];
+
+if (process.env.NODE_ENV === 'production') {
+  const secret = process.env.JWT_SECRET || '';
+  if (!secret || INSECURE_JWT_SECRETS.includes(secret) || secret.length < 32) {
+    console.error('❌ FATAL SECURITY VIOLATION: Insecure or default JWT_SECRET detected in production!');
+    console.error('JWT_SECRET must be at least 32 characters long and not use a default fallback.');
+    console.error('Generate a new secret: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+    process.exit(1);
+  }
 }
 
 // Import routes

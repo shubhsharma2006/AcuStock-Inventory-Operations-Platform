@@ -1250,6 +1250,20 @@ router.post('/sso/callback/:tenantSlug', async (req, res) => {
     res.redirect(relayState);
   } catch (error) {
     logger.error('SAML callback processing error:', error);
+    if (error.message.includes('ACCOUNT_SUSPENDED')) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCOUNT_SUSPENDED',
+        message: 'Your account has been suspended or deactivated. Contact your organization administrator.'
+      });
+    }
+    if (error.message.includes('SAML_SIGNATURE') || error.message.includes('SAML_AUTH_FAILED')) {
+      return res.status(401).json({
+        success: false,
+        error: 'SAML_VERIFICATION_FAILED',
+        message: error.message
+      });
+    }
     res.status(400).send(`SAML Authentication Error: ${error.message}`);
   }
 });

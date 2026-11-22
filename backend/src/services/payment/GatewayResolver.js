@@ -34,8 +34,14 @@ class GatewayResolver {
       throw new Error('FATAL SECURITY VIOLATION: Production environment cannot run with PAYMENT_MODE != "live"');
     }
 
-    // 1. Strict demo mode check
-    if (paymentMode === 'demo' || context.requestedGateway === 'demo') {
+    // Strict Security Enforcement (Codex Security Requirement):
+    // Reject any demo gateway selection when payment mode is live
+    if (context.requestedGateway === 'demo' && paymentMode !== 'demo') {
+      throw new Error('DEMO_GATEWAY_PROHIBITED: Cannot select demo gateway in live payment mode.');
+    }
+
+    // 1. Strict demo mode check (only active when PAYMENT_MODE === 'demo')
+    if (paymentMode === 'demo') {
       logger.info('Payment Gateway Resolved: DEMO (Demo Mode Active)');
       return this.demo;
     }

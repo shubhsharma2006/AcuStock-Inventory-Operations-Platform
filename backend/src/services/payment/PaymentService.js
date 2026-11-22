@@ -103,6 +103,12 @@ class PaymentService {
       throw new Error('Transaction record not found');
     }
 
+    // Security check: Never verify simulated demo transactions in live mode
+    const paymentMode = (process.env.PAYMENT_MODE || 'demo').toLowerCase().trim();
+    if (transaction.gateway === 'demo' && paymentMode !== 'demo') {
+      throw new Error('DEMO_PAYMENT_PROHIBITED: Cannot verify demo transactions in live payment mode.');
+    }
+
     // If already marked success (e.g. via fast webhook), return early
     if (transaction.status === 'SUCCESS') {
       return { success: true, transactionId: transaction.transactionId, message: 'Already confirmed' };

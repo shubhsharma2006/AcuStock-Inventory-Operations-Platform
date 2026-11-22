@@ -208,6 +208,15 @@ router.post('/checkout', checkoutLimiter, requireAuth, requireTenantId, requireR
       return res.status(400).json({ success: false, error: 'planId is required' });
     }
 
+    // Security check: Prohibit selecting demo gateway when payment mode is live
+    const paymentMode = (process.env.PAYMENT_MODE || 'demo').toLowerCase().trim();
+    if ((gateway === 'demo' || req.body.requestedGateway === 'demo') && paymentMode !== 'demo') {
+      return res.status(400).json({
+        success: false,
+        error: 'Demo payment gateway is strictly prohibited in live payment mode.'
+      });
+    }
+
     const tenant = await getOrResolveTenant(req);
     const tenantId = tenant?._id;
     if (!tenantId) {
