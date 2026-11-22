@@ -81,6 +81,7 @@ const logisticsRoutes      = require('./src/routes/logistics');
 const freightRoutes        = require('./src/routes/freight');
 const weightDiscrepancyRoutes = require('./src/routes/weight-discrepancies');
 const codRemittanceRoutes  = require('./src/routes/cod-remittance');
+const logisticsWalletRoutes = require('./src/routes/logistics-wallet');
 const ndrRoutes            = require('./src/routes/ndr');
 const shipmentRoutes       = require('./src/routes/shipments');
 const trackingRoutes       = require('./src/routes/tracking');
@@ -805,6 +806,7 @@ app.use('/api/logistics', logisticsRoutes);
 app.use('/api/freight', freightRoutes);
 app.use('/api/weight-discrepancies', weightDiscrepancyRoutes);
 app.use('/api/cod-remittance', codRemittanceRoutes);
+app.use('/api/logistics-wallet', logisticsWalletRoutes);
 app.use('/api/ndr', ndrRoutes);
 app.use('/api/shipments', shipmentRoutes);
 app.use('/api/tracking', trackingRoutes);
@@ -879,6 +881,7 @@ const v1Routes = [
   ['freight', freightRoutes],
   ['weight-discrepancies', weightDiscrepancyRoutes],
   ['cod-remittance', codRemittanceRoutes],
+  ['logistics-wallet', logisticsWalletRoutes],
   ['ndr', ndrRoutes],
   ['shipments', shipmentRoutes],
   ['tracking', trackingRoutes],
