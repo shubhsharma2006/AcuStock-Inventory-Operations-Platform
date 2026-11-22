@@ -42,7 +42,9 @@ test('AuditLog - schema validates business and inventory actions', () => {
       changes: {
         summary: `Action ${action} performed`
       },
-      tenantId: dummyTenantId
+      tenantId: dummyTenantId,
+      sequenceNumber: 1,
+      currentHash: '0000000000000000000000000000000000000000000000000000000000000000'
     });
 
     const validationError = log.validateSync();
@@ -68,7 +70,9 @@ test('AuditLog - schema accepts entity references and before/after change tracki
       summary: 'Purchase order approved for procurement'
     },
     severity: 'INFO',
-    tenantId: dummyTenantId
+    tenantId: dummyTenantId,
+    sequenceNumber: 1,
+    currentHash: '0000000000000000000000000000000000000000000000000000000000000000'
   });
 
   assert.equal(log.validateSync(), undefined);

@@ -122,12 +122,29 @@ test('Enterprise SSO 2: Formulates AuthnRequest HTTP-Redirect URL', () => {
 });
 
 test('Enterprise SSO 3: Parses and validates SAMLResponse claims & domain enforcement', () => {
+  const crypto = require('crypto');
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+
   const tenant = {
     slug: 'acme',
     sso: {
+      enabled: true,
+      idpCertificate: publicKey,
       domainPatterns: ['acme.com']
     }
   };
+
+  const now = new Date();
+  const notBefore = new Date(now.getTime() - 60000).toISOString();
+  const notOnOrAfter = new Date(now.getTime() + 300000).toISOString();
+  const signedInfoXml = `<ds:SignedInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#"><ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/><ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/><ds:Reference URI="#_assertion123"><ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/><ds:DigestValue>abc123digest==</ds:DigestValue></ds:Reference></ds:SignedInfo>`;
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(signedInfoXml, 'utf8');
+  const signatureBase64 = signer.sign(privateKey, 'base64');
 
   // Mock valid SAMLResponse XML
   const rawSamlXml = `<?xml version="1.0"?>
@@ -135,10 +152,16 @@ test('Enterprise SSO 3: Parses and validates SAMLResponse claims & domain enforc
     <samlp:Status>
       <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
     </samlp:Status>
-    <saml:Assertion>
-      <saml:AudienceRestriction>
-        <saml:Audience>http://localhost:5001/api/auth/sso/metadata/acme</saml:Audience>
-      </saml:AudienceRestriction>
+    <saml:Assertion ID="_assertion123">
+      <ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        ${signedInfoXml}
+        <ds:SignatureValue>${signatureBase64}</ds:SignatureValue>
+      </ds:Signature>
+      <saml:Conditions NotBefore="${notBefore}" NotOnOrAfter="${notOnOrAfter}">
+        <saml:AudienceRestriction>
+          <saml:Audience>http://localhost:5001/api/auth/sso/metadata/acme</saml:Audience>
+        </saml:AudienceRestriction>
+      </saml:Conditions>
       <saml:Subject>
         <saml:NameID>sarah.connor@acme.com</saml:NameID>
       </saml:Subject>
@@ -160,6 +183,8 @@ test('Enterprise SSO 3: Parses and validates SAMLResponse claims & domain enforc
   const unauthorizedTenant = {
     slug: 'acme',
     sso: {
+      enabled: true,
+      idpCertificate: publicKey,
       domainPatterns: ['allowed-domain.org']
     }
   };

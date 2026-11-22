@@ -70,11 +70,13 @@ test('FEFO, Expiry Alerts, Reconciliation & Traceability', async (t) => {
   });
 
   await t.test('3. FEFO Near-Expiry Flag: Flags warning when allocating critical shelf-life lots', () => {
+    const nearExpiryDate = new Date();
+    nearExpiryDate.setDate(nearExpiryDate.getDate() + 9); // 9 days remaining -> CRITICAL
     const nearExpiryLot = {
       _id: 'lot-near',
       lotNumber: 'LOT-NEAR',
       remainingQty: 10,
-      expiryDate: new Date('2026-11-10T00:00:00.000Z') // 9 days remaining -> CRITICAL
+      expiryDate: nearExpiryDate
     };
 
     const rec = ExpiryAlertService.getFEFOPickRecommendation([nearExpiryLot], 5);

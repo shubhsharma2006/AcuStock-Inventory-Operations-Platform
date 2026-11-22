@@ -587,6 +587,20 @@
     }
   },
   "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "System & Monitoring"
+        ],
+        "summary": "System Health Check",
+        "description": "Returns operational status of database, Redis, and memory metrics.",
+        "responses": {
+          "200": {
+            "description": "System healthy"
+          }
+        }
+      }
+    },
     "/auth/register": {
       "post": {
         "tags": [
