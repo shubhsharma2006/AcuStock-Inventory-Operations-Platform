@@ -876,18 +876,21 @@ Production defense-in-depth architecture.
 
 ---
 
-## 7. API Reference (69 Route Endpoints)
+## 7. API Reference (70 Route Modules · 463 Production Operations)
 
-All endpoints require the standard Bearer token header, except for `/api/auth/login`, `/api/register-tenant`, and tokenized customer/supplier portal endpoints:
+AcuStock features a complete, enterprise-grade OpenAPI 3.0.3 specification covering all **463 route operations** across **397 unique endpoints**. The full interactive specification is available at `/api/docs` and checked into [`docs/openapi.json`](file:///Users/shubhsharma/Desktop/untitled%20folder%203%20copy%202/docs/openapi.json) and [`docs/openapi.yaml`](file:///Users/shubhsharma/Desktop/untitled%20folder%203%20copy%202/docs/openapi.yaml).
+
+All endpoints require the standard Bearer token header, except for public endpoints (`/api/auth/login`, `/api/register-tenant`, `/api/tracking/public/:reference`, and tokenized customer/supplier portal endpoints):
 ```http
 Authorization: Bearer <jwt_access_token>
+X-Tenant-ID: <tenant_id>
 ```
 
-### Complete Route Map
+### Complete Route Map (70 Production Modules)
 
 | Module File | Base URI | Purpose & Operations |
 |---|---|---|
-| `auth.js` | `/api/auth` | Login, registration, token refresh, password resets |
+| `auth.js` | `/api/auth` | Login, registration, token refresh, password resets, SAML SSO (`/api/auth/sso/*`) |
 | `google-auth.js` | `/api/auth/google` | Google OAuth 2.0 handshake and callback |
 | `two-factor.js` | `/api/two-factor` | TOTP 2FA secret generation, verify, disable |
 | `sessions.js` | `/api/sessions` | Active device sessions, remote revocation |
@@ -898,13 +901,13 @@ Authorization: Bearer <jwt_access_token>
 | `ownership.js` | `/api/ownership` | Tenant superadmin ownership transfer |
 | `onboarding.js` | `/api/onboarding` | Interactive setup wizard state and initialization |
 | `setup.js` | `/api/setup` | First-run system initialization check |
-| `warehouses.js` | `/api/warehouses` | Warehouse facility definitions and geographic bounds |
+| `warehouses.js` | `/api/warehouses` | Warehouse facility definitions, 3D Digital Twin CAD, and AMR Pick-Path routing |
 | `locations.js` | `/api/locations` | Hierarchical bins, 3D coordinates, weight limits |
 | `items.js` | `/api/items` | Master catalog, variants, HSN codes, reorder points |
 | `units.js` | `/api/units` | Units of Measure (UOM) definitions and conversions |
 | `stock.js` | `/api/stock` | Real-time on-hand stock queries and adjustments |
 | `adjustments.js` | `/api/adjustments` | Reason-coded stock increases, scrap, write-offs |
-| `stock-transfers.js`| `/api/stock-transfers`| Inter-warehouse transfer manifests and receiving |
+| `stock-transfers.js`| `/api/stock-transfers`| Inter-warehouse transfer manifests, ACID shipping, shortage-aware receiving |
 | `reservations.js` | `/api/reservations` | Soft stock reservation allocations for orders |
 | `lots.js` | `/api/lots` | Batch creation, manufacturer dates, expiry dates |
 | `expiry.js` | `/api/expiry` | FEFO near-expiry alerts and quarantine disposition |
@@ -923,7 +926,7 @@ Authorization: Bearer <jwt_access_token>
 | `picking-waves.js` | `/api/picking-waves` | Wave generation, S-shape routing, put-wall station |
 | `packages.js` | `/api/packages` | Shipping package dimensioning, tare weights |
 | `shipments.js` | `/api/shipments` | Carrier assignment, manifest generation, dispatch |
-| `tracking.js` | `/api/tracking` | Multi-carrier status webhooks and polling status |
+| `tracking.js` | `/api/tracking` | Multi-carrier status webhooks, live fleet telemetry, on-demand Porter booking, and e-POD |
 | `transporters.js` | `/api/transporters` | Dedicated carrier fleet and driver management |
 | `logistics.js` | `/api/logistics` | Real-time courier rate comparison and booking |
 | `invoices.js` | `/api/invoices` | Tax Invoices, GST calculations, E-Way Bill JSON |
@@ -939,7 +942,7 @@ Authorization: Bearer <jwt_access_token>
 | `import-history.js`| `/api/import-history`| Bulk upload logs, error manifests, batch rollbacks |
 | `csv-export.js` | `/api/csv-export` | Export inventory, sales, aging, and ledger to CSV |
 | `reports.js` | `/api/reports` | Standard business reports and KPI summaries |
-| `reports-scheduled.js`| `/api/reports-scheduled`| Cron-scheduled automated report delivery |
+| `reports-scheduled.js`| `/api/reports-scheduled`| Cron-scheduled automated report delivery (Distributed Leader Lock protected) |
 | `dashboard.js` | `/api/dashboard` | Real-time aggregate KPIs for dashboard views |
 | `metrics.js` | `/api/metrics` | System health and resource telemetry endpoints |
 | `search.js` | `/api/search` | Global multi-entity full-text elastic search |
@@ -957,7 +960,7 @@ Authorization: Bearer <jwt_access_token>
 | `apiKeys.js` | `/api/apiKeys` | Developer API keys with scoped capabilities |
 | `webhooks.js` | `/api/webhooks` | Outbound webhook subscriptions, delivery logs |
 | `ecommerce-webhooks.js`| `/api/ecommerce-webhooks`| Shopify, WooCommerce, Amazon inbound webhooks |
-| `docs.js` | `/api/docs` | OpenAPI 3.0 JSON specification presentation |
+| `docs.js` | `/api/docs` | OpenAPI 3.0.3 specification presentation |
 
 ---
 
