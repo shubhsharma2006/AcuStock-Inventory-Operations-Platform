@@ -78,6 +78,7 @@ const reportRoutes         = require('./src/routes/reports');
 const reportScheduledRoutes = require('./src/routes/reports-scheduled');
 const unitRoutes           = require('./src/routes/units');
 const logisticsRoutes      = require('./src/routes/logistics');
+const freightRoutes        = require('./src/routes/freight');
 const ndrRoutes            = require('./src/routes/ndr');
 const shipmentRoutes       = require('./src/routes/shipments');
 const trackingRoutes       = require('./src/routes/tracking');
@@ -799,6 +800,7 @@ app.use('/api/reports', agingRoutes);
 app.use('/api/reports/scheduled', reportScheduledRoutes);
 app.use('/api/units', unitRoutes);
 app.use('/api/logistics', logisticsRoutes);
+app.use('/api/freight', freightRoutes);
 app.use('/api/ndr', ndrRoutes);
 app.use('/api/shipments', shipmentRoutes);
 app.use('/api/tracking', trackingRoutes);
@@ -870,6 +872,7 @@ const v1Routes = [
   ['reports', reportRoutes],
   ['units', unitRoutes],
   ['logistics', logisticsRoutes],
+  ['freight', freightRoutes],
   ['ndr', ndrRoutes],
   ['shipments', shipmentRoutes],
   ['tracking', trackingRoutes],
