@@ -1,3 +1,4 @@
+const { prepareReceipt } = require('../utils/transferReceipt');
 const express = require('express');
 const mongoose = require('mongoose');
 const StockTransfer = require('../models/StockTransfer');
@@ -41,27 +42,9 @@ async function getWarehouseStock(warehouseId, productId, tenantId, session = nul
 
 /**
  * Helper to execute multi-document mutations atomically within a MongoDB session.
- * Falls back to non-transactional execution only if running in standalone test mode without replica sets.
  */
 async function executeWithTransaction(fn) {
-  const session = await mongoose.startSession();
-  try {
-    let result;
-    try {
-      await session.withTransaction(async () => {
-        result = await fn(session);
-      });
-    } catch (txErr) {
-      if (txErr.message && txErr.message.includes('replica set member')) {
-        result = await fn(null);
-      } else {
-        throw txErr;
-      }
-    }
-    return result;
-  } finally {
-    session.endSession();
-  }
+  return mongoose.connection.transaction(fn);
 }
 
 // GET /api/stock-transfers - List transfers
@@ -377,80 +360,9 @@ router.put('/:id/receive', requireAuth, requireRole(['ADMIN', 'SUPER_ADMIN', 'MA
         }
       }
 
-      let totalShortage = 0;
-
-      // Apply received quantities with strict line ID matching and exact serial tracking
-      for (let i = 0; i < trf.items.length; i++) {
-        const it = trf.items[i];
-        let recQty = it.quantity; // default full if not specified
-        let recSerials = it.serialNumbers || [];
-        let lineDiscrepancy = null;
-
-        let userRec = null;
-        if (Array.isArray(receivedItems)) {
-          // Priority 1: Match strictly by transfer line ID (_id or lineId) to prevent same-SKU line collision
-          userRec = receivedItems.find(r => 
-            (r.lineId && String(r.lineId) === String(it._id)) ||
-            (r._id && String(r._id) === String(it._id))
-          );
-
-          // Priority 2: Fallback to product only if no other line in this transfer shares the same SKU
-          if (!userRec) {
-            const linesWithSameProduct = trf.items.filter(item => String(item.product) === String(it.product));
-            if (linesWithSameProduct.length === 1) {
-              userRec = receivedItems.find(r => String(r.product) === String(it.product));
-            }
-          }
-
-          if (userRec && userRec.receivedQuantity !== undefined) {
-            const entered = Number(userRec.receivedQuantity);
-            if (isNaN(entered) || entered < 0) {
-              const err = new Error('Received quantity must be a non-negative number.');
-              err.statusCode = 400;
-              throw err;
-            }
-            // Strict upper-bound guard: Cannot receive more than shipped
-            if (entered > it.quantity) {
-              const err = new Error(`Received quantity (${entered}) cannot exceed shipped quantity (${it.quantity}) for product line.`);
-              err.statusCode = 400;
-              throw err;
-            }
-            recQty = entered;
-            lineDiscrepancy = userRec.discrepancyNotes || userRec.shortageReason || null;
-
-            // Exact serialized verification: If line is serialized, enforce exact count and membership
-            if (Array.isArray(it.serialNumbers) && it.serialNumbers.length > 0) {
-              if (Array.isArray(userRec.receivedSerials)) {
-                if (userRec.receivedSerials.length !== recQty) {
-                  const err = new Error(`Received serial count (${userRec.receivedSerials.length}) must match received quantity (${recQty}).`);
-                  err.statusCode = 400;
-                  throw err;
-                }
-                const shippedSet = new Set(it.serialNumbers);
-                for (const s of userRec.receivedSerials) {
-                  if (!shippedSet.has(s)) {
-                    const err = new Error(`Serial number "${s}" was not in the shipped serial manifest.`);
-                    err.statusCode = 400;
-                    throw err;
-                  }
-                }
-                recSerials = [...userRec.receivedSerials];
-              } else {
-                // If serial list not explicitly supplied, deterministically take exactly recQty serials
-                recSerials = it.serialNumbers.slice(0, recQty);
-              }
-            } else {
-              recSerials = [];
-            }
-          } else {
-            // Default full receipt for this line
-            recSerials = Array.isArray(it.serialNumbers) ? [...it.serialNumbers] : [];
-          }
-        }
-
-        const shortage = Math.max(0, it.quantity - recQty);
-        totalShortage += shortage;
-
+      const receipt = prepareReceipt(trf.items, receivedItems);
+      for (const { line: it, quantity: recQty, serials: recSerials, notes: lineDiscrepancy } of receipt) {
+        const shortage = it.quantity - recQty;
         it.receivedQuantity = recQty;
         it.shortageQuantity = shortage;
         it.discrepancyNotes = lineDiscrepancy;

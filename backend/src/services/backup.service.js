@@ -109,26 +109,14 @@ async function createBackup({ tenantId, initiatedBy, type = 'TENANT', descriptio
       }
     }
 
-    if (mongoose.connection.readyState !== 1) {
-      backupData[item.name] = [];
-      collectionStats[item.name] = 0;
-      continue;
-    }
-
-    try {
-      const records = await Model.find(filter).lean().exec();
-      backupData[item.name] = records;
-      collectionStats[item.name] = records.length;
-      totalRecords += records.length;
-    } catch (err) {
-      logger.warn(`Could not backup collection ${item.name}: ${err.message}`);
-      backupData[item.name] = [];
-      collectionStats[item.name] = 0;
-    }
+    const records = await Model.find(filter).lean().exec();
+    backupData[item.name] = records;
+    collectionStats[item.name] = records.length;
+    totalRecords += records.length;
   }
 
   const payload = {
-    version: 1,
+    version: 2,
     backupId,
     type,
     tenantId: tenantId ? String(tenantId) : null,
@@ -283,20 +271,15 @@ async function restoreBackup(id, { targetTenantId, dropExisting = false, user })
   let totalRestored = 0;
 
   // 3. Restore collections atomically inside a transaction (Audit Fix: Atomic Replacement Restore)
-  const session = await mongoose.startSession().catch(() => null);
-  let inTx = false;
-  if (session) {
-    try {
-      session.startTransaction();
-      inTx = true;
-    } catch {
-      inTx = false;
-    }
-  }
-
+  const session = await mongoose.startSession();
   try {
+    session.startTransaction();
     for (const [collectionName, records] of Object.entries(payload.data)) {
-      if (!Array.isArray(records) || records.length === 0) continue;
+      if (!Array.isArray(records)) throw new Error('Malformed backup collection.');
+      // Older writers also used empty arrays to represent failed collection reads.
+      if (dropExisting && !records.length && payload.version !== 2 && collectionName !== 'Tenant') {
+        throw new Error('Legacy backup contains unverified empty collections. Replacement restore requires a verified backup.');
+      }
 
       const Model = getMongooseModel(collectionName);
       if (!Model) continue;
@@ -306,7 +289,7 @@ async function restoreBackup(id, { targetTenantId, dropExisting = false, user })
         const tenantOid = new mongoose.Types.ObjectId(targetTenantId);
         if (dropExisting) {
           const delQ = Model.deleteMany({ tenantId: tenantOid });
-          if (inTx) delQ.session(session);
+          delQ.session(session);
           await delQ;
         }
 
@@ -319,30 +302,22 @@ async function restoreBackup(id, { targetTenantId, dropExisting = false, user })
 
         // Insert prepared documents
         if (preparedRecords.length > 0) {
-          if (inTx) {
-            await Model.insertMany(preparedRecords, { session, ordered: false });
-          } else {
-            await Model.insertMany(preparedRecords, { ordered: false });
-          }
+          await Model.insertMany(preparedRecords, { session, ordered: true });
         }
         restoredStats[collectionName] = preparedRecords.length;
         totalRestored += preparedRecords.length;
       }
     }
 
-    if (inTx) {
-      await session.commitTransaction();
-    }
+    await session.commitTransaction();
   } catch (err) {
-    if (inTx) {
+    if (session.inTransaction()) {
       await session.abortTransaction().catch(() => {});
     }
     logger.error(`Backup ${id} restore aborted and rolled back: ${err.message}`);
     throw err;
   } finally {
-    if (session) {
-      await session.endSession().catch(() => {});
-    }
+    await session.endSession();
   }
 
   // Update entry status

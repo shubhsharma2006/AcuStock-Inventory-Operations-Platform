@@ -151,3 +151,20 @@ describe('Stock Transfers — Schema & Shortage Logic Tests', () => {
     assert.deepEqual(valid, ['SN-01', 'SN-02']);
   });
 });
+
+const { prepareReceipt } = require('../src/utils/transferReceipt');
+it('matches repeated products by line and preserves the selected serial identities', () => {
+  const first = { _id: 'first', product: 'sku', quantity: 3, serialNumbers: ['A', 'B', 'C'] };
+  const second = { _id: 'second', product: 'sku', quantity: 1, serialNumbers: ['D'] };
+  const lines = [first, second];
+  const receipt = prepareReceipt(lines, [
+    { lineId: 'second', receivedQuantity: 0 },
+    { lineId: 'first', receivedQuantity: 2, receivedSerials: ['C', 'B'] }
+  ]);
+  assert.deepEqual(receipt.map(row => row.serials), [['C', 'B'], []]);
+  assert.throws(() => prepareReceipt(lines, [{ product: 'sku' }]), /unique transfer line/);
+  for (const serials of [undefined, ['B', 'B'], ['B', 'X']]) {
+    assert.throws(() => prepareReceipt(lines, [{ lineId: 'first', receivedQuantity: 2, receivedSerials: serials }]));
+  }
+  assert.deepEqual(prepareReceipt(lines)[0].serials, first.serialNumbers);
+});

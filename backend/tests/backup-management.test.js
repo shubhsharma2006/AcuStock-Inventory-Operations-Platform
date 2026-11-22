@@ -5,6 +5,7 @@ const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
 
+const mongoose = require('mongoose');
 const backupService = require('../src/services/backup.service');
 const backupController = require('../src/controllers/backup.controller');
 
@@ -12,6 +13,15 @@ test('Phase 7: Enterprise Backup & Disaster Recovery System', async (t) => {
   const testTenantA = '507f191e810c19729de860ea';
   const testTenantB = '507f191e810c19729de860eb';
   let createdBackupId = null;
+  const deleted = [];
+  const model = {
+    schema: { path: () => true },
+    find: () => ({ lean: () => ({ exec: async () => [] }) }),
+    deleteMany: filter => ({ session: () => { deleted.push(String(filter.tenantId)); } })
+  };
+  const originalModel = mongoose.model;
+  mongoose.model = () => model;
+  t.after(() => { mongoose.model = originalModel; });
 
   await t.test('1. Backup Service: Creates compressed archive and computes valid SHA-256 checksum', async () => {
     const backup = await backupService.createBackup({
@@ -131,6 +141,70 @@ test('Phase 7: Enterprise Backup & Disaster Recovery System', async (t) => {
     await backupController.createBackup(reqMock, resMock);
     assert.equal(responseStatus, 403, 'Non-SUPER_ADMIN should be rejected for FULL system backups');
     assert.equal(responseBody.success, false);
+  });
+
+  await t.test('Replacement requires a session and clears verified empty collections for the target tenant', async (t) => {
+    const options = { targetTenantId: testTenantA, dropExisting: true, user: { role: 'ADMIN' } };
+    const start = t.mock.method(mongoose, 'startSession', async () => { throw new Error('Session unavailable'); });
+    await assert.rejects(backupService.restoreBackup(createdBackupId, options), /Session unavailable/);
+    assert.deepEqual(deleted, []);
+    let committed = false;
+    start.mock.mockImplementation(async () => ({
+      startTransaction() {},
+      async commitTransaction() { committed = true; },
+      async endSession() {}
+    }));
+    await backupService.restoreBackup(createdBackupId, options);
+    assert.ok(committed);
+    assert.ok(deleted.length > 0);
+    assert.ok(deleted.every(id => id === testTenantA));
+  });
+
+  await t.test('Interrupted replacement-restore rolls back transaction and preserves tenant isolation', async (t) => {
+    const options = { targetTenantId: testTenantA, dropExisting: true, user: { role: 'ADMIN' } };
+    let aborted = false;
+    let inTransactionState = true;
+
+    t.mock.method(mongoose, 'startSession', async () => ({
+      startTransaction() { inTransactionState = true; },
+      inTransaction() { return inTransactionState; },
+      async abortTransaction() { aborted = true; inTransactionState = false; },
+      async commitTransaction() { throw new Error('Should not commit'); },
+      async endSession() {}
+    }));
+
+    // Simulate an interruption error mid-restore during model operation
+    const failingModel = {
+      schema: { path: () => true },
+      find: () => ({ lean: () => ({ exec: async () => [] }) }),
+      deleteMany: () => {
+        const p = Promise.reject(new Error('EIO: Connection interrupted during restore operation'));
+        p.session = () => p;
+        return p;
+      },
+      insertMany: async () => {
+        throw new Error('EIO: Connection interrupted during restore operation');
+      }
+    };
+
+    const originalMongooseModel = mongoose.model;
+    mongoose.model = () => failingModel;
+
+    try {
+      await assert.rejects(
+        backupService.restoreBackup(createdBackupId, options),
+        /EIO: Connection interrupted during restore operation/
+      );
+
+      // Verify that transaction rollback was triggered
+      assert.ok(aborted, 'Transaction must be aborted on interruption');
+
+      // Verify second tenant B was completely isolated and unaffected
+      const catalogB = backupService.listBackups({ tenantId: testTenantB, userRole: 'ADMIN' });
+      assert.ok(!catalogB.some(b => b.id === createdBackupId));
+    } finally {
+      mongoose.model = originalMongooseModel;
+    }
   });
 
   await t.test('6. Backup Pruning & Deletion: Cleans up physical file and updates catalog', async () => {

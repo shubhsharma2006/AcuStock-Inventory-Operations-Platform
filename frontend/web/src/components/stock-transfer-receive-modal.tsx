@@ -29,6 +29,8 @@ interface Props {
   onClose: () => void;
   onConfirm: (payload: {
     receivedItems: Array<{
+      lineId: string;
+      receivedSerials?: string[];
       product: string;
       receivedQuantity: number;
       discrepancyNotes?: string;
@@ -47,6 +49,7 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
     return init;
   });
 
+  const [selectedSerials, setSelectedSerials] = useState<Record<string, string[]>>({});
   const [lineNotes, setLineNotes] = useState<Record<string, string>>({});
   const [generalReceiptNotes, setGeneralReceiptNotes] = useState<string>('');
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -70,6 +73,7 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
     transfer.items.forEach((it) => {
       full[it._id] = it.quantity;
     });
+    setSelectedSerials({});
     setLineQuantities(full);
     setValidationError(null);
   };
@@ -91,6 +95,8 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
       const qty = lineQuantities[it._id] ?? it.quantity;
       const note = lineNotes[it._id]?.trim();
       return {
+        lineId: it._id,
+        receivedSerials: selectedSerials[it._id] ?? it.serialNumbers,
         product: prodId,
         receivedQuantity: qty,
         discrepancyNotes: note || undefined,
@@ -209,6 +215,7 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
                         type="number"
                         min={0}
                         max={it.quantity}
+                        readOnly={Boolean(it.serialNumbers?.length)}
                         value={currentRec}
                         onChange={(e) => handleQtyChange(it._id, it.quantity, e.target.value)}
                         className="w-20 rounded-lg border border-white/20 bg-slate-900 px-2 py-1 text-center font-mono text-xs font-bold text-white focus:border-amber-400 focus:outline-none"
@@ -217,6 +224,24 @@ export function StockTransferReceiveModal({ transfer, isLoading = false, onClose
                   </div>
                 </div>
 
+                {Boolean(it.serialNumbers?.length) && (
+                  <fieldset className="mt-3 text-xs text-slate-200">
+                    <legend>Received serial numbers</legend>
+                    {it.serialNumbers?.map(serial => {
+                      const selected = selectedSerials[it._id] ?? it.serialNumbers ?? [];
+                      return (
+                        <label key={serial} className="mr-3 inline-flex items-center gap-1">
+                          <input type="checkbox" checked={selected.includes(serial)} onChange={event => {
+                            const next = event.target.checked ? [...selected, serial] : selected.filter(value => value !== serial);
+                            setSelectedSerials(prev => ({ ...prev, [it._id]: next }));
+                            setLineQuantities(prev => ({ ...prev, [it._id]: next.length }));
+                          }} />
+                          {serial}
+                        </label>
+                      );
+                    })}
+                  </fieldset>
+                )}
                 {/* Discrepancy Alert & Note field if shortage */}
                 {isShort && (
                   <div className="mt-2.5 pt-2 border-t border-amber-500/20">
