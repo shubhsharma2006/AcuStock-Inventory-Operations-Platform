@@ -288,6 +288,7 @@ test('Subdomain 7: requireAuth allows SUPER_ADMIN to access any tenant workspace
   const superAdmin = {
     _id: superAdminId,
     name: 'Platform Super Admin',
+    isSuperAdmin: true,
     email: 'super@acustock.com',
     role: 'SUPER_ADMIN',
     isActive: true,

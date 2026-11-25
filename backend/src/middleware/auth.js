@@ -89,10 +89,14 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
-    const user = await User.findById(decoded._id || decoded.id || decoded.userId).select('_id role isActive employmentStatus tokenVersion tenantId');
+    const user = await User.findById(decoded._id || decoded.id || decoded.userId).select('_id role isSuperAdmin isActive employmentStatus tokenVersion tenantId');
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
+    }
+
+    if (user.role === 'SUPER_ADMIN' && user.isSuperAdmin !== true) {
+      return res.status(403).json({ message: 'Platform ownership could not be verified', code: 'PLATFORM_OWNER_REQUIRED' });
     }
 
     if (!user.isActive || user.employmentStatus === 'TERMINATED') {

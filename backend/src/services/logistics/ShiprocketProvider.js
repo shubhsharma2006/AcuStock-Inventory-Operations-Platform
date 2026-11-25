@@ -89,19 +89,6 @@ class ShiprocketProvider extends CarrierProvider {
     });
   }
 
-  async createShipment(orderData) {
-    const res = await this.service.createAndAssignShipment(orderData);
-    return {
-      provider: 'SHIPROCKET',
-      isLive: res.isLive,
-      awb: res.awb,
-      courierName: res.courierName,
-      labelUrl: res.labelUrl,
-      trackingUrl: `https://shiprocket.co/tracking/${res.awb}`,
-      shipmentId: res.shipmentId
-    };
-  }
-
   async trackShipment(awb) {
     return {
       awb,

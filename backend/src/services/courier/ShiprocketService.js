@@ -5,7 +5,7 @@
  * fetching via the official Shiprocket B2B API (v2).
  * 
  * Aggregates carriers: Delhivery, Blue Dart, DTDC, Shadowfax, Ecom Express.
- * Falls back to deterministic mock simulation if API credentials are not set.
+ * Booking stages are checkpointed by the shipments API.
  */
 
 const logger = require('../../utils/logger');
@@ -61,131 +61,63 @@ class ShiprocketService {
     }
   }
 
-  /**
-   * Book a live ad-hoc shipment order and assign AWB
-   * 
-   * @param {Object} orderData
-   * @returns {Promise<{ awb: string, courierName: string, labelUrl: string, shipmentId: string }>}
-   */
-  async createAndAssignShipment(orderData) {
-    const token = await this.getAuthToken();
+  async post(path, token, payload) {
+    const response = await fetch(this.baseUrl + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(12000)
+    });
+    if (!response.ok) throw new Error(`Carrier returned HTTP ${response.status}`);
+    return response.json();
+  }
 
-    if (!token) {
-      // Local fallback simulation with realistic AWB
-      const simulatedCarrier = orderData.carrierType || 'DELHIVERY';
-      const randomAwb = `${simulatedCarrier.slice(0, 3)}-${Date.now().toString().slice(-8)}`;
-      logger.info(`📦 [COURIER-SIMULATION] Assigned AWB: ${randomAwb} for order ${orderData.orderId || 'DIRECT'}`);
-      return {
-        isLive: false,
-        awb: randomAwb,
-        courierName: simulatedCarrier,
-        labelUrl: `/api/shipments/labels/${randomAwb}.pdf`,
-        shipmentId: `sim_${Date.now()}`,
-      };
+  orderPayload(s) {
+    const dimension = String(s.dimensions || '').trim().match(/^(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)$/i);
+    const mass = String(s.weight || '').trim().match(/^(\d+(?:\.\d+)?)\s*(?:kg)?$/i);
+    const total = s.deliveryType === 'COD' ? s.codAmount : s.prepaidAmount;
+    if (!dimension || !mass || ![...dimension.slice(1), mass[1]].every(v => Number.isFinite(Number(v)) && Number(v) > 0)
+        || Number(s.boxes || 1) !== 1) throw new Error('Enter one parcel with its measured weight in kg and L x W x H in cm.');
+    if (!s.originWarehouse?.trim() || !s.customerName || !s.address || !s.city || !s.state || !s.email ||
+        !/^\d{6}$/.test(s.pincode) || !/^(?:91)?\d{10}$/.test(String(s.phone).replace(/[^\d]/g, ''))) {
+      throw new Error('Enter the registered pickup location and complete recipient contact and address details.');
     }
+    if (!['COD', 'Prepaid'].includes(s.deliveryType) || !Number.isFinite(total) || total <= 0 ||
+        !Number.isInteger(s.quantity) || s.quantity < 1) throw new Error('Enter a positive order amount and quantity for prepaid or COD shipping.');
+    return {
+      order_id: String(s._id), order_date: new Date(s.createdAt || Date.now()).toISOString().slice(0, 10),
+      pickup_location: s.originWarehouse.trim(), billing_customer_name: s.customerName, billing_last_name: '',
+      billing_address: s.address, billing_city: s.city, billing_pincode: s.pincode, billing_state: s.state,
+      billing_country: 'India', billing_email: s.email, billing_phone: String(s.phone).replace(/\D/g, '').slice(-10),
+      shipping_is_billing: true, order_items: [{ name: s.productName, sku: String(s.productId), units: s.quantity,
+        selling_price: total / s.quantity }], payment_method: s.deliveryType, sub_total: total,
+      length: Number(dimension[1]), breadth: Number(dimension[2]), height: Number(dimension[3]), weight: Number(mass[1])
+    };
+  }
 
-    try {
-      // Step 1: Create Adhoc Order
-      const payload = {
-        order_id: String(orderData.orderId || Date.now()),
-        order_date: new Date().toISOString().slice(0, 10),
-        pickup_location: orderData.warehouseCode || 'Primary Hub',
-        billing_customer_name: orderData.customerName || 'Consignee',
-        billing_last_name: '',
-        billing_address: orderData.address || 'Commercial Center',
-        billing_city: orderData.city || 'Mumbai',
-        billing_pincode: Number(orderData.pincode) || 400001,
-        billing_state: orderData.state || 'Maharashtra',
-        billing_country: 'India',
-        billing_email: orderData.email || 'billing@acustock.internal',
-        billing_phone: String(orderData.phone || '9876543210').replace(/\D/g, '').slice(-10),
-        shipping_is_billing: true,
-        order_items: [
-          {
-            name: orderData.productName || 'Equipment Unit',
-            sku: orderData.sku || 'SKU-ITEM',
-            units: Number(orderData.quantity) || 1,
-            selling_price: Number(orderData.price) || 100,
-          },
-        ],
-        payment_method: orderData.deliveryType === 'COD' ? 'COD' : 'Prepaid',
-        sub_total: Number(orderData.price || 100) * Number(orderData.quantity || 1),
-        length: 20,
-        breadth: 15,
-        height: 10,
-        weight: Number(orderData.weight) || 1.5,
-      };
-
-      const orderRes = await fetch(`${this.baseUrl}/orders/create/adhoc`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(10000),
-      });
-
-      const orderJson = await orderRes.json();
-      const shipmentId = orderJson.shipment_id || orderJson.order_id;
-
-      if (!shipmentId) {
-        throw new Error(orderJson.message || 'Shiprocket order creation returned no shipment_id');
-      }
-
-      // Step 2: Assign AWB
-      const awbRes = await fetch(`${this.baseUrl}/courier/assign/awb`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({ shipment_id: shipmentId }),
-        signal: AbortSignal.timeout(10000),
-      });
-
-      const awbJson = await awbRes.json();
-      const awb = awbJson?.response?.data?.awb_code || `AWB-${shipmentId}`;
-      const courierName = awbJson?.response?.data?.courier_name || 'Shiprocket Express';
-
-      // Step 3: Generate Shipping Label
-      let labelUrl = null;
-      try {
-        const labelRes = await fetch(`${this.baseUrl}/courier/generate/label`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({ shipment_id: [shipmentId] }),
-        });
-        const labelJson = await labelRes.json();
-        labelUrl = labelJson?.label_url || null;
-      } catch (labelErr) {
-        logger.warn('Could not pre-fetch label URL:', labelErr.message);
-      }
-
-      return {
-        isLive: true,
-        awb,
-        courierName,
-        labelUrl: labelUrl || `/api/shipments/labels/${awb}.pdf`,
-        shipmentId: String(shipmentId),
-      };
-    } catch (err) {
-      logger.error('Shiprocket order creation error:', err.message);
-      // Graceful fallback so user's delivery creation is never blocked
-      const fallbackAwb = `AWB-${Date.now().toString().slice(-8)}`;
-      return {
-        isLive: false,
-        awb: fallbackAwb,
-        courierName: orderData.carrierType || 'Delhivery',
-        labelUrl: `/api/shipments/labels/${fallbackAwb}.pdf`,
-        shipmentId: `fb_${Date.now()}`,
-      };
+  async performStep(step, shipment, token, order) {
+    const shipmentId = shipment.carrierBooking?.shipmentId;
+    if (step === 'ORDER') {
+      const result = await this.post('/orders/create/adhoc', token, order);
+      if (!Number(result.shipment_id)) throw new Error('Carrier did not confirm an order.');
+      return { 'carrierBooking.shipmentId': String(result.shipment_id) };
     }
+    if (step === 'AWB') {
+      const result = await this.post('/courier/assign/awb', token, { shipment_id: shipmentId });
+      const data = result.response?.data;
+      if (Number(result.awb_assign_status) !== 1 || !data?.awb_code) throw new Error('Carrier did not confirm an AWB.');
+      return { awb: String(data.awb_code), courier: data.courier_name || 'Shiprocket' };
+    }
+    if (step === 'LABEL') {
+      const result = await this.post('/courier/generate/label', token, { shipment_id: [shipmentId] });
+      if (!result.label_url || new URL(result.label_url).protocol !== 'https:') throw new Error('Carrier did not return a printable label.');
+      return { labelUrl: result.label_url };
+    }
+    if (step !== 'PICKUP') throw new Error('Unknown booking step.');
+    const result = await this.post('/courier/generate/pickup', token, { shipment_id: [shipmentId] });
+    if (Number(result.pickup_status) !== 1) throw new Error('Carrier did not confirm the pickup request.');
+    return { 'carrierBooking.pickupDate': result.response?.pickup_scheduled_date || null };
   }
 }
 
 module.exports = new ShiprocketService();
-

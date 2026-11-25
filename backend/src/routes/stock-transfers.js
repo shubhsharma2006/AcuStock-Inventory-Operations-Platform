@@ -68,8 +68,8 @@ router.get('/', requireAuth, async (req, res) => {
     const skip = (Number(page) - 1) * Number(limit);
     const [transfers, total] = await Promise.all([
       StockTransfer.find(filter)
-        .populate('fromWarehouse', 'name code')
-        .populate('toWarehouse', 'name code')
+        .populate('fromWarehouse', 'name code address.zipCode')
+        .populate('toWarehouse', 'name code address.zipCode')
         .populate('transporterId', 'name code trackingUrlPattern')
         .populate('requestedBy', 'name email')
         .populate('approvedBy', 'name email')

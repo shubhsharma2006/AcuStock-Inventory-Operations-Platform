@@ -678,6 +678,7 @@ function ShipDispatchModal({
   onConfirm: (data: { transporterId?: string; trackingNumber?: string; estimatedArrival?: string }) => void;
 }) {
   const [transporterId, setTransporterId] = useState("");
+  const [parcelWeight, setParcelWeight] = useState("");
   const [trackingNumber, setTrackingNumber] = useState("");
   const [estimatedArrival, setEstimatedArrival] = useState("");
 
@@ -724,18 +725,18 @@ function ShipDispatchModal({
             <span className="font-semibold text-white">{transfer.toWarehouse?.name}</span>
           </div>
 
-          {/* Live Multi-Carrier Rate Comparator (Bigship & Integrated Aggregators) */}
-          <CarrierRateComparator
-            fromPincode={transfer.fromWarehouse?.address?.zipCode || "400001"}
-            toPincode={transfer.toWarehouse?.address?.zipCode || "110001"}
-            weightKg={Math.max(1, transfer.items.reduce((sum, it) => sum + (it.quantity || 1), 0) * 0.5)}
-            onSelectCarrier={(carrier) => {
-              const autoAwb = `${carrier.provider.slice(0, 4)}-${Date.now().toString().slice(-8)}`;
-              setTrackingNumber(autoAwb);
-              const etaDate = new Date(Date.now() + carrier.expectedDays * 86400000).toISOString().slice(0, 10);
-              setEstimatedArrival(etaDate);
-            }}
-          />
+          {transfer.fromWarehouse?.address?.zipCode && transfer.toWarehouse?.address?.zipCode && <>
+            <label className="block text-xs text-slate-300">Measured parcel weight (kg)
+              <input type="number" min="0.01" step="any" value={parcelWeight} onChange={e => setParcelWeight(e.target.value)}
+                className="mt-1 block w-full rounded-lg bg-slate-950 p-2" />
+            </label>
+            {Number(parcelWeight) > 0 && <CarrierRateComparator
+              fromPincode={transfer.fromWarehouse.address.zipCode} toPincode={transfer.toWarehouse.address.zipCode}
+              weightKg={Number(parcelWeight)} onSelectCarrier={carrier => {
+                const eta = new Date(Date.now() + carrier.expectedDays * 86400000);
+                setEstimatedArrival(eta.toISOString().slice(0, 10));
+              }} />}
+          </>}
 
           <div>
             <label className="block text-xs font-medium text-slate-300 mb-1">Shipping Partner / Transporter</label>

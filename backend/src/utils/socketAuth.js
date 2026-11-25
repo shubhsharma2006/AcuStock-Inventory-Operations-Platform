@@ -44,9 +44,9 @@ async function authenticateSocketConnection(socket) {
     if (decoded.mfaPending === true || decoded.purpose === 'MFA_AUTHENTICATION') {
       return null;
     }
-    const user = await User.findById(decoded._id).select('_id role isActive tokenVersion tenantId');
+    const user = await User.findById(decoded._id).select('_id role isSuperAdmin isActive tokenVersion tenantId');
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || (user.role === 'SUPER_ADMIN' && user.isSuperAdmin !== true)) {
       return null;
     }
 

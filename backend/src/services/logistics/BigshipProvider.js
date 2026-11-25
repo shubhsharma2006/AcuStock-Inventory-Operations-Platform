@@ -138,23 +138,8 @@ class BigshipProvider extends CarrierProvider {
   }
 
   /**
-   * Book shipment and generate AWB via Bigship API (or deterministic simulator)
+   * Example tracking events for the simulated Bigship adapter.
    */
-  async createShipment(orderData) {
-    const awb = `BSHP-${Date.now().toString().slice(-8)}`;
-    logger.info(`📦 [BIGSHIP] Booking shipment AWB ${awb} for transfer/order ${orderData.referenceNumber || orderData.id}`);
-
-    return {
-      provider: 'BIGSHIP',
-      isLive: this.isConfigured(),
-      awb,
-      courierName: orderData.carrierName || 'Bigship Delhivery Surface',
-      labelUrl: `/api/logistics/labels/${awb}.pdf`,
-      trackingUrl: `https://track.bigship.in/?awb=${awb}`,
-      shipmentId: `bs_${Date.now()}`
-    };
-  }
-
   async trackShipment(awb) {
     return {
       awb,

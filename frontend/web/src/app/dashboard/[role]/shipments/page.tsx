@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { apiFetch, downloadAuthenticatedPdf } from "@/lib/api";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { ShipmentBatchPanel } from "@/components/shipment-batch-panel";
+import { useSession } from "@/hooks/use-session";
 import { CreateDeliveryModal } from "@/components/create-delivery-modal";
 import { ShipmentTrackingPanel } from "@/components/shipment-tracking-panel";
 import { TaxInvoiceModal, type TaxInvoiceData } from "@/components/tax-invoice-modal";
@@ -13,17 +15,21 @@ type Shipment = {
   productName?: string;
   quantity?: number;
   condition?: string;
+  originWarehouse?: string;
+  expectedDeliveryDate?: string;
   customerName?: string;
   companyName?: string;
   phone?: string;
   city?: string;
   state?: string;
   status: "PENDING" | "DISPATCHED" | "IN_TRANSIT" | "OUT_FOR_DELIVERY" | "DELIVERED" | "RETURNED" | "CANCELLED";
-  type?: "STOCK_IN" | "STOCK_OUT";
+  type?: "OUT" | "IN" | "STOCK_IN" | "STOCK_OUT";
+  labelUrl?: string;
+  carrierBooking?: { stage?: "ORDER" | "AWB" | "LABEL" | "PICKUP" | "COMPLETE"; processing?: boolean; pickupDate?: string };
   awb?: string;
   courier?: string;
   transporterName?: string;
-  carrierType?: "PORTER" | "DELHIVERY" | "DTDC" | "DMRC" | "BLUEDART" | "IN_HOUSE" | "OTHER";
+  carrierType?: "SHIPROCKET" | "PORTER" | "DELHIVERY" | "DTDC" | "DMRC" | "BLUEDART" | "IN_HOUSE" | "OTHER";
   porterDetails?: {
     vehicleType?: string;
     driverName?: string;
@@ -75,6 +81,13 @@ const STATUS_CONFIG: Record<string, { label: string; bg: string }> = {
   CANCELLED:        { label: "Cancelled",          bg: "bg-rose-500/20 text-rose-300 border-rose-500/30" },
 };
 
+const QUEUES = [
+  ["all", "All records"], ["ready", "Ready to ship"], ["pickup", "Awaiting pickup"],
+  ["transit", "In transit"], ["attention", "Needs attention"], ["returns", "Returns"]
+] as const;
+
+type ShipmentList = { shipments: Shipment[]; pagination: { page: number; pages: number; total: number } };
+
 const CARRIER_TABS = [
   { id: "ALL", label: "All Carriers", icon: "🌐" },
   { id: "PORTER", label: "Porter (Hyperlocal)", icon: "🛵" },
@@ -87,10 +100,20 @@ const CARRIER_TABS = [
 
 export default function ShipmentsPage() {
   const queryClient = useQueryClient();
+  const { user } = useSession();
+  const canBook = Boolean(user && user.role !== "USER" && user.impersonationMode !== "READ_ONLY");
+  const accountKey = [user?.tenantId, user?._id || user?.id].join("/");
+  const [batchBusy, setBatchBusy] = useState(false);
+  const booking = useMutation({
+    mutationFn: ({ shipmentId, step }: { shipmentId: string; step: string }) =>
+      apiFetch("/logistics/book", { method: "POST", body: JSON.stringify({ provider: "SHIPROCKET", shipmentId, step }) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["shipments"] }),
+  });
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"shipments" | "transporters">("shipments");
+  const [activeTab, setActiveTab] = useState<"shipments" | "transporters" | "batch">("shipments");
   const [carrierFilter, setCarrierFilter] = useState("ALL");
-  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [queue, setQueue] = useState<(typeof QUEUES)[number][0]>("all");
+  const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
 
   // Create Delivery Modal
@@ -120,25 +143,16 @@ export default function ShipmentsPage() {
   const [invoiceModalData, setInvoiceModalData] = useState<TaxInvoiceData | null>(null);
 
   // Queries
-  const { data: shipmentsData, isLoading: loadingShipments } = useQuery<{ shipments: Shipment[] }>({
-    queryKey: ["shipments", statusFilter, carrierFilter, search],
+  const { data: shipmentsData, isLoading: loadingShipments, error: listError, refetch } = useQuery<ShipmentList>({
+    queryKey: ["shipments", accountKey, queue, carrierFilter, search, page],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (statusFilter !== "ALL") params.set("status", statusFilter);
+      params.set("page", String(page));
+      if (queue !== "all") params.set("queue", queue);
       if (carrierFilter !== "ALL") params.set("carrierType", carrierFilter);
       if (search) params.set("search", search);
-      return apiFetch<{ shipments: Shipment[] }>(`/shipments?${params.toString()}`);
+      return apiFetch<ShipmentList>(`/shipments?${params.toString()}`);
     },
-  });
-
-  const { data: statsData } = useQuery<{
-    totalShipments: number;
-    totalSupplies: number;
-    pendingDeliveries: number;
-    deliveredCount: number;
-  }>({
-    queryKey: ["shipment-stats"],
-    queryFn: () => apiFetch("/shipments/stats"),
   });
 
   const { data: transporters = [], isLoading: loadingTransporters } = useQuery<Transporter[]>({
@@ -197,26 +211,12 @@ export default function ShipmentsPage() {
     return pattern.replace("{awb}", awb).replace("{AWB}", awb);
   }
 
-  // Count by carrier for badges
-  const porterCount = shipments.filter((s) => s.carrierType === "PORTER" || s.courier?.toLowerCase().includes("porter")).length;
-  const delhiveryCount = shipments.filter((s) => s.carrierType === "DELHIVERY" || s.courier?.toLowerCase().includes("delhivery")).length;
-  const dtdcCount = shipments.filter((s) => s.carrierType === "DTDC" || s.courier?.toLowerCase().includes("dtdc")).length;
-  const dmrcCount = shipments.filter((s) => s.carrierType === "DMRC" || s.courier?.toLowerCase().includes("dmrc")).length;
-
   return (
     <div className="space-y-6 p-4 sm:p-6 lg:p-8 pb-36">
       {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3.5 py-1 text-xs font-semibold text-amber-200">
-            <span>🚚 Logistics & Dispatch Control</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mt-1.5">
-            Deliveries & Carrier Management
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            End-to-end dispatching via Porter, Delhivery, DTDC, and DMRC transit hubs with live manifests.
-          </p>
+          <h1 className="text-2xl font-bold text-white">Shipment work queue</h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -226,29 +226,35 @@ export default function ShipmentsPage() {
             onClick={() => setCreateDeliveryModalOpen(true)}
             className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-amber-400 via-amber-300 to-orange-400 px-5 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-amber-500/20 transition hover:scale-[1.02] hover:shadow-amber-500/30 active:scale-[0.98]"
           >
-            <span>➕</span>
-            <span>New Delivery Dispatch</span>
+
+            <span>New shipment</span>
           </button>
 
           {/* Tab Switcher */}
           <div className="flex rounded-2xl border border-white/10 bg-slate-900/60 p-1 backdrop-blur-xl">
             <button
               type="button"
+              disabled={batchBusy} aria-pressed={activeTab === "shipments"}
               onClick={() => setActiveTab("shipments")}
               className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
                 activeTab === "shipments" ? "bg-white text-slate-950 shadow" : "text-slate-400 hover:text-white"
               }`}
             >
-              🚚 Shipments ({shipments.length})
+              Shipments
             </button>
+            {canBook && <button type="button" aria-pressed={activeTab === "batch"}
+              onClick={() => setActiveTab("batch")} className={`rounded-xl px-4 py-2 text-xs font-semibold ${activeTab === "batch" ? "bg-white text-slate-950" : "text-slate-300"}`}>
+              Bulk dispatch
+            </button>}
             <button
               type="button"
+              disabled={batchBusy} aria-pressed={activeTab === "transporters"}
               onClick={() => setActiveTab("transporters")}
               className={`rounded-xl px-4 py-2 text-xs font-semibold transition ${
                 activeTab === "transporters" ? "bg-white text-slate-950 shadow" : "text-slate-400 hover:text-white"
               }`}
             >
-              🏢 Carriers ({transporters.length})
+              Carriers ({transporters.length})
             </button>
           </div>
 
@@ -265,71 +271,17 @@ export default function ShipmentsPage() {
         </div>
       </div>
 
-      {/* KPI Overview Ribbon */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
-          <div className="text-xs text-slate-400">In-Transit Active</div>
-          <div className="mt-1 text-2xl font-bold text-amber-400">
-            {statsData?.pendingDeliveries ?? 0}
-          </div>
-          <div className="text-[11px] text-slate-500">Live on road</div>
-        </div>
-
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
-          <div className="text-xs text-slate-400">🛵 Porter Trips</div>
-          <div className="mt-1 text-2xl font-bold text-cyan-300">
-            {porterCount}
-          </div>
-          <div className="text-[11px] text-slate-500">Hyperlocal runs</div>
-        </div>
-
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
-          <div className="text-xs text-slate-400">📦 Delhivery Parcels</div>
-          <div className="mt-1 text-2xl font-bold text-rose-300">
-            {delhiveryCount}
-          </div>
-          <div className="text-[11px] text-slate-500">Express / Surface</div>
-        </div>
-
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
-          <div className="text-xs text-slate-400">⚡ DTDC / DMRC</div>
-          <div className="mt-1 text-2xl font-bold text-violet-300">
-            {dtdcCount + dmrcCount}
-          </div>
-          <div className="text-[11px] text-slate-500">Cargo & Metro Hubs</div>
-        </div>
-
-        <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
-          <div className="text-xs text-slate-400">✅ Delivered Total</div>
-          <div className="mt-1 text-2xl font-bold text-emerald-400">
-            {statsData?.deliveredCount ?? 0}
-          </div>
-          <div className="text-[11px] text-slate-500">POD verified</div>
-        </div>
-      </div>
-
+      {activeTab === "batch" && canBook && <ShipmentBatchPanel key={accountKey} accountId={accountKey} onBusy={setBatchBusy} />}
       {/* TAB 1: SHIPMENTS & LOGISTICS FEED */}
       {activeTab === "shipments" && (
         <div className="space-y-4">
-          {/* Carrier Pills Filter Navigation */}
-          <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-            {CARRIER_TABS.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() => setCarrierFilter(c.id)}
-                className={`flex items-center gap-2 whitespace-nowrap rounded-xl border px-3.5 py-2 text-xs font-semibold transition ${
-                  carrierFilter === c.id
-                    ? "border-amber-400/40 bg-amber-400/20 text-amber-200 shadow-sm"
-                    : "border-white/10 bg-slate-900/40 text-slate-400 hover:border-white/20 hover:text-white"
-                }`}
-              >
-                <span>{c.icon}</span>
-                <span>{c.label}</span>
-              </button>
-            ))}
-          </div>
-
+          <nav aria-label="Shipment queues" className="flex flex-wrap gap-2">
+            {QUEUES.map(([id, label]) => <button key={id} type="button" aria-pressed={queue === id}
+              onClick={() => { setQueue(id); setPage(1); }}
+              className={`rounded-lg border px-3 py-2 text-sm ${queue === id ? "border-amber-400 bg-amber-400/10 text-amber-200" : "border-white/15 text-slate-300"}`}>
+              {label}
+            </button>)}
+          </nav>
           {/* Search & Status Filter Bar */}
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
             <div className="flex flex-1 items-center gap-3 min-w-[240px]">
@@ -337,12 +289,13 @@ export default function ShipmentsPage() {
               <input
                 type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Search shipments"
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 placeholder="Search reference, customer, driver, vehicle no, or AWB..."
                 className="w-full bg-transparent text-sm text-white placeholder-slate-500 outline-none"
               />
               {search && (
-                <button type="button" onClick={() => setSearch("")} className="text-xs text-slate-400 hover:text-white">
+                <button type="button" onClick={() => { setSearch(""); setPage(1); }} className="text-xs text-slate-400 hover:text-white">
                   Clear
                 </button>
               )}
@@ -350,20 +303,19 @@ export default function ShipmentsPage() {
 
             <div className="flex items-center gap-3">
               <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-xs font-medium text-slate-200 outline-none focus:border-amber-400"
-              >
-                <option value="ALL">All Delivery Statuses</option>
-                {Object.keys(STATUS_CONFIG).map((s) => (
-                  <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
-                ))}
+                aria-label="Filter carrier" value={carrierFilter}
+                onChange={e => { setCarrierFilter(e.target.value); setPage(1); }}
+                className="rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-200">
+                {CARRIER_TABS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                <option value="SHIPROCKET">Shiprocket</option>
               </select>
             </div>
           </div>
 
           {loadingShipments ? (
-            <div className="p-12 text-center text-slate-400">Loading live logistics data…</div>
+            <div className="p-12 text-center text-slate-400">Loading shipments…</div>
+          ) : listError ? (
+            <div role="alert" className="p-4 text-rose-300">Could not load shipments. <button className="underline" onClick={() => refetch()}>Retry</button></div>
           ) : (
             <div className="overflow-x-auto rounded-3xl border border-white/10 bg-slate-900/40 backdrop-blur-xl">
               <table className="min-w-full divide-y divide-white/10 text-left text-sm">
@@ -371,7 +323,7 @@ export default function ShipmentsPage() {
                   <tr>
                     <th className="px-6 py-4">Reference & Cargo</th>
                     <th className="px-6 py-4">Consignee & Destination</th>
-                    <th className="px-6 py-4">Carrier & Transport Telemetry</th>
+                    <th className="px-6 py-4">Carrier & tracking</th>
                     <th className="px-6 py-4">Warranty / Quality</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4 text-right">Actions</th>
@@ -416,11 +368,11 @@ export default function ShipmentsPage() {
                             {s.customerName && s.customerName !== s.companyName ? `Attn: ${s.customerName}` : ""}
                           </div>
                           <div className="text-[11px] text-slate-500">
-                            {s.city ? `${s.city}, ${s.state || ""}` : "Destination on file"}
+                            {[s.originWarehouse, [s.city, s.state].filter(Boolean).join(", ")].filter(Boolean).join(" → ")}
                           </div>
                         </td>
 
-                        {/* 3. Carrier & Transport Telemetry */}
+                        {/* 3. Carrier & tracking */}
                         <td className="px-6 py-4">
                           {isPorter ? (
                             <div className="space-y-1">
@@ -506,6 +458,7 @@ export default function ShipmentsPage() {
                           >
                             {STATUS_CONFIG[s.status]?.label || s.status}
                           </span>
+                          {s.expectedDeliveryDate && <div className="mt-1 text-xs text-slate-400">Due {new Date(s.expectedDeliveryDate).toLocaleDateString()}</div>}
                           {s.receivedBy && (
                             <div className="text-[10px] text-slate-400 mt-1 font-medium">
                               Rec: {s.receivedBy}
@@ -515,6 +468,18 @@ export default function ShipmentsPage() {
 
                         {/* 6. Actions */}
                         <td className="px-6 py-4 text-right">
+                          {s.carrierType === "SHIPROCKET" && <div className="mb-2 space-y-1 text-xs">
+                            {s.carrierBooking?.processing ? <p role="status">Awaiting confirmation. Check Shiprocket before repeating this step.</p>
+                              : s.carrierBooking?.stage === "COMPLETE" ? <p>Pickup scheduled {s.carrierBooking.pickupDate}</p>
+                              : canBook && s.type === "OUT" && ["PENDING", "DISPATCHED"].includes(s.status) && (!s.awb || s.carrierBooking?.stage) &&
+                                <button type="button" disabled={booking.isPending}
+                                  className="rounded-lg border border-sky-400/40 px-3 py-2 text-sky-200 disabled:opacity-50"
+                                  onClick={() => booking.mutate({ shipmentId: s._id, step: s.carrierBooking?.stage || "ORDER" })}>
+                                  {{ ORDER: "Book with Shiprocket", AWB: "Assign carrier AWB", LABEL: "Generate label", PICKUP: "Schedule pickup" }[s.carrierBooking?.stage || "ORDER"]}
+                                </button>}
+                            {s.labelUrl?.startsWith("https://") && <a className="block underline" target="_blank" rel="noreferrer" href={s.labelUrl}>Open printable label</a>}
+                            {booking.variables?.shipmentId === s._id && booking.error && <p role="alert" className="text-rose-300">{booking.error.message}</p>}
+                          </div>}
                           <div className="flex items-center justify-end gap-2">
                             <button
                               type="button"
@@ -600,16 +565,20 @@ export default function ShipmentsPage() {
                   {shipments.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-6 py-16 text-center text-slate-400">
-                        <div className="text-3xl mb-2">🚚</div>
-                        <div className="font-semibold text-white">No delivery records found</div>
-                        <p className="text-xs text-slate-500 mt-1">
-                          Click <strong className="text-amber-300">New Delivery Dispatch</strong> to book a Porter truck or generate courier waybills.
-                        </p>
+                        No shipments match this view.
                       </td>
                     </tr>
                   )}
                 </tbody>
               </table>
+              {shipmentsData && <nav aria-label="Shipment pages" className="flex items-center justify-between border-t border-white/10 px-4 py-3 text-sm">
+                <span>{shipmentsData.pagination.total} matching records</span>
+                <div className="flex items-center gap-3">
+                  <button disabled={page === 1} onClick={() => setPage(page - 1)} className="disabled:opacity-40">Previous</button>
+                  <span>Page {page}</span>
+                  <button disabled={page >= shipmentsData.pagination.pages} onClick={() => setPage(page + 1)} className="disabled:opacity-40">Next</button>
+                </div>
+              </nav>}
             </div>
           )}
         </div>

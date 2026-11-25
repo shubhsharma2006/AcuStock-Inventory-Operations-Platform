@@ -49,8 +49,8 @@ export function CarrierRateComparator({ fromPincode, toPincode, weightKg = 2, on
       apiFetch("/logistics/rates", {
         method: "POST",
         body: JSON.stringify({
-          fromPincode: fromPincode || "400001",
-          toPincode: toPincode || "110001",
+          fromPincode,
+          toPincode,
           actualWeightKg: weightKg,
           policy,
         }),
@@ -65,7 +65,7 @@ export function CarrierRateComparator({ fromPincode, toPincode, weightKg = 2, on
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
         <div>
           <div className="flex items-center gap-1.5 font-bold text-white">
-            <span>⚡ Multi-Carrier Smart Rate Engine</span>
+            <span>Estimated shipping rates</span>
             <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-mono text-sky-300">
               Bigship + Couriers
             </span>
@@ -95,11 +95,11 @@ export function CarrierRateComparator({ fromPincode, toPincode, weightKg = 2, on
       {isLoading ? (
         <div className="py-6 text-center text-slate-400">
           <div className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-amber-400 border-t-transparent" />
-          <p className="mt-1 text-[11px]">Evaluating real-time carrier quotes…</p>
+          <p className="mt-1 text-[11px]">Calculating rate estimates…</p>
         </div>
       ) : error ? (
         <div className="py-3 text-center text-rose-300">
-          Could not fetch live carrier quotes. You can still enter tracking details manually.
+          Could not calculate estimates. You can still enter tracking details manually.
         </div>
       ) : quotes.length === 0 ? (
         <div className="py-3 text-center text-slate-400">

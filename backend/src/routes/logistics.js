@@ -1,3 +1,6 @@
+const logger = require('../utils/logger');
+const Shipment = require('../models/Shipment');
+const courierService = require('../services/courier/ShiprocketService');
 const express = require('express');
 const { requireAuth, requireRole, requireTenantId, validateObjectId, normalizePaginationQuery } = require('../middleware/auth');
 const Transporter = require('../models/Transporter');
@@ -68,6 +71,51 @@ router.get('/', requireAuth, async (req, res) => {
  * GET /api/logistics/:id
  * Get a single transporter by ID
  */
+function dispatchScope(req) {
+  const filter = { tenantId: req.tenantId, type: 'OUT', carrierType: 'SHIPROCKET',
+    status: { $in: ['PENDING', 'DISPATCHED'] } };
+  if (req.user.role === 'MANAGER') filter.createdBy = req.user._id;
+  return filter;
+}
+
+router.get('/dispatch-warehouses', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  try {
+    const origins = await Shipment.distinct('originWarehouse', dispatchScope(req));
+    res.json({ warehouses: origins.filter(name => typeof name === 'string' && name.trim()).sort() });
+  } catch {
+    res.status(500).json({ message: 'Could not load pickup warehouses.' });
+  }
+});
+
+router.post('/batch-documents', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  const { shipmentIds, warehouse, document } = req.body || {};
+  if (!Array.isArray(shipmentIds) || !shipmentIds.length || shipmentIds.length > 50 ||
+      !shipmentIds.every(id => typeof id === 'string' && /^[a-f0-9]{24}$/i.test(id)) ||
+      new Set(shipmentIds.map(id => id.toLowerCase())).size !== shipmentIds.length ||
+      typeof warehouse !== 'string' || !warehouse.trim() || !['labels', 'manifest'].includes(document)) {
+    return res.status(400).json({ message: 'Select up to 50 distinct shipments from one warehouse.' });
+  }
+  try {
+    const records = await Shipment.find({ ...dispatchScope(req), originWarehouse: warehouse.trim(),
+      _id: { $in: shipmentIds } }).select('awb carrierBooking');
+    const stages = document === 'manifest' ? ['COMPLETE'] : ['PICKUP', 'COMPLETE'];
+    if (records.length !== shipmentIds.length || records.some(s => !s.awb || !s.carrierBooking?.shipmentId ||
+        s.carrierBooking.processing || !stages.includes(s.carrierBooking.stage))) {
+      return res.status(409).json({ message: 'Refresh the selection and check each shipment’s booking stage.' });
+    }
+    const token = await courierService.getAuthToken();
+    if (!token) return res.status(503).json({ message: 'Shiprocket authentication is unavailable.' });
+    const isManifest = document === 'manifest';
+    const result = await courierService.post(isManifest ? '/manifests/generate' : '/courier/generate/label', token,
+      { shipment_id: records.map(s => s.carrierBooking.shipmentId) });
+    const url = isManifest ? result.manifest_url : result.label_url;
+    if (typeof url !== 'string' || new URL(url).protocol !== 'https:') throw new Error('Missing carrier document');
+    res.json({ url });
+  } catch {
+    res.status(502).json({ message: 'The document could not be generated. Refresh and try again.' });
+  }
+});
+
 router.get('/:id', requireAuth, validateObjectId, async (req, res) => {
   try {
     const filter = {
@@ -310,29 +358,49 @@ router.post('/rates', requireAuth, async (req, res) => {
  * POST /api/logistics/book
  * Book shipment and generate AWB via the selected carrier provider
  */
-router.post('/book', requireAuth, async (req, res) => {
+router.post('/book', requireAuth, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
+  const { shipmentId, step, provider } = req.body || {};
+  if (provider !== 'SHIPROCKET' || !/^[a-f0-9]{24}$/i.test(String(shipmentId)) ||
+      !['ORDER', 'AWB', 'LABEL', 'PICKUP'].includes(step)) {
+    return res.status(400).json({ message: 'Choose a saved Shiprocket shipment and a valid booking step.' });
+  }
+  const filter = { ...dispatchScope(req), _id: shipmentId };
   try {
-    const { provider = 'BIGSHIP', carrierCode, carrierName, transferId, orderId, ...orderData } = req.body || {};
-    const carrierProvider = allocationEngine.getProvider(provider) || allocationEngine.getProvider('BIGSHIP');
-
-    if (!carrierProvider) {
-      return res.status(400).json({ message: `Carrier provider ${provider} not available.` });
+    const token = await courierService.getAuthToken();
+    if (!token) return res.status(503).json({ message: 'Shiprocket authentication is unavailable.' });
+    const expected = { ...filter, 'carrierBooking.processing': { $ne: true } };
+    if (step === 'ORDER') {
+      expected['carrierBooking.stage'] = null;
+      expected.awb = { $in: [null, ''] };
+    } else {
+      expected['carrierBooking.stage'] = step;
     }
-
-    const bookingResult = await carrierProvider.createShipment({
-      ...orderData,
-      id: transferId || orderId,
-      carrierCode,
-      carrierName
+    const shipment = await Shipment.findOneAndUpdate(expected, {
+      $set: { 'carrierBooking.stage': step, 'carrierBooking.processing': true }
+    }, { new: true });
+    if (!shipment) return res.status(409).json({ message: 'Booking state has changed. Refresh the shipment before continuing.' });
+    // An uncertain carrier response must be reconciled before repeating a billable action.
+    let order;
+    if (step === 'ORDER') {
+      try {
+        order = courierService.orderPayload(shipment);
+      } catch (error) {
+        await Shipment.updateOne({ _id: shipmentId, tenantId: req.tenantId, 'carrierBooking.stage': step },
+          { $unset: { carrierBooking: 1 } });
+        return res.status(400).json({ message: error.message });
+      }
+    }
+    const fields = await courierService.performStep(step, shipment, token, order);
+    const next = { ORDER: 'AWB', AWB: 'LABEL', LABEL: 'PICKUP', PICKUP: 'COMPLETE' }[step];
+    const saved = await Shipment.updateOne({ _id: shipmentId, tenantId: req.tenantId,
+      'carrierBooking.stage': step, 'carrierBooking.processing': true }, {
+      $set: { ...fields, 'carrierBooking.stage': next, 'carrierBooking.processing': false }
     });
-
-    res.json({
-      success: true,
-      shipment: bookingResult
-    });
-  } catch (err) {
-    console.error('Error booking shipment:', err);
-    res.status(500).json({ message: 'Failed to book shipment: ' + err.message });
+    if (!saved.modifiedCount) throw new Error('Booking checkpoint unavailable');
+    return res.json({ success: true, next });
+  } catch (error) {
+    logger.warn('Shiprocket booking step could not be confirmed', { shipmentId, step, message: error.message });
+    return res.status(502).json({ message: 'Booking could not be confirmed. Check the shipment in Shiprocket before retrying.' });
   }
 });
 

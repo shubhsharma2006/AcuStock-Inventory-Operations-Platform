@@ -143,7 +143,14 @@ function buildNavGroups(
         { label: "Deals & Pipeline", href: `${basePath}/crm`, icon: "crm" },
         { label: "Sales Orders", href: `${basePath}/sales-orders`, icon: "so" },
         { label: "Invoices & AR", href: `${basePath}/invoices`, icon: "billing" },
-        { label: "Shipments & Logistics", href: `${basePath}/shipments`, icon: "po" },
+      ],
+    },
+    {
+      // These modules retain their existing section-level permission settings.
+      sectionId: "CRM_SALES",
+      label: "Logistics",
+      items: [
+        { label: "Shipment work queue", href: `${basePath}/shipments`, icon: "po" },
         { label: "B2B Heavy Freight & E-Way", href: `${basePath}/heavy-freight`, icon: "po" },
         { label: "Weight Disputes", href: `${basePath}/weight-discrepancies`, icon: "adjustments" },
         { label: "COD Remittance & Early Payout", href: `${basePath}/cod-remittance`, icon: "billing" },

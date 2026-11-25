@@ -193,6 +193,12 @@ const shipmentSchema = new mongoose.Schema({
     trim: true,
     maxlength: 1000
   },
+  carrierBooking: {
+    stage: { type: String, enum: ['ORDER', 'AWB', 'LABEL', 'PICKUP', 'COMPLETE'] },
+    processing: Boolean,
+    shipmentId: String,
+    pickupDate: String
+  },
   labelUrl: {
     type: String,
     trim: true

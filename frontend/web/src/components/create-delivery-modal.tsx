@@ -43,6 +43,7 @@ type TransporterItem = {
 
 const CARRIER_OPTIONS = [
   { id: "PORTER", name: "Porter", tag: "Hyperlocal On-Demand", icon: "🛵", color: "from-cyan-500/20 to-blue-600/20 border-cyan-400/40 text-cyan-200" },
+  { id: "SHIPROCKET", name: "Shiprocket", tag: "Book a courier pickup", icon: "📦", color: "border-sky-400/40 text-sky-200" },
   { id: "DELHIVERY", name: "Delhivery", tag: "Surface & Air Express", icon: "📦", color: "from-rose-500/20 to-orange-600/20 border-rose-400/40 text-rose-200" },
   { id: "DTDC", name: "DTDC Express", tag: "Domestic & Plus Cargo", icon: "⚡", color: "from-amber-500/20 to-yellow-600/20 border-amber-400/40 text-amber-200" },
   { id: "DMRC", name: "DMRC Transit", tag: "Metro Station Hub & Runner", icon: "🚇", color: "from-violet-500/20 to-purple-600/20 border-violet-400/40 text-violet-200" },
@@ -124,7 +125,7 @@ export function CreateDeliveryModal({
   const [declaredValue, setDeclaredValue] = useState("");
 
   // Form State - Step 2: Company & Consignee Destination
-  const [originWarehouse, setOriginWarehouse] = useState("Main Warehouse - Central Hub");
+  const [originWarehouse, setOriginWarehouse] = useState("");
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [companySearch, setCompanySearch] = useState("");
   const [companyName, setCompanyName] = useState("");
@@ -156,6 +157,7 @@ export function CreateDeliveryModal({
   const [transporterId, setTransporterId] = useState<string>("");
   const [courierName, setCourierName] = useState("Porter");
   const [deliveryType, setDeliveryType] = useState<"Prepaid" | "COD" | "ToPay">("Prepaid");
+  const [prepaidAmount, setPrepaidAmount] = useState("");
   const [codAmount, setCodAmount] = useState("");
   const [courierCharges, setCourierCharges] = useState("");
   const [dispatchType, setDispatchType] = useState<"Standard" | "Express" | "Same Day">("Standard");
@@ -224,6 +226,7 @@ export function CreateDeliveryModal({
 
       const payload = {
         productId: selectedProductId,
+        productName: selectedProduct?.name,
         model: model || selectedProduct?.shortName || "",
         quantity: Number(quantity),
         serialNumbers: serials,
@@ -234,7 +237,7 @@ export function CreateDeliveryModal({
         declaredValue: declaredValue ? Number(declaredValue) : undefined,
 
         // Consignee & Warehouse
-        originWarehouse,
+        originWarehouse: originWarehouse.trim() || undefined,
         companyName,
         customerName: customerName || companyName,
         phone,
@@ -259,8 +262,9 @@ export function CreateDeliveryModal({
         courier: courierName,
         transporterId: transporterId || undefined,
         dispatchType,
-        dispatchDate: dispatchDate || new Date().toISOString(),
+        dispatchDate: carrierType === "SHIPROCKET" ? undefined : dispatchDate || new Date().toISOString(),
         deliveryType,
+        prepaidAmount: deliveryType === "Prepaid" && prepaidAmount ? Number(prepaidAmount) : undefined,
         codAmount: deliveryType === "COD" && codAmount ? Number(codAmount) : undefined,
         courierCharges: courierCharges ? Number(courierCharges) : undefined,
         remarks: remarks || undefined,
@@ -289,16 +293,16 @@ export function CreateDeliveryModal({
               }
             : undefined,
 
-        awb: carrierType === "PORTER" ? (porterVehicleNumber || "PORTER-LOCAL") : awb || undefined,
+        awb: carrierType === "PORTER" ? (porterVehicleNumber || "PORTER-LOCAL") : carrierType === "SHIPROCKET" ? undefined : awb || undefined,
       };
 
-      const res = await apiFetch<any>("/shipments", {
+      const res = await apiFetch<{ shipment: { _id: string } }>("/shipments", {
         method: "POST",
         body: JSON.stringify(payload),
       });
 
-      if (res && res._id) {
-        onSuccess(res._id);
+      if (res.shipment?._id) {
+        onSuccess(res.shipment._id);
         onClose();
       } else {
         throw new Error("Shipment created but no reference returned");
@@ -516,6 +520,7 @@ export function CreateDeliveryModal({
               </label>
               <input
                 type="text"
+                placeholder="Registered pickup location name"
                 value={originWarehouse}
                 onChange={(e) => setOriginWarehouse(e.target.value)}
                 className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm text-white outline-none"
@@ -875,12 +880,13 @@ export function CreateDeliveryModal({
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-300">
-                      AWB / Consignment No. <span className="text-rose-400">*</span>
+                      AWB / Consignment No.
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g. 142981048123"
-                      value={awb}
+                      placeholder={carrierType === "SHIPROCKET" ? "Assigned after booking" : "Carrier-issued number"}
+                      disabled={carrierType === "SHIPROCKET"}
+                      value={carrierType === "SHIPROCKET" ? "" : awb}
                       onChange={(e) => setAwb(e.target.value.toUpperCase())}
                       className="mt-1 w-full rounded-xl border border-white/10 bg-slate-950/70 px-4 py-2 text-sm text-white outline-none focus:border-amber-400"
                     />
@@ -960,6 +966,10 @@ export function CreateDeliveryModal({
                 </select>
               </div>
 
+              {carrierType === "SHIPROCKET" && deliveryType === "Prepaid" && <label className="text-xs text-slate-300">Prepaid order value (₹)
+                <input type="number" min="0.01" step="0.01" value={prepaidAmount} onChange={e => setPrepaidAmount(e.target.value)}
+                  className="mt-1 block w-full rounded-xl border border-white/10 bg-slate-950 p-2" />
+              </label>}
               {deliveryType === "COD" && (
                 <div>
                   <label className="block text-xs font-semibold text-amber-300">
@@ -1056,7 +1066,7 @@ export function CreateDeliveryModal({
               ) : (
                 <div className="rounded-xl border border-amber-400/20 bg-amber-950/30 p-3 text-xs text-amber-200 space-y-1">
                   <div className="font-bold">📦 Waybill Tracking:</div>
-                  <div>AWB: <strong className="font-mono text-white">{awb || "Auto-assigned"}</strong> · Mode: <strong>{shippingMode}</strong></div>
+                  <div>AWB: <strong className="font-mono text-white">{carrierType === "SHIPROCKET" ? "Awaiting carrier booking" : awb || "Unassigned"}</strong> · Mode: <strong>{shippingMode}</strong></div>
                   {eWayBill && <div>E-Way Bill: <strong className="font-mono">{eWayBill}</strong></div>}
                 </div>
               )}

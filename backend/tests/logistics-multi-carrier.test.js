@@ -90,15 +90,8 @@ test('Phase 1: Multi-Carrier Logistics & Rate Allocation Engine', async (t) => {
     assert.ok(airQuote.expectedDays <= surfaceQuote.expectedDays, 'Air express must have lower or equal EDD');
     assert.ok(airQuote.rate > surfaceQuote.rate, 'Air express must have higher rate than surface');
 
-    // Shipment booking verification
-    const booking = await bigship.createShipment({
-      referenceNumber: 'TRF-TEST-BIGSHIP-001',
-      carrierName: 'Bigship Delhivery Surface'
-    });
-
-    assert.equal(booking.provider, 'BIGSHIP');
-    assert.ok(booking.awb.startsWith('BSHP-'));
-    assert.ok(booking.trackingUrl.includes(booking.awb));
+    // This adapter only supplies estimates until a carrier booking integration is configured.
+    await assert.rejects(bigship.createShipment({}), /createShipment/);
   });
 
   await t.test('4. CarrierAllocationEngine: Ranks quotes by policy (CHEAPEST, FASTEST, BEST_RATED)', async () => {

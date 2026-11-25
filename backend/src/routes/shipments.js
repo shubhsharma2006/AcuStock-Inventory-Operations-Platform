@@ -15,6 +15,28 @@ const shiprocketService = require('../services/courier/ShiprocketService');
 const router = express.Router();
 router.use(requireTenantId);
 
+const openBooking = ['PENDING', 'DISPATCHED'];
+const workQueues = {
+  dispatch: { type: 'OUT', carrierType: 'SHIPROCKET', status: { $in: openBooking } },
+  ready: {
+    type: 'OUT', 'carrierBooking.processing': { $ne: true }, 'carrierBooking.stage': { $ne: 'COMPLETE' },
+    $or: [{ status: 'PENDING' }, { status: 'DISPATCHED', carrierType: 'SHIPROCKET' }]
+  },
+  pickup: {
+    type: 'OUT', status: { $in: openBooking }, 'carrierBooking.stage': 'COMPLETE',
+    'carrierBooking.processing': { $ne: true }
+  },
+  transit: {
+    type: 'OUT', $or: [{ status: { $in: ['IN_TRANSIT', 'OUT_FOR_DELIVERY'] } },
+      { status: 'DISPATCHED', carrierType: { $ne: 'SHIPROCKET' }, 'carrierBooking.stage': { $ne: 'COMPLETE' },
+        'carrierBooking.processing': { $ne: true } }]
+  },
+  attention: {
+    type: 'OUT', $or: [{ status: 'NDR' }, { status: { $in: openBooking }, 'carrierBooking.processing': true }]
+  },
+  returns: { type: 'OUT', status: { $in: ['RTO_INITIATED', 'RTO_DELIVERED', 'RETURNED'] } }
+};
+
 // GET /api/shipments - Get all shipments (with filters)
 router.get('/', requireAuth, async (req, res) => {
   try {
@@ -44,6 +66,12 @@ router.get('/', requireAuth, async (req, res) => {
       query.carrierType = carrierType.toUpperCase();
     }
     
+    if (req.query.originWarehouse !== undefined) {
+      if (typeof req.query.originWarehouse !== 'string' || !req.query.originWarehouse.trim()) {
+        return res.status(400).json({ message: 'Select a pickup warehouse.' });
+      }
+      query.originWarehouse = req.query.originWarehouse.trim();
+    }
     if (search) {
       const s = escapeRegex(search);
       query.$or = [
@@ -57,26 +85,34 @@ router.get('/', requireAuth, async (req, res) => {
       ];
     }
     
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    if (req.query.queue !== undefined) {
+      if (typeof req.query.queue !== 'string' || !Object.hasOwn(workQueues, req.query.queue)) {
+        return res.status(400).json({ message: 'Unknown shipment queue' });
+      }
+      query.$and = [workQueues[req.query.queue]];
+    }
+    const pageNumber = Math.max(1, parseInt(page, 10) || 1);
+    const pageSize = Math.max(1, Math.min(200, parseInt(limit, 10) || 20));
+    const skip = (pageNumber - 1) * pageSize;
     
     const [shipments, total] = await Promise.all([
       Shipment.find(query)
         .populate('productId', 'name shortName')
         .populate('createdBy', 'name')
         .populate('transporterId', 'name code trackingUrlPattern')
-        .sort({ createdAt: -1 })
+        .sort({ createdAt: -1, _id: -1 })
         .skip(skip)
-        .limit(parseInt(limit)),
+        .limit(pageSize),
       Shipment.countDocuments(query)
     ]);
     
     res.json({
       shipments,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNumber,
+        limit: pageSize,
         total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / pageSize)
       }
     });
   } catch (error) {
@@ -304,8 +340,6 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
     // Auto-compute trackingUrl from transporter tracking pattern
     let finalCourier = courier;
     let finalTrackingUrl = trackingUrl || null;
-    let finalAwb = awb;
-    let finalLabelUrl = null;
 
     if (transporterId) {
       const tFilter = { _id: transporterId, tenantId: req.tenantId };
@@ -315,36 +349,6 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
         if (!finalTrackingUrl && carrier.trackingUrlPattern && awb) {
           finalTrackingUrl = carrier.trackingUrlPattern.replace(/\{awb\}|\{trackingNumber\}|\{tracking_number\}/gi, awb.trim());
         }
-      }
-    }
-
-    // Automated courier integration (Shiprocket / Delhivery)
-    if (!finalAwb && carrierType !== 'PORTER' && carrierType !== 'IN_HOUSE') {
-      try {
-        const courierResult = await shiprocketService.createAndAssignShipment({
-          orderId: `SHP-${Date.now().toString().slice(-6)}`,
-          customerName,
-          phone,
-          email,
-          address,
-          city,
-          state,
-          pincode,
-          productName: item.name,
-          sku: item.sku,
-          quantity,
-          price: item.price || item.salesPrice || 100,
-          weight,
-          carrierType,
-          deliveryType
-        });
-        if (courierResult) {
-          finalAwb = courierResult.awb;
-          finalCourier = finalCourier || courierResult.courierName;
-          finalLabelUrl = courierResult.labelUrl;
-        }
-      } catch (cErr) {
-        logger.warn('Automated courier booking failed, using fallback:', cErr.message);
       }
     }
 
@@ -373,8 +377,8 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
       originWarehouse,
       destinationGstin,
       trackingUrl: finalTrackingUrl,
-      awb: finalAwb || awb,
-      labelUrl: finalLabelUrl,
+      awb,
+
       dispatchDate: dispatchDate ? new Date(dispatchDate) : null,
       deliveryType,
       codAmount: deliveryType === 'COD' ? codAmount : null,
@@ -392,6 +396,15 @@ router.post('/', requireAuth, requireRole(['ADMIN', 'MANAGER']), validateRequest
       tenantId: req.tenantId,
     });
     
+    if (carrierType === 'SHIPROCKET') {
+      try {
+        if (awb || !req.body.originWarehouse?.trim()) throw new Error('Enter the registered Shiprocket pickup location and leave AWB empty.');
+        shiprocketService.orderPayload(shipment);
+      } catch (error) {
+        await session.abortTransaction();
+        return res.status(400).json({ message: error.message });
+      }
+    }
     await shipment.save({ session });
     
     // Create stock ledger entry for OUT

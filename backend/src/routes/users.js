@@ -133,8 +133,16 @@ router.put('/:id', requireAuth, validateObjectId, requireRole(['ADMIN', 'MANAGER
           return res.status(404).json({ message: 'User not found' });
         }
 
+    // Platform ownership is granted through setup or the ownership transfer flow.
+    if (role === 'SUPER_ADMIN' && userToUpdate.role !== 'SUPER_ADMIN') {
+      return res.status(403).json({
+        message: 'Platform ownership cannot be granted through user management',
+        code: 'SUPER_ADMIN_PROTECTED'
+      });
+    }
+
     // ⚠️ SUPER_ADMIN PROTECTION: Cannot be touched by anyone except themselves (name/email only)
-    if (userToUpdate.isSuperAdmin) {
+    if (userToUpdate.isSuperAdmin || userToUpdate.role === 'SUPER_ADMIN') {
       if (req.user._id.toString() !== userToUpdate._id.toString()) {
         return res.status(403).json({
           message: 'Super Admin account cannot be modified by other users',
@@ -326,7 +334,7 @@ router.delete('/:id', requireAuth, validateObjectId, requireRole(['ADMIN']), asy
         }
 
         // ⚠️ SUPER_ADMIN PROTECTION: Cannot ever be deleted
-        if (user.isSuperAdmin) {
+        if (user.isSuperAdmin || user.role === 'SUPER_ADMIN') {
           return res.status(403).json({
             message: 'Super Admin account cannot be deleted',
             code: 'SUPER_ADMIN_PROTECTED'
@@ -414,7 +422,7 @@ router.put('/:id/status', requireAuth, validateObjectId, requireRole(['ADMIN', '
         }
 
         // SUPER_ADMIN protection — cannot be deactivated ever
-        if (userToUpdate.isSuperAdmin) {
+        if (userToUpdate.isSuperAdmin || userToUpdate.role === 'SUPER_ADMIN') {
             return res.status(403).json({ message: 'Super Admin account cannot be deactivated', code: 'SUPER_ADMIN_PROTECTED' });
         }
 

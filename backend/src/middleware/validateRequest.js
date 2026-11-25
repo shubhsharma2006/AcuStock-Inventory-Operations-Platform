@@ -73,7 +73,7 @@ const schemas = {
       customerName: { required: true,  check: v => isNonEmptyString(v, 200), message: 'customerName is required (max 200 chars)' },
       phone:        { required: true,  check: v => isNonEmptyString(v, 25),  message: 'phone is required (max 25 chars)' },
       deliveryType: { required: true,  check: v => ['Prepaid', 'COD', 'ToPay'].includes(v), message: 'deliveryType must be Prepaid, COD, or ToPay' },
-      carrierType:  { required: false, check: v => ['PORTER','DELHIVERY','DTDC','BLUEDART','DMRC','IN_HOUSE','OTHER'].includes(v), message: 'Invalid carrierType' },
+      carrierType:  { required: false, check: v => ['PORTER','DELHIVERY','DTDC','BLUEDART','SHIPROCKET','DMRC','IN_HOUSE','OTHER'].includes(v), message: 'Invalid carrierType' },
       boxes:        { required: false, check: v => isIntInRange(v, 1, 10_000), message: 'boxes must be between 1 and 10,000' }
     }
   },
