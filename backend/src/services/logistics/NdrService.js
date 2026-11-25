@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Shipment = require('../../models/Shipment');
 const TrackingEvent = require('../../models/TrackingEvent');
 const allocationEngine = require('./CarrierAllocationEngine');
+const LogisticsNotificationService = require('./LogisticsNotificationService');
 const logger = require('../../utils/logger');
 
 /**
@@ -127,14 +128,19 @@ class NdrService {
 
     // Formulate multi-channel customer alert payload (WhatsApp / SMS)
     const alertPayload = {
-      recipientPhone: shipment.phone,
-      recipientName: shipment.customerName,
+      phone: shipment.phone,
+      customerName: shipment.customerName,
       awb: shipment.awb,
       reference: shipment.reference,
       reason: classified,
       trackingUrl: `/tracking/${encodeURIComponent(shipment.reference)}`,
       rtoCutoffHours: cutoffHours
     };
+
+    // Asynchronously dispatch WhatsApp/SMS alert
+    LogisticsNotificationService.sendNdrAlert(alertPayload).catch(err => {
+      logger.error(`Failed to dispatch NDR alert for AWB ${shipment.awb}:`, err.message);
+    });
 
     logger.info(`🚨 [NDR] Ingested failed delivery attempt for AWB ${shipment.awb} (${classified}). Notification queued for ${shipment.phone}`);
 

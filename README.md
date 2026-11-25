@@ -52,10 +52,10 @@ AcuStock is a **production-grade, multi-tenant Cloud ERP, Warehouse Management (
    - [6.23 AI Copilot, Invoice OCR & WhatsApp Automation](#623-ai-copilot-invoice-ocr--whatsapp-automation)
    - [6.24 Multi-Tenant SaaS Engine, Quotas & Enterprise Auth (SAML/OAuth)](#624-multi-tenant-saas-engine-quotas--enterprise-auth-samloauth)
    - [6.25 Security Hardening, Merkle Audit Chains & Resilience](#625-security-hardening-merkle-audit-chains--resilience)
-7. [API Reference (69 Route Endpoints)](#7-api-reference-69-route-endpoints)
+7. [API Reference (75 Route Endpoints)](#7-api-reference-75-route-endpoints)
 8. [RBAC — Roles & Permissions Matrix](#8-rbac--roles--permissions-matrix)
    - [8.1 Enterprise Module & Section Governance Control Plane](#81-enterprise-module--section-governance-control-plane)
-9. [Complete Test Suite Index (65 Test Suites)](#9-complete-test-suite-index-65-test-suites)
+9. [Complete Test Suite Index (74 Test Suites)](#9-complete-test-suite-index-74-test-suites)
 10. [Production Deployment & DevOps](#10-production-deployment--devops)
 11. [Indian Compliance & Statutory Standards](#11-indian-compliance--statutory-standards)
 12. [Developer Specifications & Operational Docs](#12-developer-specifications--operational-docs)
@@ -791,22 +791,44 @@ Frontend: /dashboard/[role]/manufacturing
 
 ---
 
-### 6.21 Indian Logistics & Real-Time Courier Integrations
+### 6.21 Enterprise Multi-Carrier Logistics, Cargo & Global Shipping Suite
 
-Pre-integrated logistics APIs for automated shipment dispatch, AWB generation, and milestone tracking.
+Comprehensive logistics infrastructure engineered for domestic parcel aggregation, B2B heavy cargo, and international cross-border exports:
 
-- **Integrated Couriers**:
-  - **Shiprocket**: Multi-carrier aggregation via `ShiprocketService.js`.
-  - **Delhivery**: Direct API for surface and express delivery.
-  - **Blue Dart**: B2B enterprise cargo bookings.
-  - **DTDC**: Pan-India domestic coverage.
-  - **Porter**: Intra-city on-demand local truck dispatch.
-- **Tracking Poller**: Automated background poller (`trackingPoller.js`) updates delivery milestones (`PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`).
+- **Multi-Carrier Dynamic Rate Calculator & Smart Allocation Engine**:
+  - Live quote evaluation across **Delhivery**, **Blue Dart**, and **DTDC Cargo**.
+  - Intelligent allocation policies: `CHEAPEST` (lowest cost routing), `FASTEST` (minimum transit ETA), and `BEST_RATED` (courier reliability and SLA score).
+  - Volumetric weight engine with Indian postal circle zone resolution (Intra-City, Intra-State, Metro-to-Metro, Rest of India, Special Destinations / J&K / North-East).
+- **White-Label Branded Tracking Microsite (`/tracking/[reference]`)**:
+  - Public tracking microsite with live milestone normalizer (`BOOKED`, `PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `NDR`).
+  - Tenant brand customization (logo, support contact, brand colors) and recipient PII privacy masking.
+- **Automated NDR (Non-Delivery Report) Control Tower & Re-attempt Engine (`/ndr-management`)**:
+  - Courier failure reason classifier (`CUSTOMER_UNAVAILABLE`, `INCORRECT_ADDRESS`, `CASH_NOT_READY`, `CUSTOMER_REFUSED`, `RESTRICTED_ENTRY`).
+  - Automated customer WhatsApp and SMS notifications with 1-click self-rescheduling deep-links.
+  - Operations control tower with 24h RTO cutoff timers and carrier action sync (`REATTEMPT`, `UPDATE_DETAILS`, `HOLD_HUB`, `RTO_IMMEDIATE`).
+- **B2B Heavy Freight, PTL/FTL Cargo Booking & Indian GST E-Way Bill (`/heavy-freight`)**:
+  - Part Truckload (PTL) and Full Truckload (FTL) cargo booking across commercial vehicles (`TATA_ACE`, `BOLERO_PICKUP`, `EICHER_14FT`, `TRUCK_19FT`, `TRAILER_32FT`).
+  - Rule 138(10) E-Way Bill Engine with statutory distance validity calculations (1 day per 200 km for regular cargo; 1 day per 20 km for Over Dimensional Cargo), Part-A / Part-B formulation, and auto-dispatch upon exceeding ₹50,000 threshold.
+- **Weight Discrepancy & Dispute Management Portal (`/weight-discrepancies`)**:
+  - Courier DWS (Dimension Weight Scanner) reconciliation with a 50g tolerance safeguard.
+  - 5-day auto-debit protection countdown allowing merchants to contest courier over-billing with digital evidence.
+- **Automated COD Remittance, Bank UTR Reconciliation & Early Settlement (`/cod-remittance`)**:
+  - Automated courier remittance advice parser with aging classifier (`ON_TIME`, `AGING`, `OVERDUE`).
+  - **T+1 Instant** (1.5% fee) and **T+2 Accelerated** (1.0% fee) early COD liquidity settlement directly to merchant bank accounts.
+- **Unified Multi-Carrier Logistics Wallet & Monthly Consolidated GST Invoicing (`/logistics-wallet`)**:
+  - Centralized prepaid/postpaid wallet ledger for all carrier freight deductions with automated low-balance auto-recharge triggers.
+  - Monthly consolidated GST tax invoice generator with **SAC 996511** (18% GST), enabling 100% Input Tax Credit (ITC) recovery for corporate finance.
+- **Cross-Border International Shipping & CSB-V Indian Customs Manifest (`/cross-border`)**:
+  - Air express shipping via **DHL Express**, **FedEx Priority**, **Aramex International**, and **UPS Worldwide**.
+  - IATA 5000 volumetric divisor engine, destination De Minimis safeguards (US $800, UK £135), and Incoterms (**DAP** vs. **DDP**).
+  - Indian Customs **Courier Shipping Bill - V (CSB-V)** manifest generation for commercial exports under the Foreign Trade Policy (FTP) with Exporter IEC, AD Code, and Commercial Invoice & Packing List downloads.
+- **Omnichannel WhatsApp & SMS Notification Gateway**:
+  - Automated delivery exception, dispatch, and out-for-delivery OTP alerts dispatched via Meta Cloud API with SMS fallback logging.
 
 ```
-Model: Shipment.js, ShippingLabel.js, TrackingEvent.js, Transporter.js
-Routes: /api/shipments, /api/tracking, /api/transporters
-Frontend: /dashboard/[role]/shipments
+Models: Shipment.js, ShippingLabel.js, TrackingEvent.js, LogisticsWallet.js, CodRemittance.js, WeightDiscrepancy.js, CrossBorderShipment.js
+Routes: /api/shipments, /api/tracking, /api/freight, /api/ndr, /api/weight-discrepancies, /api/cod-remittance, /api/logistics-wallet, /api/cross-border
+Frontend: /dashboard/[role]/shipments, /dashboard/[role]/heavy-freight, /dashboard/[role]/ndr-management, /dashboard/[role]/weight-discrepancies, /dashboard/[role]/cod-remittance, /dashboard/[role]/logistics-wallet, /dashboard/[role]/cross-border, /tracking/[reference]
 ```
 
 ---
@@ -928,7 +950,13 @@ X-Tenant-ID: <tenant_id>
 | `shipments.js` | `/api/shipments` | Carrier assignment, manifest generation, dispatch |
 | `tracking.js` | `/api/tracking` | Multi-carrier status webhooks, live fleet telemetry, on-demand Porter booking, and e-POD |
 | `transporters.js` | `/api/transporters` | Dedicated carrier fleet and driver management |
-| `logistics.js` | `/api/logistics` | Real-time courier rate comparison and booking |
+| `logistics.js` | `/api/logistics` | Real-time multi-carrier rate comparison and smart allocation |
+| `freight.js` | `/api/freight` | B2B heavy freight, PTL/FTL cargo quotes, commercial vehicle allocation & Rule 138(10) E-Way Bill generation |
+| `weight-discrepancies.js` | `/api/weight-discrepancies` | Courier DWS weight audit, 50g tolerance reconciliation, dispute management & evidence upload |
+| `cod-remittance.js` | `/api/cod-remittance` | Automated COD remittance, courier advice ingestion, bank UTR reconciliation & T+1 early settlement |
+| `ndr.js` | `/api/ndr` | Automated NDR detection, re-attempt action dispatch, and customer self-rescheduling |
+| `logistics-wallet.js` | `/api/logistics-wallet` | Multi-carrier prepaid/postpaid wallet ledger, auto-recharge triggers, and consolidated GST tax invoices (SAC 996511) |
+| `cross-border.js` | `/api/cross-border` | Cross-border air express (DHL/FedEx/Aramex/UPS), IATA volumetric divisor, customs duty estimator, CSB-V manifest, and Commercial Invoice |
 | `invoices.js` | `/api/invoices` | Tax Invoices, GST calculations, E-Way Bill JSON |
 | `credit-notes.js` | `/api/credit-notes` | Statutory GST credit notes and AR adjustments |
 | `rma.js` | `/api/rma` | Customer return authorizations, quarantine inspect |
@@ -1007,12 +1035,12 @@ AcuStock features a dedicated **Super Admin Governance Control Plane** (`/dashbo
 
 ---
 
-## 9. Complete Test Suite Index (65 Test Suites)
+## 9. Complete Test Suite Index (74 Test Suites)
 
-The AcuStock backend is covered by **65 automated test suites** built using the Node.js native test runner (`node --test`).
+The AcuStock backend is covered by **74 automated test suites** built using the Node.js native test runner (`node --test`).
 
 ```bash
-# Execute all 65 test suites
+# Execute all 74 test suites
 cd backend && npm test
 
 # Run key enterprise suites individually
@@ -1099,6 +1127,15 @@ npm run test:coverage
 | 63 | `warehouse-transfer.test.js` | Inter-warehouse stock transfer manifests and receiving |
 | 64 | `wave-batch-picking.test.js` | Wave generation, S-shape routing, and put-wall sorting |
 | 65 | `module-governance.test.js` | Granular module & section governance, personas, and temporary overrides |
+| 66 | `logistics-multi-carrier.test.js` | Volumetric engine, zone mapping, carrier rate cards & allocation policies |
+| 67 | `logistics-tracking-microsite.test.js` | Status normalizer, synthetic milestones, branded microsite & NDR re-attempts |
+| 68 | `logistics-ndr.test.js` | Automated NDR detection, urgency scoring, SMS/WhatsApp alert formulation & carrier action sync |
+| 69 | `logistics-heavy-freight.test.js` | PTL/FTL cargo allocation, Rule 138(10) E-Way bill distance validity & vehicle formats |
+| 70 | `logistics-weight-discrepancy.test.js` | 50g tolerance reconciliation, excess freight calculations & 5-day auto-debit protection |
+| 71 | `logistics-cod-remittance.test.js` | Courier remittance advice ingestion, bank UTR validation & T+1 early settlement fee rates |
+| 72 | `logistics-wallet.test.js` | Multi-carrier unified wallet balance, freight debit, auto-recharge triggers & SAC 996511 GST tax invoice |
+| 73 | `logistics-cross-border.test.js` | IATA air courier 5000 divisor, destination de minimis thresholds, DAP/DDP Incoterms & CSB-V manifest |
+| 74 | `logistics-notifications.test.js` | Omnichannel WhatsApp Meta Cloud API formatting, phone normalization & SMS gateway fallback |
 
 ---
 
