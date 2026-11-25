@@ -802,10 +802,11 @@ router.post('/change-password', requireAuth, async (req, res) => {
 // POST /api/auth/forgot-password - Request password reset
 router.post('/forgot-password', async (req, res) => {
   try {
-    const { identifier, role, tenantSlug } = req.body;
+    const { identifier, email, role, tenantSlug } = req.body;
+    const identifierInput = (identifier || email || '').trim();
     
-    if (!identifier || !role) {
-      return res.status(400).json({ message: 'Identifier and role are required' });
+    if (!identifierInput) {
+      return res.status(400).json({ message: 'Email or identifier is required' });
     }
 
     let resolvedTenantId = req.tenantId || null;
@@ -817,10 +818,21 @@ router.post('/forgot-password', async (req, res) => {
     
     let user;
     const baseQuery = resolvedTenantId ? { tenantId: resolvedTenantId } : {};
-    if (role === 'USER') {
-      user = await User.findOne({ ...baseQuery, phone: identifier, role: 'USER' });
+    const isEmail = identifierInput.includes('@');
+
+    if (role) {
+      if (role === 'USER' && !isEmail) {
+        user = await User.findOne({ ...baseQuery, phone: identifierInput, role: 'USER' });
+      } else {
+        user = await User.findOne({ ...baseQuery, email: identifierInput.toLowerCase(), role });
+      }
     } else {
-      user = await User.findOne({ ...baseQuery, email: identifier.toLowerCase(), role });
+      // Auto-lookup by email or phone when role is omitted by modern web frontends
+      if (isEmail) {
+        user = await User.findOne({ ...baseQuery, email: identifierInput.toLowerCase() });
+      } else {
+        user = await User.findOne({ ...baseQuery, phone: identifierInput });
+      }
     }
     
     // Always return success to prevent user enumeration
@@ -870,16 +882,17 @@ router.post('/forgot-password', async (req, res) => {
       }
     });
     
-    // In production, send email/SMS with reset link
-    const resetUrl = `${req.protocol}://${req.get('host')}/reset-password/${resetToken}`;
+    // In production, construct reset link pointing to the frontend application
+    const frontendBaseUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+    const resetUrl = `${frontendBaseUrl}/reset-password/${resetToken}`;
 
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[DEV] Password reset token for ${user.email || user.phone}: ${resetToken}`);
       console.log(`[DEV] Reset URL: ${resetUrl}`);
     }
 
-    // Send email for ADMIN / MANAGER (they have email addresses)
-    if (user.email && (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN' || user.role === 'MANAGER')) {
+    // Send email for users with an email address
+    if (user.email) {
       const emailResult = await sendPasswordResetEmail({
         to: user.email,
         name: user.name,
@@ -908,8 +921,12 @@ router.post('/forgot-password', async (req, res) => {
 // POST /api/auth/reset-password/:token - Reset password with token
 router.post('/reset-password/:token', async (req, res) => {
   try {
-    const { newPassword } = req.body;
+    const newPassword = (req.body.newPassword || req.body.password || '').trim();
     const { token } = req.params;
+
+    if (!newPassword) {
+      return res.status(400).json({ message: 'Password is required' });
+    }
     
     const pwdError = validatePasswordStrength(newPassword);
     if (pwdError) {
