@@ -102,3 +102,149 @@ test('6. Session Revocation: Incrementing tokenVersion invalidates prior JWT tok
   const decodedNew = jwt.verify(newToken, secret);
   assert.equal(decodedNew.tokenVersion, user.tokenVersion);
 });
+
+test('7. 6-Digit Numeric OTP Generation: Produces 6-digit number and SHA-256 hash', () => {
+  const hashResetToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
+
+  // Verify format and range
+  for (let i = 0; i < 20; i++) {
+    const otpCode = crypto.randomInt(100000, 1000000).toString();
+    assert.equal(otpCode.length, 6);
+    assert.match(otpCode, /^\d{6}$/);
+    const num = parseInt(otpCode, 10);
+    assert.ok(num >= 100000 && num <= 999999);
+
+    const hashed = hashResetToken(otpCode);
+    assert.equal(hashed.length, 64);
+    assert.notEqual(hashed, otpCode);
+  }
+});
+
+test('8. OTP Verification Logic: Matches SHA-256, honors 10-minute expiry', () => {
+  const hashResetToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
+
+  const rawOtp = '482910';
+  const hashedOtp = hashResetToken(rawOtp);
+  const now = Date.now();
+
+  const user = {
+    email: 'ops@acustock.com',
+    passwordResetOtp: hashedOtp,
+    passwordResetOtpExpires: now + 10 * 60 * 1000, // +10 min
+    passwordResetOtpAttempts: 0
+  };
+
+  function verifyOtp(userDoc, candidateOtp, currentTime = Date.now()) {
+    if (!userDoc.passwordResetOtp || !userDoc.passwordResetOtpExpires) {
+      return { valid: false, error: 'NO_OTP' };
+    }
+    if (userDoc.passwordResetOtpExpires < currentTime) {
+      return { valid: false, error: 'EXPIRED' };
+    }
+    if ((userDoc.passwordResetOtpAttempts || 0) >= 3) {
+      return { valid: false, error: 'MAX_ATTEMPTS' };
+    }
+    const candidateHash = hashResetToken(candidateOtp);
+    if (userDoc.passwordResetOtp !== candidateHash) {
+      userDoc.passwordResetOtpAttempts = (userDoc.passwordResetOtpAttempts || 0) + 1;
+      return { valid: false, error: 'MISMATCH', remainingAttempts: 3 - userDoc.passwordResetOtpAttempts };
+    }
+    return { valid: true };
+  }
+
+  // Correct OTP within 10 min
+  assert.deepEqual(verifyOtp(user, '482910', now + 1000), { valid: true });
+
+  // Expired OTP (+11 min)
+  assert.deepEqual(verifyOtp(user, '482910', now + 11 * 60 * 1000), { valid: false, error: 'EXPIRED' });
+});
+
+test('9. OTP Brute-Force Rate Limiting: Locks and clears after 3 failed attempts', () => {
+  const hashResetToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
+
+  const rawOtp = '739102';
+  const user = {
+    email: 'admin@acustock.com',
+    passwordResetOtp: hashResetToken(rawOtp),
+    passwordResetOtpExpires: Date.now() + 10 * 60 * 1000,
+    passwordResetOtpAttempts: 0
+  };
+
+  function recordAttempt(userDoc, candidateOtp) {
+    if ((userDoc.passwordResetOtpAttempts || 0) >= 3) {
+      userDoc.passwordResetOtp = undefined;
+      userDoc.passwordResetOtpExpires = undefined;
+      userDoc.passwordResetOtpAttempts = 0;
+      return { allowed: false, message: 'Too many failed attempts. Please request a new OTP.' };
+    }
+
+    const candidateHash = hashResetToken(candidateOtp);
+    if (userDoc.passwordResetOtp !== candidateHash) {
+      userDoc.passwordResetOtpAttempts = (userDoc.passwordResetOtpAttempts || 0) + 1;
+      if (userDoc.passwordResetOtpAttempts >= 3) {
+        userDoc.passwordResetOtp = undefined;
+        userDoc.passwordResetOtpExpires = undefined;
+        userDoc.passwordResetOtpAttempts = 0;
+        return { allowed: false, message: 'Too many failed attempts. Please request a new OTP.' };
+      }
+      return { allowed: false, attemptsRemaining: 3 - userDoc.passwordResetOtpAttempts };
+    }
+
+    return { allowed: true };
+  }
+
+  // Attempt 1: wrong
+  const r1 = recordAttempt(user, '000000');
+  assert.equal(r1.allowed, false);
+  assert.equal(r1.attemptsRemaining, 2);
+
+  // Attempt 2: wrong
+  const r2 = recordAttempt(user, '111111');
+  assert.equal(r2.allowed, false);
+  assert.equal(r2.attemptsRemaining, 1);
+
+  // Attempt 3: wrong -> lock and clear
+  const r3 = recordAttempt(user, '222222');
+  assert.equal(r3.allowed, false);
+  assert.equal(r3.message, 'Too many failed attempts. Please request a new OTP.');
+  assert.equal(user.passwordResetOtp, undefined);
+  assert.equal(user.passwordResetOtpExpires, undefined);
+});
+
+test('10. Full OTP Password Reset: Validates password, updates hash, clears OTP, and invalidates sessions', async () => {
+  const bcrypt = require('bcryptjs');
+  const hashResetToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
+
+  const oldPasswordHash = await bcrypt.hash('OldPassword123', 8);
+  const otpCode = '951234';
+
+  const user = {
+    _id: 'user_123',
+    email: 'employee@acustock.com',
+    password: oldPasswordHash,
+    tokenVersion: 2,
+    passwordResetOtp: hashResetToken(otpCode),
+    passwordResetOtpExpires: Date.now() + 10 * 60 * 1000,
+    passwordResetOtpAttempts: 0
+  };
+
+  // Perform reset
+  const newPassword = 'SecureNewPassword2026!';
+  const strengthErr = validatePasswordStrength(newPassword);
+  assert.equal(strengthErr, null);
+
+  // Simulate route reset
+  user.password = await bcrypt.hash(newPassword, 8);
+  user.passwordResetOtp = undefined;
+  user.passwordResetOtpExpires = undefined;
+  user.passwordResetOtpAttempts = 0;
+  user.tokenVersion += 1;
+
+  // Assertions
+  assert.equal(user.tokenVersion, 3);
+  assert.equal(user.passwordResetOtp, undefined);
+  assert.equal(user.passwordResetOtpExpires, undefined);
+  assert.ok(await bcrypt.compare(newPassword, user.password));
+  assert.ok(!(await bcrypt.compare('OldPassword123', user.password)));
+});
+

@@ -7,7 +7,7 @@ const Notification = require('../models/Notification');
 const AuditLog = require('../models/AuditLog');
 const { requireAuth, requireRole, requireTenantId, checkForcePasswordReset, validateObjectId } = require('../middleware/auth');
 const { validateRequest, schemas } = require('../middleware/validateRequest');
-const { sendPasswordResetEmail } = require('../services/email.service');
+const { sendPasswordResetEmail, sendPasswordResetOtpEmail } = require('../services/email.service');
 const { notify } = require('../services/notificationHelper');
 const logger = require('../utils/logger');
 const { validatePasswordStrength } = require('../utils/passwordValidator');
@@ -852,8 +852,15 @@ router.post('/forgot-password', async (req, res) => {
     const resetToken = generateResetToken();
     const hashedToken = hashResetToken(resetToken);
     
+    // Generate secure 6-digit OTP code (10 min expiry)
+    const otpCode = crypto.randomInt(100000, 1000000).toString();
+    const hashedOtp = hashResetToken(otpCode);
+
     user.passwordResetToken = hashedToken;
     user.passwordResetExpires = Date.now() + 15 * 60 * 1000; // 15 minutes
+    user.passwordResetOtp = hashedOtp;
+    user.passwordResetOtpExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+    user.passwordResetOtpAttempts = 0;
     await user.save({ validateModifiedOnly: true });
     
     // Log audit event
@@ -888,28 +895,30 @@ router.post('/forgot-password', async (req, res) => {
 
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[DEV] Password reset token for ${user.email || user.phone}: ${resetToken}`);
+      console.log(`[DEV] Password reset OTP for ${user.email || user.phone}: ${otpCode}`);
       console.log(`[DEV] Reset URL: ${resetUrl}`);
     }
 
-    // Send email for users with an email address
+    // Send email with OTP code and fallback link for users with an email address
     if (user.email) {
-      const emailResult = await sendPasswordResetEmail({
+      const emailResult = await sendPasswordResetOtpEmail({
         to: user.email,
         name: user.name,
+        otpCode,
         resetUrl,
-        expiresMinutes: 15
+        expiresMinutes: 10
       });
       if (!emailResult.success) {
-        logger.warn(`[ForgotPassword] Email delivery failed for ${user.email}: ${emailResult.error}`);
+        logger.warn(`[ForgotPassword] OTP Email delivery failed for ${user.email}: ${emailResult.error}`);
       }
     }
     // For USER role (phone-based): in production you would send an SMS here.
-    // Currently: token is visible in DEV logs; add SMS provider integration post-deployment.
+    // Currently: token and OTP are visible in DEV logs; add SMS provider integration post-deployment.
 
     res.json({
       message: 'If an account exists with this identifier, you will receive reset instructions.',
-      // DEV ONLY - never expose token in production
-      ...(process.env.NODE_ENV !== 'production' && { resetToken, resetUrl })
+      // DEV ONLY - never expose token or OTP in production
+      ...(process.env.NODE_ENV !== 'production' && { resetToken, resetUrl, otpCode })
     });
     
   } catch (error) {
@@ -1015,6 +1024,151 @@ router.post('/verify-reset-token', async (req, res) => {
   } catch (error) {
     logger.error('Verify reset token error:', error);
     res.status(500).json({ valid: false, message: 'Failed to verify token' });
+  }
+});
+
+// POST /api/auth/verify-reset-otp - Verify if 6-digit OTP is valid
+router.post('/verify-reset-otp', async (req, res) => {
+  try {
+    const { email, identifier, otp } = req.body;
+    const identifierInput = (email || identifier || '').trim().toLowerCase();
+    const otpInput = (otp || '').trim();
+
+    if (!identifierInput || !otpInput) {
+      return res.status(400).json({ valid: false, message: 'Email and OTP code are required' });
+    }
+
+    const user = await User.findOne({
+      $or: [{ email: identifierInput }, { phone: identifierInput }]
+    });
+
+    if (!user || !user.passwordResetOtp || !user.passwordResetOtpExpires) {
+      return res.status(400).json({ valid: false, message: 'Invalid or expired OTP' });
+    }
+
+    if (user.passwordResetOtpExpires < Date.now()) {
+      return res.status(400).json({ valid: false, message: 'OTP has expired. Please request a new code.' });
+    }
+
+    if ((user.passwordResetOtpAttempts || 0) >= 3) {
+      user.passwordResetOtp = undefined;
+      user.passwordResetOtpExpires = undefined;
+      user.passwordResetOtpAttempts = 0;
+      await user.save({ validateModifiedOnly: true });
+      return res.status(429).json({ valid: false, message: 'Too many failed attempts. Please request a new OTP.' });
+    }
+
+    const hashedOtp = hashResetToken(otpInput);
+    if (user.passwordResetOtp !== hashedOtp) {
+      user.passwordResetOtpAttempts = (user.passwordResetOtpAttempts || 0) + 1;
+      await user.save({ validateModifiedOnly: true });
+      const remaining = 3 - user.passwordResetOtpAttempts;
+      return res.status(400).json({
+        valid: false,
+        message: remaining > 0
+          ? `Invalid OTP. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+          : 'Too many failed attempts. Please request a new OTP.'
+      });
+    }
+
+    res.json({
+      valid: true,
+      userName: user.name,
+      userRole: user.role
+    });
+  } catch (error) {
+    logger.error('Verify reset OTP error:', error);
+    res.status(500).json({ valid: false, message: 'Failed to verify OTP' });
+  }
+});
+
+// POST /api/auth/reset-password-otp - Reset password using verified 6-digit OTP
+router.post('/reset-password-otp', async (req, res) => {
+  try {
+    const { email, identifier, otp, password, newPassword } = req.body;
+    const identifierInput = (email || identifier || '').trim().toLowerCase();
+    const otpInput = (otp || '').trim();
+    const pwdInput = (newPassword || password || '').trim();
+
+    if (!identifierInput || !otpInput || !pwdInput) {
+      return res.status(400).json({ message: 'Email, OTP, and new password are required' });
+    }
+
+    const pwdError = validatePasswordStrength(pwdInput);
+    if (pwdError) {
+      return res.status(400).json({ message: pwdError });
+    }
+
+    const user = await User.findOne({
+      $or: [{ email: identifierInput }, { phone: identifierInput }]
+    }).select('+password');
+
+    if (!user || !user.passwordResetOtp || !user.passwordResetOtpExpires) {
+      return res.status(400).json({ message: 'Invalid or expired OTP', code: 'INVALID_OTP' });
+    }
+
+    if (user.passwordResetOtpExpires < Date.now()) {
+      return res.status(400).json({ message: 'OTP has expired. Please request a new code.', code: 'EXPIRED_OTP' });
+    }
+
+    if ((user.passwordResetOtpAttempts || 0) >= 3) {
+      user.passwordResetOtp = undefined;
+      user.passwordResetOtpExpires = undefined;
+      user.passwordResetOtpAttempts = 0;
+      await user.save({ validateModifiedOnly: true });
+      return res.status(429).json({ message: 'Too many failed attempts. Please request a new OTP.', code: 'MAX_ATTEMPTS' });
+    }
+
+    const hashedOtp = hashResetToken(otpInput);
+    if (user.passwordResetOtp !== hashedOtp) {
+      user.passwordResetOtpAttempts = (user.passwordResetOtpAttempts || 0) + 1;
+      await user.save({ validateModifiedOnly: true });
+      const remaining = 3 - user.passwordResetOtpAttempts;
+      return res.status(400).json({
+        message: remaining > 0
+          ? `Invalid OTP. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+          : 'Too many failed attempts. Please request a new OTP.'
+      });
+    }
+
+    // OTP verified! Hash new password
+    const salt = await bcrypt.genSalt(12);
+    user.password = await bcrypt.hash(pwdInput, salt);
+    user.passwordChangedAt = new Date();
+    user.passwordChangedBy = 'SELF';
+    user.forcePasswordReset = false;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    user.passwordResetOtp = undefined;
+    user.passwordResetOtpExpires = undefined;
+    user.passwordResetOtpAttempts = 0;
+    user.tokenVersion = (user.tokenVersion || 0) + 1; // Invalidate all prior sessions
+    user.failedLoginAttempts = 0;
+    user.lockUntil = undefined;
+    await user.save();
+
+    // Log audit event
+    await AuditLog.logEvent({
+      action: 'PASSWORD_RESET_COMPLETED',
+      targetUser: user._id,
+      targetUserName: user.name,
+      targetUserRole: user.role,
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      severity: 'INFO',
+      metadata: { method: 'EMAIL_OTP' }
+    });
+
+    // Notify admin
+    await notifyPasswordChange(user, 'SELF', null);
+
+    res.json({
+      message: 'Password reset successful. Please login with your new password.',
+      sessionInvalidated: true
+    });
+  } catch (error) {
+    logger.error('Reset password with OTP error:', error);
+    res.status(500).json({ message: 'Failed to reset password' });
   }
 });
 

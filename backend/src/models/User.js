@@ -99,13 +99,26 @@ const userSchema = new mongoose.Schema({
     default: false
   },
   
-  // Password Reset Token (for forgot password flow)
+  // Password Reset Token & 6-Digit OTP (for forgot password flow)
   passwordResetToken: {
     type: String,
     select: false
   },
   passwordResetExpires: {
     type: Date,
+    select: false
+  },
+  passwordResetOtp: {
+    type: String,
+    select: false
+  },
+  passwordResetOtpExpires: {
+    type: Date,
+    select: false
+  },
+  passwordResetOtpAttempts: {
+    type: Number,
+    default: 0,
     select: false
   },
   
@@ -237,6 +250,9 @@ userSchema.methods.toJSON = function() {
   delete userObject.password;
   delete userObject.passwordResetToken;
   delete userObject.passwordResetExpires;
+  delete userObject.passwordResetOtp;
+  delete userObject.passwordResetOtpExpires;
+  delete userObject.passwordResetOtpAttempts;
   delete userObject.twoFactorSecret;
   delete userObject.twoFactorSecretEncrypted;
   delete userObject.twoFactorPendingSecretEncrypted;

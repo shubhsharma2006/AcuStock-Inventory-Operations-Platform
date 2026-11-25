@@ -138,6 +138,66 @@ async function sendPasswordResetEmail({ to, name, resetUrl, expiresMinutes = 15 
 }
 
 /**
+ * Send password reset email with 6-digit OTP code and optional one-click fallback link.
+ */
+async function sendPasswordResetOtpEmail({ to, name, otpCode, expiresMinutes = 10, resetUrl }) {
+  const subject = `🔐 ${otpCode} is your AcuStock Password Reset Code`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 0; }
+    .container { max-width: 520px; margin: 40px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .header { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 32px 40px; text-align: center; border-bottom: 2px solid #f59e0b; }
+    .header h1 { color: #ffffff; margin: 0; font-size: 22px; font-weight: 700; }
+    .body { padding: 36px 40px; color: #334155; }
+    .body p { margin: 0 0 16px; line-height: 1.6; font-size: 15px; }
+    .otp-card { text-align: center; margin: 24px 0; }
+    .otp-code { display: inline-block; font-size: 34px; font-weight: 900; letter-spacing: 10px; padding: 14px 28px; background: #fef3c7; color: #b45309; border: 2px dashed #f59e0b; border-radius: 12px; font-family: monospace; }
+    .btn { display: inline-block; margin: 12px 0; padding: 12px 28px; background: #0f172a; color: #ffffff !important; text-decoration: none; border-radius: 8px; font-size: 14px; font-weight: 600; }
+    .warning { background: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; border-radius: 4px; font-size: 13px; color: #991b1b; margin: 20px 0; }
+    .footer { padding: 20px 40px; background: #f8fafc; text-align: center; font-size: 12px; color: #94a3b8; }
+    .divider { border: none; border-top: 1px solid #e2e8f0; margin: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🔐 Password Reset Verification</h1>
+    </div>
+    <div class="body">
+      <p>Hi <strong>${name}</strong>,</p>
+      <p>We received a request to reset the password for your <strong>AcuStock</strong> account. Use this one-time 6-digit verification code on the open screen:</p>
+      <div class="otp-card">
+        <span class="otp-code">${otpCode}</span>
+      </div>
+      <div class="warning">
+        ⚠️ This verification code expires in <strong>${expiresMinutes} minutes</strong> and can only be used once. Never share this code with anyone.
+      </div>
+      ${resetUrl ? `
+      <hr class="divider" />
+      <p style="font-size:13px; color:#64748b;">Or reset your password directly using the button below:</p>
+      <p style="text-align:center;">
+        <a href="${resetUrl}" class="btn">Reset Password via Link</a>
+      </p>
+      ` : ''}
+    </div>
+    <div class="footer">
+      AcuStock Inventory Management &nbsp;|&nbsp; Automated security notification.
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Hi ${name},\n\nYour AcuStock password reset verification code is:\n\n${otpCode}\n\nThis code expires in ${expiresMinutes} minutes.\n\nAlternatively, use your reset link:\n${resetUrl}\n\n— AcuStock Team`;
+
+  return sendMail({ to, subject, html, text });
+}
+
+/**
  * Send a notification email when someone's password was reset by an admin/manager.
  */
 async function sendPasswordResetByAdminEmail({ to, name, resetByName, resetByRole, temporaryPassword }) {
