@@ -10,25 +10,51 @@
 
 const express = require('express');
 const router  = express.Router();
+const crypto  = require('crypto');
+const jwt     = require('jsonwebtoken');
 const Invite  = require('../models/Invite');
 const User    = require('../models/User');
+const AuditLog = require('../models/AuditLog');
 const bcrypt  = require('bcryptjs');
 const { requireAuth, requireRole, requireTenantId } = require('../middleware/auth');
 const { sendInviteEmail }          = require('../services/email.service');
 const logger  = require('../utils/logger');
 const checkPlanLimits = require('../middleware/checkPlanLimits');
+const { validatePasswordStrength } = require('../utils/passwordValidator');
+
+// Helper: Token generation & cookies for instant onboarding sign-in
+const createAccessToken = (_id, tokenVersion = 0) => {
+  return jwt.sign({ _id, tokenVersion, type: 'access' }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRE || '15m'
+  });
+};
+
+const createRefreshToken = (_id, tokenVersion = 0, remember = false) => {
+  const secret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+  return jwt.sign({ _id, tokenVersion, type: 'refresh' }, secret, {
+    expiresIn: remember ? '30d' : '7d'
+  });
+};
+
+const getCookieOptions = (remember = false, isRefresh = false) => {
+  const isProduction = process.env.NODE_ENV === 'production';
+  return {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'strict' : 'lax',
+    maxAge: isRefresh
+      ? (remember ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000)
+      : (15 * 60 * 1000),
+    path: '/'
+  };
+};
 
 // ─────────────────────────────────────────────────────────────
-// Helper: build the full invite URL from the request
+// Helper: build the full invite URL targeting the Next.js app
 // ─────────────────────────────────────────────────────────────
 function buildInviteUrl(req, rawToken) {
-  // NOTE:
-  // - FRONTEND_URL is used for CORS allow-list and can be comma-separated.
-  // - For email links we need a single canonical public base URL.
-  // Prefer FRONTEND_BASE_URL, otherwise fall back to the current request host.
-  const envBase = (process.env.FRONTEND_BASE_URL || '').trim();
-  const base = (envBase || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-  return `${base}/admin-html/accept-invite.html?token=${rawToken}`;
+  const envBase = (process.env.FRONTEND_URL || process.env.FRONTEND_BASE_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+  return `${envBase}/accept-invite/${rawToken}`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -108,13 +134,14 @@ router.post('/', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMI
     logger.info(`Invite sent to ${email} (role: ${role}) by ${senderName} [${req.userId}]`);
 
     res.status(201).json({
+      success:       true,
       message:       emailResult.success
         ? `Invite sent to ${email}`
         : `Invite created but email delivery failed. Share the link manually.`,
       inviteId:      invite._id,
       emailDelivered: emailResult.success,
-      // Only expose the raw link when email failed (so admin can share manually)
-      inviteUrl:     emailResult.success ? undefined : inviteUrl,
+      // Expose link if delivery failed or in dev mode for easy sharing / tests
+      inviteUrl:     (!emailResult.success || process.env.NODE_ENV !== 'production') ? inviteUrl : undefined,
       expiresAt:     invite.expiresAt
     });
   } catch (err) {
@@ -135,7 +162,10 @@ router.get('/', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMIN
       .populate('invitedBy', 'name email role')
       .sort({ createdAt: -1 });
 
-    res.json(invites);
+    res.json({
+      success: true,
+      invites
+    });
   } catch (err) {
     logger.error('Error fetching invites:', err);
     res.status(500).json({ message: 'Server error' });
@@ -149,29 +179,31 @@ router.get('/', requireAuth, requireTenantId, requireRole(['SUPER_ADMIN', 'ADMIN
 router.get('/verify/:token', async (req, res) => {
   try {
     const tokenHash = Invite.hashToken(req.params.token);
-    const invite    = await Invite.findOne({ tokenHash }).select('+tokenHash').populate('invitedBy', 'name');
+    const invite    = await Invite.findOne({ tokenHash }).select('+tokenHash').populate('invitedBy', 'name email');
 
     if (!invite) {
-      return res.status(404).json({ message: 'This invite link is invalid or has already been used.' });
+      return res.status(404).json({ valid: false, message: 'This invite link is invalid or has already been used.' });
     }
 
     if (invite.status !== 'pending') {
-      return res.status(410).json({ message: `This invite has been ${invite.status}.` });
+      return res.status(410).json({ valid: false, message: `This invite has already been ${invite.status}.` });
     }
 
     if (invite.expiresAt < new Date()) {
-      return res.status(410).json({ message: 'This invite link has expired. Ask for a new one.' });
+      return res.status(410).json({ valid: false, message: 'This invite link has expired. Ask your administrator for a new one.' });
     }
 
     res.json({
+      valid:     true,
       email:     invite.email,
       role:      invite.role,
       invitedBy: invite.invitedBy ? invite.invitedBy.name : 'AcuStock Admin',
-      expiresAt: invite.expiresAt
+      expiresAt: invite.expiresAt,
+      tenantId:  invite.tenantId
     });
   } catch (err) {
     logger.error('Error verifying invite:', err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ valid: false, message: 'Server error' });
   }
 });
 
@@ -180,22 +212,27 @@ router.get('/verify/:token', async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 router.post('/accept', async (req, res) => {
   try {
-    const { token, name, password } = req.body;
+    const { token, name, phone, password, confirmPassword } = req.body;
 
     if (!token || !name || !password) {
       return res.status(400).json({ message: 'Token, name, and password are required.' });
     }
 
-    if (name.trim().length < 2) {
+    const trimmedName = name.trim();
+    if (trimmedName.length < 2) {
       return res.status(400).json({ message: 'Name must be at least 2 characters.' });
     }
 
-    if (password.length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters.' });
+    const trimmedPhone = phone ? phone.trim() : undefined;
+
+    // Enterprise Password Strength Validation
+    const strengthError = validatePasswordStrength(password);
+    if (strengthError) {
+      return res.status(400).json({ message: strengthError });
     }
 
-    if (!/[0-9]/.test(password) || !/[a-zA-Z]/.test(password)) {
-      return res.status(400).json({ message: 'Password must contain both letters and numbers.' });
+    if (confirmPassword && password !== confirmPassword) {
+      return res.status(400).json({ message: 'Passwords do not match.' });
     }
 
     // Find invite by token hash
@@ -211,7 +248,12 @@ router.post('/accept', async (req, res) => {
     }
 
     if (invite.expiresAt < new Date()) {
-      return res.status(410).json({ message: 'This invite link has expired. Ask for a new one.' });
+      return res.status(410).json({ message: 'This invite link has expired. Ask your administrator for a new one.' });
+    }
+
+    // Role-specific operational requirement: Phone is mandatory for USER roles
+    if (invite.role === 'USER' && !trimmedPhone) {
+      return res.status(400).json({ message: 'Phone number is required for User accounts.' });
     }
 
     // Double-check no user with that email was created in the meantime
@@ -225,34 +267,61 @@ router.post('/accept', async (req, res) => {
       return res.status(409).json({ message: 'An account with this email already exists. Please log in.' });
     }
 
-    // Hash password
+    // Hash password with bcrypt salt 12
     const hashedPassword = await bcrypt.hash(password, 12);
 
     // Create the user inheriting invite.tenantId
     const user = await User.create({
-      name:       name.trim(),
-      email:      invite.email,
-      password:   hashedPassword,
-      role:       invite.role,
-      isSuperAdmin: false,
-      isActive:   true,
-      createdBy:  invite.invitedBy,
-      tenantId:   invite.tenantId,
-      forcePasswordReset: false
+      name:               trimmedName,
+      email:              invite.email,
+      phone:              trimmedPhone,
+      password:           hashedPassword,
+      role:               invite.role,
+      isSuperAdmin:       false,
+      isActive:           true,
+      isEmailVerified:    true,
+      createdBy:          invite.invitedBy,
+      tenantId:           invite.tenantId,
+      forcePasswordReset: false,
+      tokenVersion:       0
     });
 
-    // Mark invite as accepted (TTL will clean it up automatically)
+    // Mark invite as accepted
     await Invite.findByIdAndUpdate(invite._id, { status: 'accepted' });
+
+    // Generate authenticated session (JWT Access + Refresh tokens)
+    const accessToken = createAccessToken(user._id, user.tokenVersion || 0);
+    const refreshToken = createRefreshToken(user._id, user.tokenVersion || 0, false);
+
+    res.cookie('authToken', accessToken, getCookieOptions(false, false));
+    res.cookie('refreshToken', refreshToken, getCookieOptions(false, true));
+
+    // Audit Log
+    await AuditLog.logEvent({
+      action: 'ACCOUNT_CREATED',
+      targetUser: user._id,
+      targetUserName: user.name,
+      targetUserRole: user.role,
+      tenantId: user.tenantId,
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
+      severity: 'INFO',
+      metadata: { method: 'INVITATION_ACCEPTANCE', inviteId: invite._id }
+    });
 
     logger.info(`Invite accepted: ${invite.email} created as ${invite.role} [${user._id}]`);
 
     res.status(201).json({
-      message: 'Account created successfully! You can now log in.',
+      success: true,
+      message: 'Account created successfully! Welcome to AcuStock.',
+      token: accessToken,
       user: {
         id:    user._id,
         name:  user.name,
         email: user.email,
-        role:  user.role
+        phone: user.phone,
+        role:  user.role,
+        tenantId: user.tenantId
       }
     });
   } catch (err) {

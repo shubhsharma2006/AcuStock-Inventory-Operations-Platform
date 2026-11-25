@@ -35,6 +35,9 @@ export default function UsersManagementPage() {
   const [roleFilter, setRoleFilter] = useState<string>("ALL");
   const [modalOpen, setModalOpen] = useState(false);
 
+  const [addMode, setAddMode] = useState<"INVITE" | "MANUAL">("INVITE");
+  const [inviteSuccessMsg, setInviteSuccessMsg] = useState<string | null>(null);
+
   // Form fields
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -62,6 +65,21 @@ export default function UsersManagementPage() {
   });
 
   // Mutations
+  const sendInviteMutation = useMutation({
+    mutationFn: (payload: { email: string; role: Role }) =>
+      apiFetch("/invites", { method: "POST", body: JSON.stringify(payload) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["invites"] });
+      setModalOpen(false);
+      setInviteSuccessMsg(`Enterprise invitation link emailed to ${email}. They can now complete onboarding.`);
+      resetForm();
+    },
+    onError: (err: Error) => {
+      setFormError(err.message || "Failed to send invitation");
+    },
+  });
+
   const createUserMutation = useMutation({
     mutationFn: (newUser: Record<string, unknown>) =>
       apiFetch("/users", { method: "POST", body: JSON.stringify(newUser) }),
@@ -142,11 +160,21 @@ export default function UsersManagementPage() {
 
   function handleCreate(e: React.FormEvent) {
     e.preventDefault();
+    setFormError(null);
+
+    if (addMode === "INVITE") {
+      if (!email.trim()) {
+        setFormError("Email address is required to dispatch an invitation.");
+        return;
+      }
+      sendInviteMutation.mutate({ email: email.trim(), role });
+      return;
+    }
+
     if (!name.trim() || !email.trim() || !password) {
       setFormError("Name, email, and password are required.");
       return;
     }
-    setFormError(null);
     createUserMutation.mutate({
       name: name.trim(),
       email: email.trim(),
@@ -179,15 +207,31 @@ export default function UsersManagementPage() {
         </div>
         <button
           type="button"
-          onClick={() => { resetForm(); setModalOpen(true); }}
+          onClick={() => { resetForm(); setAddMode("INVITE"); setModalOpen(true); }}
           className="flex items-center gap-2 rounded-2xl bg-amber-400 px-4 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/20 transition hover:bg-amber-300"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" />
           </svg>
-          Add User
+          Add Team Member
         </button>
       </div>
+
+      {inviteSuccessMsg && (
+        <div className="flex items-center justify-between rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-300">
+          <div className="flex items-center gap-2">
+            <span>✓</span>
+            <span>{inviteSuccessMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setInviteSuccessMsg(null)}
+            className="text-xs text-emerald-400 hover:text-white"
+          >
+            ✕ Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/40 p-4 backdrop-blur-xl">
@@ -337,75 +381,135 @@ export default function UsersManagementPage() {
         </div>
       )}
 
-      {/* Create User Modal */}
+      {/* Create / Invite User Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-md">
           <div className="w-full max-w-md rounded-[2rem] border border-white/10 bg-slate-900 p-6 sm:p-8 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
               <div>
-                <h2 className="text-xl font-bold text-white">Create New User</h2>
-                <p className="mt-0.5 text-xs text-slate-400">Add a new team member to your organization.</p>
+                <h2 className="text-xl font-bold text-white">Add Team Member</h2>
+                <p className="mt-0.5 text-xs text-slate-400">Onboard a colleague to your AcuStock tenant.</p>
               </div>
               <button type="button" onClick={() => setModalOpen(false)} className="rounded-full p-2 text-slate-400 hover:bg-white/10 hover:text-white">✕</button>
             </div>
 
-            <form onSubmit={handleCreate} className="mt-6 space-y-4">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Full Name *</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="John Doe"
-                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
-                />
-              </div>
+            {/* Mode Selector Tabs */}
+            <div className="mt-4 flex rounded-xl border border-white/10 bg-slate-950/60 p-1">
+              <button
+                type="button"
+                onClick={() => { setAddMode("INVITE"); setFormError(null); }}
+                className={`flex-1 rounded-lg py-2 text-xs font-semibold transition ${
+                  addMode === "INVITE"
+                    ? "bg-amber-400 text-slate-950 shadow"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                ✉️ Email Invite (Enterprise)
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAddMode("MANUAL"); setFormError(null); }}
+                className={`flex-1 rounded-lg py-2 text-xs font-semibold transition ${
+                  addMode === "MANUAL"
+                    ? "bg-amber-400 text-slate-950 shadow"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                ⚙️ Manual Provisioning
+              </button>
+            </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Email Address *</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="john@company.com"
-                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
-                />
-              </div>
+            <form onSubmit={handleCreate} className="mt-5 space-y-4">
+              {addMode === "INVITE" ? (
+                <>
+                  <p className="text-xs text-slate-400">
+                    A secure 48-hour onboarding link will be sent to the invitee. They will provide their name, phone number, and configure their password.
+                  </p>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Email Address *</label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                      placeholder="colleague@company.com"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    />
+                  </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Phone (Optional)</label>
-                <input
-                  type="text"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+91 98765 43210"
-                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
-                />
-              </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Assigned Role</label>
+                    <select
+                      value={role}
+                      onChange={(e) => setRole(e.target.value as Role)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    >
+                      <option value="USER">User (Operator)</option>
+                      <option value="MANAGER">Manager (Facility Lead)</option>
+                      <option value="ADMIN">Admin (Full Control)</option>
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Full Name *</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="John Doe"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    />
+                  </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Role</label>
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as Role)}
-                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
-                >
-                  <option value="USER">User (Operator)</option>
-                  <option value="MANAGER">Manager (Facility Lead)</option>
-                  <option value="ADMIN">Admin (Full Control)</option>
-                </select>
-              </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Email Address *</label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="john@company.com"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    />
+                  </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-300">Password *</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimum 8 characters"
-                  className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
-                />
-              </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Phone (Optional)</label>
+                    <input
+                      type="text"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+91 98765 43210"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Role</label>
+                    <select
+                      value={role}
+                      onChange={(e) => setRole(e.target.value as Role)}
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    >
+                      <option value="USER">User (Operator)</option>
+                      <option value="MANAGER">Manager (Facility Lead)</option>
+                      <option value="ADMIN">Admin (Full Control)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-300">Temporary Password *</label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Minimum 8 characters"
+                      className="w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-2.5 text-sm text-white outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </>
+              )}
 
               {formError && (
                 <div className="rounded-xl border border-rose-400/20 bg-rose-400/10 p-3 text-xs text-rose-200">
@@ -423,10 +527,12 @@ export default function UsersManagementPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={createUserMutation.isPending}
+                  disabled={addMode === "INVITE" ? sendInviteMutation.isPending : createUserMutation.isPending}
                   className="rounded-xl bg-amber-400 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-50"
                 >
-                  {createUserMutation.isPending ? "Creating..." : "Create User"}
+                  {addMode === "INVITE"
+                    ? (sendInviteMutation.isPending ? "Sending Invite..." : "Send Invite Email")
+                    : (createUserMutation.isPending ? "Creating..." : "Create User")}
                 </button>
               </div>
             </form>

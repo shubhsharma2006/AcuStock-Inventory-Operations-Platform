@@ -27,22 +27,33 @@ export default function InvitesPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const { data: invitesData, isLoading, error } = useQuery<{ success: boolean; invites: Invite[] }>({
+  const { data: invitesData, isLoading, error } = useQuery<{ success: boolean; invites: Invite[] } | Invite[]>({
     queryKey: ["invites"],
-    queryFn: () => apiFetch<{ success: boolean; invites: Invite[] }>("/invites"),
+    queryFn: () => apiFetch<{ success: boolean; invites: Invite[] } | Invite[]>("/invites"),
   });
 
-  const invites = invitesData?.invites || [];
+  const invites = Array.isArray(invitesData)
+    ? invitesData
+    : (invitesData && "invites" in invitesData ? invitesData.invites : []) || [];
+
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [createdInviteInfo, setCreatedInviteInfo] = useState<{ email: string; inviteUrl?: string } | null>(null);
 
   const sendInviteMutation = useMutation({
     mutationFn: (payload: { email: string; role: Role }) =>
-      apiFetch("/invites", { method: "POST", body: JSON.stringify(payload) }),
-    onSuccess: () => {
+      apiFetch<{ success: boolean; message: string; inviteUrl?: string }>("/invites", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["invites"] });
       setModalOpen(false);
       setEmail("");
       setRole("MANAGER");
       setFormError(null);
+      if (data?.inviteUrl) {
+        setCreatedInviteInfo({ email: variables.email, inviteUrl: data.inviteUrl });
+      }
     },
     onError: (err: Error) => setFormError(err.message || "Failed to send invite"),
   });
