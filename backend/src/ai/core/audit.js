@@ -22,7 +22,7 @@ async function logAiEvent({
       return;
     }
 
-    await AuditLog.create({
+    await AuditLog.logEvent({
       action: action || 'AI_TOOL_EXECUTED',
       tenantId: context.tenantId,
       performedBy: context.userId,

@@ -267,58 +267,60 @@ async function restoreBackup(id, { targetTenantId, dropExisting = false, user })
     throw new Error('Invalid backup archive payload: missing data block');
   }
 
-  const restoredStats = {};
-  let totalRestored = 0;
+  // Finish collection and index creation before the transaction takes its snapshot.
+  const models = new Map(Object.keys(payload.data).map(name => [name, getMongooseModel(name)]));
+  await Promise.all([...models.values()].filter(Boolean).map(model => model.init()));
 
-  // 3. Restore collections atomically inside a transaction (Audit Fix: Atomic Replacement Restore)
   const session = await mongoose.startSession();
+  let result;
   try {
-    session.startTransaction();
-    for (const [collectionName, records] of Object.entries(payload.data)) {
-      if (!Array.isArray(records)) throw new Error('Malformed backup collection.');
-      // Older writers also used empty arrays to represent failed collection reads.
-      if (dropExisting && !records.length && payload.version !== 2 && collectionName !== 'Tenant') {
-        throw new Error('Legacy backup contains unverified empty collections. Replacement restore requires a verified backup.');
-      }
-
-      const Model = getMongooseModel(collectionName);
-      if (!Model) continue;
-
-      // If tenant-scoped, never overwrite cross-tenant records
-      if (collectionName !== 'Tenant') {
-        const tenantOid = new mongoose.Types.ObjectId(targetTenantId);
-        if (dropExisting) {
-          const delQ = Model.deleteMany({ tenantId: tenantOid });
-          delQ.session(session);
-          await delQ;
+    result = await session.withTransaction(async () => {
+      const restoredStats = {};
+      let totalRestored = 0;
+      for (const [collectionName, records] of Object.entries(payload.data)) {
+        if (!Array.isArray(records)) throw new Error('Malformed backup collection.');
+        // Older writers also used empty arrays to represent failed collection reads.
+        if (dropExisting && !records.length && payload.version !== 2 && collectionName !== 'Tenant') {
+          throw new Error('Legacy backup contains unverified empty collections. Replacement restore requires a verified backup.');
         }
 
-        // Remap tenantId on records to target tenant to prevent accidental cross-tenant data leak
-        const preparedRecords = records.map(doc => {
-          const copy = { ...doc };
-          copy.tenantId = tenantOid;
-          return copy;
-        });
+        const Model = models.get(collectionName);
+        if (!Model) continue;
 
-        // Insert prepared documents
-        if (preparedRecords.length > 0) {
-          await Model.insertMany(preparedRecords, { session, ordered: true });
+        // If tenant-scoped, never overwrite cross-tenant records
+        if (collectionName !== 'Tenant') {
+          const tenantOid = new mongoose.Types.ObjectId(targetTenantId);
+          if (dropExisting) {
+            const delQ = Model.deleteMany({ tenantId: tenantOid });
+            delQ.session(session);
+            await delQ;
+          }
+
+          // Remap tenantId on records to target tenant to prevent accidental cross-tenant data leak
+          const preparedRecords = records.map(doc => {
+            const copy = { ...doc };
+            copy.tenantId = tenantOid;
+            return copy;
+          });
+
+          // Insert prepared documents
+          if (preparedRecords.length > 0) {
+            await Model.insertMany(preparedRecords, { session, ordered: true });
+          }
+          restoredStats[collectionName] = preparedRecords.length;
+          totalRestored += preparedRecords.length;
         }
-        restoredStats[collectionName] = preparedRecords.length;
-        totalRestored += preparedRecords.length;
       }
-    }
-
-    await session.commitTransaction();
+      return { collectionsRestored: restoredStats, totalRestored };
+    });
   } catch (err) {
-    if (session.inTransaction()) {
-      await session.abortTransaction().catch(() => {});
-    }
     logger.error(`Backup ${id} restore aborted and rolled back: ${err.message}`);
     throw err;
   } finally {
     await session.endSession();
   }
+
+  const { collectionsRestored, totalRestored } = result;
 
   // Update entry status
   const catalog = loadCatalog();
@@ -334,7 +336,7 @@ async function restoreBackup(id, { targetTenantId, dropExisting = false, user })
     success: true,
     backupId: id,
     targetTenantId,
-    collectionsRestored: restoredStats,
+    collectionsRestored,
     totalRestored,
     restoredAt: new Date().toISOString()
   };

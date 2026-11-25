@@ -15,6 +15,7 @@ test('Phase 7: Enterprise Backup & Disaster Recovery System', async (t) => {
   let createdBackupId = null;
   const deleted = [];
   const model = {
+    async init() {},
     schema: { path: () => true },
     find: () => ({ lean: () => ({ exec: async () => [] }) }),
     deleteMany: filter => ({ session: () => { deleted.push(String(filter.tenantId)); } })
@@ -150,8 +151,11 @@ test('Phase 7: Enterprise Backup & Disaster Recovery System', async (t) => {
     assert.deepEqual(deleted, []);
     let committed = false;
     start.mock.mockImplementation(async () => ({
-      startTransaction() {},
-      async commitTransaction() { committed = true; },
+      async withTransaction(work) {
+        const result = await work();
+        committed = true;
+        return result;
+      },
       async endSession() {}
     }));
     await backupService.restoreBackup(createdBackupId, options);
@@ -163,18 +167,23 @@ test('Phase 7: Enterprise Backup & Disaster Recovery System', async (t) => {
   await t.test('Interrupted replacement-restore rolls back transaction and preserves tenant isolation', async (t) => {
     const options = { targetTenantId: testTenantA, dropExisting: true, user: { role: 'ADMIN' } };
     let aborted = false;
-    let inTransactionState = true;
+
 
     t.mock.method(mongoose, 'startSession', async () => ({
-      startTransaction() { inTransactionState = true; },
-      inTransaction() { return inTransactionState; },
-      async abortTransaction() { aborted = true; inTransactionState = false; },
-      async commitTransaction() { throw new Error('Should not commit'); },
+      async withTransaction(work) {
+        try {
+          return await work();
+        } catch (error) {
+          aborted = true;
+          throw error;
+        }
+      },
       async endSession() {}
     }));
 
     // Simulate an interruption error mid-restore during model operation
     const failingModel = {
+      async init() {},
       schema: { path: () => true },
       find: () => ({ lean: () => ({ exec: async () => [] }) }),
       deleteMany: () => {
