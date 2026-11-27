@@ -350,6 +350,12 @@ async function stockOut(data, user) {
 
       // 3️⃣ Check current stock from ledger INSIDE transaction (prevents negative stock on concurrent writes)
       const stockMatch = { productId: item._id, isDeleted: { $ne: true }, tenantId: new mongoose.Types.ObjectId(tenantId) };
+      if (data.warehouseId) {
+        if (!mongoose.Types.ObjectId.isValid(data.warehouseId)) {
+          throw new Error('Invalid warehouse ID');
+        }
+        stockMatch.warehouseId = new mongoose.Types.ObjectId(data.warehouseId);
+      }
 
       const stockResult = await StockLedger.aggregate([
         { $match: stockMatch },
@@ -358,7 +364,11 @@ async function stockOut(data, user) {
             _id: null,
             total: {
               $sum: {
-                $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', { $multiply: ['$quantity', -1] }]
+                $cond: [
+                  { $in: ['$type', ['IN', 'TRANSFER_IN', 'ADJUSTMENT_IN']] },
+                  '$quantity',
+                  { $multiply: ['$quantity', -1] }
+                ]
               }
             }
           }
@@ -425,7 +435,11 @@ async function stockOut(data, user) {
             _id: null,
             total: {
               $sum: {
-                $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', { $multiply: ['$quantity', -1] }]
+                $cond: [
+                  { $in: ['$type', ['IN', 'TRANSFER_IN', 'ADJUSTMENT_IN']] },
+                  '$quantity',
+                  { $multiply: ['$quantity', -1] }
+                ]
               }
             }
           }
