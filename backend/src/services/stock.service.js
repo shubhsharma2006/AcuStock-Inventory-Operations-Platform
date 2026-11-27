@@ -41,6 +41,35 @@ function validateStockMovementPayload(payload = {}) {
   };
 }
 
+/** Build the same scoped balance query for pre- and post-dispatch checks. */
+function buildStockBalanceMatch(productId, tenantId, warehouseId) {
+  const match = {
+    productId,
+    isDeleted: { $ne: true },
+    tenantId: new mongoose.Types.ObjectId(tenantId)
+  };
+  if (warehouseId != null && warehouseId !== '') {
+    if (!mongoose.Types.ObjectId.isValid(warehouseId)) throw new Error('Invalid warehouse ID');
+    match.warehouseId = new mongoose.Types.ObjectId(warehouseId);
+  }
+  return match;
+}
+
+const STOCK_INBOUND_TYPES = Object.freeze(['IN', 'TRANSFER_IN', 'ADJUSTMENT_IN']);
+
+function stockBalancePipeline(match) {
+  return [
+    { $match: match },
+    { $group: { _id: null, total: { $sum: {
+      $cond: [
+        { $in: ['$type', STOCK_INBOUND_TYPES] },
+        '$quantity',
+        { $multiply: ['$quantity', -1] }
+      ]
+    } } } }
+  ];
+}
+
 /**
  * STOCK IN (TRANSACTIONAL)
  * Uses withTransaction() for automatic retry on transient errors (e.g. write conflicts)
@@ -349,21 +378,9 @@ async function stockOut(data, user) {
       }
 
       // 3️⃣ Check current stock from ledger INSIDE transaction (prevents negative stock on concurrent writes)
-      const stockMatch = { productId: item._id, isDeleted: { $ne: true }, tenantId: new mongoose.Types.ObjectId(tenantId) };
+      const stockMatch = buildStockBalanceMatch(item._id, tenantId, data.warehouseId);
 
-      const stockResult = await StockLedger.aggregate([
-        { $match: stockMatch },
-        {
-          $group: {
-            _id: null,
-            total: {
-              $sum: {
-                $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', { $multiply: ['$quantity', -1] }]
-              }
-            }
-          }
-        }
-      ]).session(session);
+      const stockResult = await StockLedger.aggregate(stockBalancePipeline(stockMatch)).session(session);
 
       const currentStock = stockResult.length > 0 ? stockResult[0].total : 0;
 
@@ -418,19 +435,7 @@ async function stockOut(data, user) {
       }], { session });
 
       // 4b️⃣ Post-write verification: re-aggregate to catch race-condition negative stock
-      const verifyResult = await StockLedger.aggregate([
-        { $match: stockMatch },
-        {
-          $group: {
-            _id: null,
-            total: {
-              $sum: {
-                $cond: [{ $eq: ['$type', 'IN'] }, '$quantity', { $multiply: ['$quantity', -1] }]
-              }
-            }
-          }
-        }
-      ]).session(session);
+      const verifyResult = await StockLedger.aggregate(stockBalancePipeline(stockMatch)).session(session);
 
       const finalStock = verifyResult.length > 0 ? verifyResult[0].total : 0;
       if (finalStock < 0) {
@@ -548,5 +553,7 @@ module.exports = {
   normalizeSerialNumbers,
   validateStockMovementPayload,
   stockIn,
-  stockOut
+  stockOut,
+  buildStockBalanceMatch,
+  stockBalancePipeline
 };
